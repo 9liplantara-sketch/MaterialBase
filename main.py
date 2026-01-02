@@ -11,7 +11,7 @@ import os
 import shutil
 from pathlib import Path
 
-from database import get_db, init_db, Material, Property, Image, Metadata
+from database import get_db, init_db, Material, Property, Image, MaterialMetadata
 from models import (
     MaterialCreate, MaterialUpdate, Material as MaterialModel,
     PropertyCreate, Property, Image as ImageModel, Metadata as MetadataModel,
@@ -122,7 +122,7 @@ async def create_material(material: MaterialCreate, db: Session = Depends(get_db
     
     # メタデータの追加
     for meta in material.metadata:
-        db_metadata = Metadata(
+        db_metadata = MaterialMetadata(
             material_id=db_material.id,
             key=meta.key,
             value=meta.value

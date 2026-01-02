@@ -3,7 +3,7 @@
 データベースにサンプル材料データを追加します
 """
 
-from database import SessionLocal, Material, Property, Image, Metadata
+from database import SessionLocal, Material, Property, Image, MaterialMetadata
 from datetime import datetime
 
 
@@ -27,8 +27,8 @@ def init_sample_data():
         db.add(Property(material_id=material1.id, property_name="融点", value=1400, unit="°C"))
         db.add(Property(material_id=material1.id, property_name="熱伝導率", value=16.3, unit="W/(m·K)"))
         
-        db.add(Metadata(material_id=material1.id, key="JIS規格", value="JIS G 4305"))
-        db.add(Metadata(material_id=material1.id, key="主成分", value="Fe, Cr 18%, Ni 8%"))
+        db.add(MaterialMetadata(material_id=material1.id, key="JIS規格", value="JIS G 4305"))
+        db.add(MaterialMetadata(material_id=material1.id, key="主成分", value="Fe, Cr 18%, Ni 8%"))
         
         # サンプル材料2: アルミニウム合金
         material2 = Material(
@@ -45,8 +45,8 @@ def init_sample_data():
         db.add(Property(material_id=material2.id, property_name="融点", value=607, unit="°C"))
         db.add(Property(material_id=material2.id, property_name="熱伝導率", value=138, unit="W/(m·K)"))
         
-        db.add(Metadata(material_id=material2.id, key="JIS規格", value="JIS H 4000"))
-        db.add(Metadata(material_id=material2.id, key="主成分", value="Al, Mg 2.5%"))
+        db.add(MaterialMetadata(material_id=material2.id, key="JIS規格", value="JIS H 4000"))
+        db.add(MaterialMetadata(material_id=material2.id, key="主成分", value="Al, Mg 2.5%"))
         
         # サンプル材料3: ポリエチレン
         material3 = Material(
@@ -62,8 +62,8 @@ def init_sample_data():
         db.add(Property(material_id=material3.id, property_name="融点", value=130, unit="°C"))
         db.add(Property(material_id=material3.id, property_name="ガラス転移温度", value=-120, unit="°C"))
         
-        db.add(Metadata(material_id=material3.id, key="化学式", value="(C2H4)n"))
-        db.add(Metadata(material_id=material3.id, key="用途", value="包装材、パイプ、容器"))
+        db.add(MaterialMetadata(material_id=material3.id, key="化学式", value="(C2H4)n"))
+        db.add(MaterialMetadata(material_id=material3.id, key="用途", value="包装材、パイプ、容器"))
         
         # サンプル材料4: セラミック
         material4 = Material(
@@ -80,8 +80,8 @@ def init_sample_data():
         db.add(Property(material_id=material4.id, property_name="融点", value=2050, unit="°C"))
         db.add(Property(material_id=material4.id, property_name="熱伝導率", value=30, unit="W/(m·K)"))
         
-        db.add(Metadata(material_id=material4.id, key="主成分", value="Al2O3 99%以上"))
-        db.add(Metadata(material_id=material4.id, key="用途", value="絶縁材料、機械部品"))
+        db.add(MaterialMetadata(material_id=material4.id, key="主成分", value="Al2O3 99%以上"))
+        db.add(MaterialMetadata(material_id=material4.id, key="用途", value="絶縁材料、機械部品"))
         
         db.commit()
         print("サンプルデータの追加が完了しました！")
