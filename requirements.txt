@@ -11,4 +11,6 @@ python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 requests>=2.31.0
 pydantic>=2.6.0
+plotly>=5.18.0
+streamlit-option-menu>=0.3.6
 pydantic>=2.6.0
