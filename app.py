@@ -64,9 +64,20 @@ sub_bg_path = get_image_path("サブ.webp")
 main_bg_base64 = get_base64_image(main_bg_path) if main_bg_path else None
 sub_bg_base64 = get_base64_image(sub_bg_path) if sub_bg_path else None
 
-# マテリアル感のあるカスタムCSS
-st.markdown(f"""
+# デバッグスイッチ（サイドバーでCSSを無効化可能）
+# 注意: この変数はmain()関数内で設定されるため、ここでは定義のみ
+debug_no_css = False
+
+# マテリアル感のあるカスタムCSS（条件付き適用）
+def get_custom_css():
+    """カスタムCSSを生成（デバッグモード対応）"""
+    return f"""
 <style>
+    /* ベース文字色を確保（白飛び防止） */
+    html, body, [class*="st-"] {{
+        color: #111 !important;
+    }}
+    
     /* メイン背景 - メイン.webpを使用 */
     .stApp {{
         background: {'url("data:image/webp;base64,' + main_bg_base64 + '")' if main_bg_base64 else 'linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%)'};
@@ -75,6 +86,7 @@ st.markdown(f"""
         background-attachment: fixed;
         background-repeat: no-repeat;
         position: relative;
+        min-height: 100vh;
     }}
     
     .stApp::before {{
@@ -84,8 +96,8 @@ st.markdown(f"""
         left: 0;
         width: 100%;
         height: 100%;
-        background: rgba(255, 255, 255, 0.85);
-        z-index: 0;
+        background: rgba(255, 255, 255, 0.75);
+        z-index: -1;
         pointer-events: none;
     }}
     
@@ -93,7 +105,8 @@ st.markdown(f"""
         padding-top: 2rem;
         padding-bottom: 2rem;
         position: relative;
-        z-index: 1;
+        z-index: 10;
+        background: transparent;
     }}
     
     /* ヘッダー - マテリアル感のあるデザイン */
@@ -120,34 +133,21 @@ st.markdown(f"""
         border-radius: 2px;
     }}
     
-    /* サブ背景画像を装飾として使用 */
+    /* サブ背景画像を装飾として使用（非表示に変更 - 白飛び防止） */
     .material-decoration {{
+        display: none;
         position: absolute;
-        opacity: 0.15;
-        z-index: 0;
+        opacity: 0.05;
+        z-index: -1;
         pointer-events: none;
     }}
     
     .decoration-1 {{
-        top: 10%;
-        right: 5%;
-        width: 200px;
-        height: 200px;
-        background: {'url("data:image/webp;base64,' + sub_bg_base64 + '")' if sub_bg_base64 else 'none'};
-        background-size: contain;
-        background-repeat: no-repeat;
-        transform: rotate(15deg);
+        display: none;
     }}
     
     .decoration-2 {{
-        bottom: 10%;
-        left: 5%;
-        width: 150px;
-        height: 150px;
-        background: {'url("data:image/webp;base64,' + sub_bg_base64 + '")' if sub_bg_base64 else 'none'};
-        background-size: contain;
-        background-repeat: no-repeat;
-        transform: rotate(-15deg);
+        display: none;
     }}
     
     /* カードスタイル - マテリアル感 */
@@ -414,7 +414,7 @@ st.markdown(f"""
         border-radius: 2px;
     }}
 </style>
-""", unsafe_allow_html=True)
+"""
 
 # データベース初期化
 if not os.path.exists("materials.db"):
@@ -542,6 +542,34 @@ def create_timeline_chart(materials):
 
 # メインアプリケーション
 def main():
+    # デバッグスイッチ（サイドバーでCSSを無効化可能）
+    debug_no_css = st.sidebar.checkbox("🔧 Debug: CSSを無効化", value=False, help="白飛びが発生している場合、このチェックをONにするとCSSを無効化して表示を確認できます")
+    
+    # CSS適用（デバッグモードでない場合のみ）
+    if not debug_no_css:
+        st.markdown(get_custom_css(), unsafe_allow_html=True)
+    else:
+        # デバッグモード: 最小限のCSSのみ（可読性確保）
+        st.markdown("""
+        <style>
+            /* デバッグモード: 最小限のスタイル */
+            body, html {
+                color: #111 !important;
+                background: #f5f5f5 !important;
+            }
+            .stApp {
+                background: #f5f5f5 !important;
+            }
+            .stApp::before {
+                display: none !important;
+            }
+            [class*="st-"] {
+                color: #111 !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+        st.warning("🔧 デバッグモード: CSSが無効化されています。表示が正常な場合、CSSが原因です。")
+    
     # ヘッダー
     st.markdown('<h1 class="main-header">🔬 マテリアルデータベース</h1>', unsafe_allow_html=True)
     st.markdown('<p style="text-align: center; color: #555; font-size: 1.3rem; margin-bottom: 3rem; font-weight: 500;">素材の可能性を探索する、美しいデータベース</p>', unsafe_allow_html=True)
