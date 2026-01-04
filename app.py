@@ -767,6 +767,103 @@ def create_timeline_chart(materials):
     )
     return fig
 
+def show_asset_diagnostics(asset_stats: dict):
+    """Asset診断UIを表示"""
+    st.markdown("# 🔍 Asset診断モード")
+    st.markdown("生成物（元素画像など）の存在状況を診断します")
+    st.markdown("---")
+    
+    from utils.paths import get_generated_dir, resolve_path
+    from PIL import Image as PILImage
+    
+    # 元素画像の診断
+    if "elements" in asset_stats:
+        st.markdown("## 元素画像")
+        elem_stats = asset_stats["elements"]
+        
+        if "error" in elem_stats:
+            st.error(f"エラー: {elem_stats['error']}")
+        else:
+            total = elem_stats.get("total", 0)
+            existing = elem_stats.get("existing", 0)
+            generated = elem_stats.get("generated", 0)
+            failed = elem_stats.get("failed", 0)
+            missing = elem_stats.get("missing_files", [])
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("総数", total)
+            with col2:
+                st.metric("存在", existing, delta=f"{existing/total*100:.1f}%" if total > 0 else "0%")
+            with col3:
+                st.metric("生成", generated)
+            with col4:
+                st.metric("欠損", failed, delta=f"-{failed}" if failed > 0 else None, delta_color="inverse")
+            
+            if missing:
+                with st.expander(f"欠損ファイル一覧 ({len(missing)}件)", expanded=False):
+                    for filename in missing[:20]:  # 最大20件表示
+                        st.text(f"  • {filename}")
+                    if len(missing) > 20:
+                        st.text(f"  ... 他 {len(missing) - 20} 件")
+            
+            # 代表的な画像のプレビュー
+            if existing > 0:
+                st.markdown("#### プレビュー（代表例）")
+                elem_dir = get_generated_dir("elements")
+                preview_files = list(elem_dir.glob("element_*.png"))[:6]  # 最大6件
+                
+                if preview_files:
+                    cols = st.columns(min(3, len(preview_files)))
+                    for idx, filepath in enumerate(preview_files):
+                        with cols[idx % 3]:
+                            try:
+                                img = PILImage.open(filepath)
+                                st.image(img, caption=filepath.name, width=150)
+                            except Exception as e:
+                                st.caption(f"{filepath.name} (読み込みエラー)")
+    
+    # 加工例画像の診断
+    if "process_examples" in asset_stats:
+        st.markdown("---")
+        st.markdown("## 加工例画像")
+        proc_stats = asset_stats["process_examples"]
+        
+        if "error" in proc_stats:
+            st.error(f"エラー: {proc_stats['error']}")
+        else:
+            total = proc_stats.get("total", 0)
+            existing = proc_stats.get("existing", 0)
+            generated = proc_stats.get("generated", 0)
+            failed = proc_stats.get("failed", 0)
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("総数", total)
+            with col2:
+                st.metric("存在", existing)
+            with col3:
+                st.metric("生成", generated)
+            with col4:
+                st.metric("欠損", failed, delta_color="inverse" if failed > 0 else "normal")
+    
+    # カテゴリ画像の診断
+    if "categories" in asset_stats:
+        st.markdown("---")
+        st.markdown("## カテゴリ画像")
+        cat_stats = asset_stats["categories"]
+        
+        if "error" in cat_stats:
+            st.error(f"エラー: {cat_stats['error']}")
+        else:
+            total = cat_stats.get("total", 0)
+            existing = cat_stats.get("existing", 0)
+            st.metric("総数", total)
+            st.metric("存在", existing)
+    
+    st.markdown("---")
+    st.info("💡 ヒント: 欠損がある場合は、アプリを再起動すると自動生成されます。")
+
 # メインアプリケーション
 def main():
     # ビルド情報をサイドバーに表示
@@ -779,15 +876,31 @@ def main():
     # サンプルデータの自動投入（初回起動時のみ）
     ensure_sample_data()
     
+    # アセット確保（生成物の自動生成）
+    try:
+        from utils.ensure_assets import ensure_all_assets
+        asset_stats = ensure_all_assets()
+    except Exception as e:
+        print(f"アセット確保エラー: {e}")
+        import traceback
+        traceback.print_exc()
+        asset_stats = {}
+    
     # 画像の自動修復（起動時）
-    from utils.ensure_images import ensure_images
-    ensure_images(Path.cwd())
+    try:
+        from utils.ensure_images import ensure_images
+        ensure_images(Path.cwd())
+    except Exception as e:
+        print(f"画像自動修復エラー: {e}")
     
     # デバッグスイッチ（サイドバーでCSSを無効化可能）
     debug_no_css = st.sidebar.checkbox("Debug: CSSを無効化", value=False, help="白飛びが発生している場合、このチェックをONにするとCSSを無効化して表示を確認できます")
     
     # 画像診断モード（開発用）
     debug_images = st.sidebar.checkbox("🔍 画像診断モード", value=False, help="画像の健康状態を診断します（原因切り分け用）")
+    
+    # Asset診断モード（新規）
+    debug_assets = st.sidebar.checkbox("🔍 Asset診断モード", value=False, help="生成物（元素画像など）の存在状況を診断します")
     
     # CSS適用（デバッグモードでない場合のみ）
     if not debug_no_css:
@@ -879,6 +992,11 @@ def main():
             <small>Material Database v1.0</small>
         </div>
         """, unsafe_allow_html=True)
+    
+    # Asset診断モード（デバッグ時のみ表示）
+    if debug_assets:
+        show_asset_diagnostics(asset_stats)
+        return  # 診断モード時は他のページを表示しない
     
     # 画像診断モード（デバッグ時のみ表示）
     if debug_images:

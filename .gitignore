@@ -18,6 +18,9 @@ ENV/
 uploads/*
 !uploads/.gitkeep
 
+# 生成物（起動時に自動生成されるためGit管理しない）
+static/generated/
+
 # IDE
 .vscode/
 .idea/

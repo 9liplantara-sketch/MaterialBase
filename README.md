@@ -73,6 +73,7 @@ curl -X POST "http://localhost:8000/api/materials" \
 ```
 .
 ├── main.py              # FastAPIアプリケーション
+├── app.py               # Streamlitアプリケーション
 ├── database.py          # データベースモデル
 ├── models.py            # Pydanticモデル
 ├── card_generator.py    # 素材カード生成
@@ -80,8 +81,34 @@ curl -X POST "http://localhost:8000/api/materials" \
 ├── OUTLINE.md          # プロジェクトアウトライン
 ├── README.md           # このファイル
 ├── materials.db        # SQLiteデータベース（自動生成）
-└── uploads/            # アップロードされた画像（自動生成）
+├── uploads/            # アップロードされた画像（自動生成）
+└── static/
+    ├── generated/      # 生成物（起動時に自動生成、Git管理外）
+    │   ├── elements/   # 元素画像
+    │   └── process_examples/  # 加工例画像
+    └── images/         # 静的画像ファイル
 ```
+
+## 生成物の管理方針
+
+本プロジェクトでは、以下の生成物（画像など）を起動時に自動生成します：
+
+- **元素画像** (`static/generated/elements/`): 周期表で使用する元素カード画像
+- **加工例画像** (`static/generated/process_examples/`): 加工方法の説明画像
+
+これらの生成物は：
+- **Git管理外** (`.gitignore`に`static/generated/`を追加)
+- **起動時に自動生成** (`app.py`の`main()`関数で`ensure_all_assets()`を呼び出し)
+- **不足分のみ生成** (既存ファイルはスキップ、0バイトファイルや壊れたファイルは再生成)
+
+Streamlit Cloudでは再起動時に一時ファイルが消える可能性があるため、起動時に必ず再生成できる設計になっています。
+
+### 診断モード
+
+サイドバーの「🔍 Asset診断モード」をONにすると、生成物の存在状況を確認できます：
+- 総数 / 存在数 / 生成数 / 欠損数
+- 欠損ファイル一覧
+- 代表的な画像のプレビュー
 
 ## データベーススキーマ
 

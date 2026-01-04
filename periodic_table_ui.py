@@ -84,6 +84,86 @@ def get_element_category_color(category: str) -> str:
     return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
 
 
+def get_element_image_path(element: Dict) -> Optional[str]:
+    """元素の画像パスを取得（存在しない場合は生成）"""
+    from utils.paths import resolve_path, get_generated_dir
+    
+    if not element:
+        return None
+    
+    atomic_number = element.get("atomic_number")
+    symbol = element.get("symbol", "").upper()
+    if not atomic_number or not symbol:
+        return None
+    
+    # 統一された生成物ディレクトリを優先
+    generated_dir = get_generated_dir("elements")
+    
+    # PNG形式を優先（次にWebP）
+    filenames = [
+        f"element_{atomic_number}_{symbol}.png",
+        f"element_{atomic_number}_{symbol}.webp",
+    ]
+    
+    # 画像パスを確認（生成物ディレクトリを優先）
+    for filename in filenames:
+        image_paths = [
+            generated_dir / filename,
+            resolve_path(f"static/images/elements/{filename}"),
+            resolve_path(f"static/images/{filename}"),
+            Path("static/images/elements") / filename,
+            Path("static/images") / filename,
+        ]
+        
+        for img_path in image_paths:
+            if img_path.exists() and img_path.stat().st_size > 0:
+                return str(img_path)
+    
+    # 画像が存在しない場合は生成を試みる
+    try:
+        from image_generator import generate_element_image
+        group = element.get("group", "未分類")
+        
+        # PNG形式で生成
+        generated_path = generate_element_image(
+            symbol=symbol,
+            atomic_number=atomic_number,
+            group=group,
+            size=(400, 400),
+            output_dir=str(generated_dir)
+        )
+        
+        if generated_path:
+            gen_path = Path(generated_path)
+            if not gen_path.is_absolute():
+                gen_path = generated_dir / Path(generated_path).name
+            
+            # WebPからPNGに変換
+            if gen_path.exists() and gen_path.suffix == ".webp":
+                from PIL import Image as PILImage
+                with PILImage.open(gen_path) as img:
+                    if img.mode != 'RGB':
+                        rgb_img = PILImage.new('RGB', img.size, (255, 255, 255))
+                        if img.mode == 'RGBA':
+                            rgb_img.paste(img, mask=img.split()[3])
+                        else:
+                            rgb_img = img.convert('RGB')
+                        img = rgb_img
+                    
+                    png_path = generated_dir / f"element_{atomic_number}_{symbol}.png"
+                    img.save(png_path, 'PNG', quality=95)
+                    return str(png_path)
+            
+            if gen_path.exists():
+                return str(gen_path)
+    except Exception as e:
+        print(f"元素画像生成エラー (原子番号 {atomic_number}): {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return None
+
+
 def show_periodic_table():
     """周期表ページを表示（材料×元素マッピング対応）"""
     st.markdown('<h2 class="section-title">元素周期表</h2>', unsafe_allow_html=True)
