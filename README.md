@@ -197,6 +197,43 @@ python scripts/generate_images.py --no-skip-existing
 
 詳細は`scripts/prompt_templates.py`を参照してください。
 
+### 運用手順
+
+#### 初回セットアップ
+
+1. 環境変数を設定（`.env`ファイルまたはシェルで設定）
+2. 必要なライブラリをインストール
+3. テストモードで動作確認
+
+```bash
+# テストモード（3材料のみ）
+python scripts/generate_images.py --test
+```
+
+#### 本番実行
+
+```bash
+# 全材料の画像を生成（既存画像はスキップ）
+python scripts/generate_images.py
+```
+
+#### トラブルシューティング
+
+- **APIキーエラー**: 環境変数が正しく設定されているか確認
+- **レート制限エラー**: `RATE_LIMIT_DELAY`を増やす（例: 5秒）
+- **画像が生成されない**: APIプロバイダーの利用制限を確認
+- **パスエラー**: `utils/paths.py`の`project_root()`が正しく動作しているか確認
+
+### データベーススキーマ拡張
+
+以下のフィールド/テーブルが追加されました：
+
+- `materials.texture_image_path`: テクスチャ画像のパス
+- `process_example_images`テーブル: 材料別の加工例画像
+- `use_examples.image_path`: 用途写真のパス（既存、活用）
+
+スキーマ拡張は`init_db()`実行時に自動的に適用されます（既存データベースにも安全にALTER）。
+
 ## 今後の拡張予定
 
 1. PDF形式での素材カード出力
