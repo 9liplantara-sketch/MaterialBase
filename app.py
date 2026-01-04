@@ -22,6 +22,7 @@ from card_generator import generate_material_card
 from models import MaterialCard
 from material_form_detailed import show_detailed_material_form
 from periodic_table_ui import show_periodic_table
+from material_detail_tabs import show_material_detail_tabs
 
 # クラウド環境でのポート設定
 if 'PORT' in os.environ:
@@ -859,6 +860,27 @@ def show_materials_list():
     """材料一覧ページ"""
     st.markdown('<h2 class="section-title">材料一覧</h2>', unsafe_allow_html=True)
     
+    # 詳細表示モードのチェック
+    if 'selected_material_id' in st.session_state and st.session_state['selected_material_id']:
+        material_id = st.session_state['selected_material_id']
+        material = get_material_by_id(material_id)
+        
+        if material:
+            # 戻るボタン
+            if st.button("← 一覧に戻る", key="back_to_list"):
+                st.session_state['selected_material_id'] = None
+                st.rerun()
+            
+            st.markdown("---")
+            st.markdown(f"# {material.name_official or material.name}")
+            
+            # 3タブ構造で詳細表示
+            show_material_detail_tabs(material)
+            return
+        else:
+            st.error("材料が見つかりませんでした。")
+            st.session_state['selected_material_id'] = None
+    
     materials = get_all_materials()
     
     if not materials:
@@ -868,7 +890,7 @@ def show_materials_list():
     # フィルタリング
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        categories = ["すべて"] + list(set([m.category for m in materials if m.category]))
+        categories = ["すべて"] + list(set([m.category_main or m.category for m in materials if m.category_main or m.category]))
         selected_category = st.selectbox("カテゴリでフィルタ", categories)
     with col2:
         search_term = st.text_input("材料名で検索", placeholder="材料名を入力...")
@@ -879,9 +901,9 @@ def show_materials_list():
     # フィルタリング適用
     filtered_materials = materials
     if selected_category and selected_category != "すべて":
-        filtered_materials = [m for m in filtered_materials if m.category == selected_category]
+        filtered_materials = [m for m in filtered_materials if (m.category_main or m.category) == selected_category]
     if search_term:
-        filtered_materials = [m for m in filtered_materials if search_term.lower() in m.name.lower()]
+        filtered_materials = [m for m in filtered_materials if search_term.lower() in (m.name_official or m.name or "").lower()]
     
     st.markdown(f"### **{len(filtered_materials)}件**の材料が見つかりました")
     
@@ -898,12 +920,15 @@ def show_materials_list():
                         for p in props
                     ])
                 
+                material_name = material.name_official or material.name or "名称不明"
+                material_desc = material.description or ""
+                
                 st.markdown(f"""
                 <div class="material-card-container material-texture">
-                    <h3 style="color: #667eea; margin-top: 0; font-size: 1.4rem; font-weight: 700;">{material.name}</h3>
-                    <span class="category-badge">{material.category or '未分類'}</span>
+                    <h3 style="color: #667eea; margin-top: 0; font-size: 1.4rem; font-weight: 700;">{material_name}</h3>
+                    <span class="category-badge">{material.category_main or material.category or '未分類'}</span>
                     <p style="color: #666; margin: 20px 0; font-size: 0.95rem; line-height: 1.6;">
-                        {material.description[:80] if material.description else '説明なし'}...
+                        {material_desc[:80] if material_desc else '説明なし'}...
                     </p>
                     <div style="margin: 20px 0;">
                         {properties_text}
@@ -1055,7 +1080,7 @@ def show_search():
             st.info("検索結果が見つかりませんでした。別のキーワードで検索してみてください。")
 
 def show_material_cards():
-    """素材カード表示ページ"""
+    """素材カード表示ページ（3タブ構造）"""
     st.markdown('<h2 class="section-title">素材カード</h2>', unsafe_allow_html=True)
     
     materials = get_all_materials()
@@ -1064,22 +1089,21 @@ def show_material_cards():
         st.info("材料が登録されていません。")
         return
     
-    material_options = {f"{m.name} (ID: {m.id})": m.id for m in materials}
+    material_options = {f"{m.name_official or m.name or '名称不明'} (ID: {m.id})": m.id for m in materials}
     selected_material_name = st.selectbox("材料を選択", list(material_options.keys()))
     material_id = material_options[selected_material_name]
     
     material = get_material_by_id(material_id)
     
     if material:
-        # 素材カードの表示
+        # 材料名と基本情報
         st.markdown("---")
-        
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            st.markdown(f"## {material.name}")
-            if material.category:
-                st.markdown(f"**カテゴリ**: {material.category}")
+            st.markdown(f"## {material.name_official or material.name}")
+            if material.category_main or material.category:
+                st.markdown(f"**カテゴリ**: {material.category_main or material.category}")
             if material.description:
                 st.markdown(f"**説明**: {material.description}")
         
@@ -1087,24 +1111,16 @@ def show_material_cards():
             qr_img = generate_qr_code(material.id)
             st.image(qr_img, caption="QRコード", width=150)
         
-        # 物性データテーブル
-        if material.properties:
-            st.markdown("### 物性データ")
-            prop_data = {
-                '物性名': [p.property_name for p in material.properties],
-                '値': [p.value for p in material.properties],
-                '単位': [p.unit or '' for p in material.properties]
-            }
-            df = pd.DataFrame(prop_data)
-            st.dataframe(df, use_container_width=True, height=300)
+        # 3タブ構造で詳細表示
+        show_material_detail_tabs(material)
         
-        # カードのHTML生成と表示
+        # カードのHTML生成と表示（印刷用）
+        st.markdown("---")
+        st.markdown("### 素材カード（印刷用）")
+        
         primary_image = material.images[0] if material.images else None
         card_data = MaterialCard(material=material, primary_image=primary_image)
         card_html = generate_material_card(card_data)
-        
-        st.markdown("---")
-        st.markdown("### 素材カード（印刷用）")
         
         # HTMLを表示
         try:
