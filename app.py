@@ -210,21 +210,36 @@ def get_custom_css():
         border-color: rgba(0, 0, 0, 0.15);
     }}
     
-    /* カテゴリバッジ - WOTA風シンプル */
+    /* カテゴリバッジ - 読みやすく、タグとして表示 */
     .category-badge {{
         display: inline-block;
-        background: #1a1a1a;
-        color: #ffffff;
-        padding: 6px 16px;
-        border-radius: 2px;
-        font-size: 12px;
+        background: #f0f0f0;
+        color: #1a1a1a;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 11px;
         font-weight: 500;
-        margin: 8px 8px 0 0;
+        margin: 4px 4px 0 0;
         box-shadow: none;
         text-transform: none;
         letter-spacing: 0;
-        border: none;
+        border: 1px solid #ddd;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        line-height: 1.4;
+        max-width: 100%;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+        white-space: normal;
+    }}
+    
+    /* 素材画像のヒーロー領域 */
+    .material-hero-image {{
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        object-fit: cover;
+        background: #f5f5f5;
+        border-radius: 0;
+        margin-bottom: 16px;
     }}
     
     /* 統計カード - WOTA風シンプル */
@@ -563,12 +578,14 @@ def create_material(name, category, description, properties_data):
         db.close()
 
 def generate_qr_code(material_id: int):
-    """QRコードを生成"""
-    qr = qrcode.QRCode(version=1, box_size=10, border=5)
-    qr.add_data(f"Material ID: {material_id}")
-    qr.make(fit=True)
-    qr_img = qr.make_image(fill_color="black", back_color="white")
-    return qr_img
+    """QRコードを生成（後方互換性のため残すが、新しいコードではgenerate_qr_png_bytesを使用）"""
+    from utils.qr import generate_qr_png_bytes
+    qr_bytes = generate_qr_png_bytes(f"Material ID: {material_id}")
+    if qr_bytes:
+        from PIL import Image as PILImage
+        from io import BytesIO
+        return PILImage.open(BytesIO(qr_bytes))
+    return None
 
 def create_category_chart(materials):
     """カテゴリ別の円グラフを作成"""
@@ -1103,12 +1120,43 @@ def show_search():
                         finally:
                             db.close()
                         
-                        prop_text = f'<p style="color: #555;"><strong>物性データ:</strong> {prop_count}個</p>' if prop_count > 0 else ''
+                        prop_text = f'<p style="color: #555; margin-top: 12px;"><strong>物性データ:</strong> {prop_count}個</p>' if prop_count > 0 else ''
+                        
+                        # 素材画像を取得（主役として表示）
+                        from utils.image_display import get_material_image
+                        pil_img, img_status, img_message = get_material_image(material, Path.cwd(), auto_regenerate=True)
+                        
+                        # 画像HTML（プレースホルダー含む）
+                        if pil_img and img_status == "ok":
+                            from io import BytesIO
+                            import base64
+                            buffer = BytesIO()
+                            pil_img.save(buffer, format='PNG')
+                            img_base64 = base64.b64encode(buffer.getvalue()).decode()
+                            img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material.name}" />'
+                        else:
+                            # プレースホルダー
+                            img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
+                        
+                        # カテゴリ名（長い場合は省略）
+                        category_name = material.category or '未分類'
+                        if len(category_name) > 20:
+                            category_display = category_name[:17] + "..."
+                            category_title = category_name
+                        else:
+                            category_display = category_name
+                            category_title = ""
+                        
                         st.markdown(f"""
                         <div class="material-card-container material-texture">
-                            <h3 style="color: #667eea; margin-top: 0; font-size: 1.3rem; font-weight: 700;">{material.name}</h3>
-                            <span class="category-badge">{material.category or '未分類'}</span>
-                            <p style="color: #666; margin: 15px 0; line-height: 1.6;">{material.description or '説明なし'}</p>
+                            {img_html}
+                            <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px;">
+                                <h3 style="color: #1a1a1a; margin: 0; font-size: 1.3rem; font-weight: 700; flex: 1;">{material.name}</h3>
+                            </div>
+                            <div style="margin-bottom: 12px;">
+                                <span class="category-badge" title="{category_title}">{category_display}</span>
+                            </div>
+                            <p style="color: #666; margin: 0; line-height: 1.6; font-size: 0.9rem;">{material.description or '説明なし'}</p>
                             {prop_text}
                         </div>
                         """, unsafe_allow_html=True)
@@ -1144,8 +1192,13 @@ def show_material_cards():
                 st.markdown(f"**説明**: {material.description}")
         
         with col2:
-            qr_img = generate_qr_code(material.id)
-            st.image(qr_img, caption="QRコード", width=150)
+            # QRコードをPNG bytesとして生成（TypeErrorを防ぐ）
+            from utils.qr import generate_qr_png_bytes
+            qr_bytes = generate_qr_png_bytes(f"Material ID: {material.id}")
+            if qr_bytes:
+                st.image(qr_bytes, caption="QRコード", width=150)
+            else:
+                st.caption("QRコード生成に失敗しました")
         
         # 3タブ構造で詳細表示
         show_material_detail_tabs(material)
