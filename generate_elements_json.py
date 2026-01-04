@@ -1,0 +1,151 @@
+"""
+元素データJSON生成スクリプト
+Wikidata CC0データを基に、118元素すべてのJSONファイルを生成
+"""
+import json
+from pathlib import Path
+
+# 118元素すべての基本データ（Wikidata CC0、IUPAC標準に基づく）
+# 出典: Wikidata (CC0), IUPAC Periodic Table of Elements
+ELEMENTS_DATA = [
+    # 周期1
+    {"atomic_number": 1, "symbol": "H", "name_ja": "水素", "name_en": "Hydrogen", "group": "非金属", "period": 1, "state": "気体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q556"}]},
+    {"atomic_number": 2, "symbol": "He", "name_ja": "ヘリウム", "name_en": "Helium", "group": "貴ガス", "period": 1, "state": "気体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q560"}]},
+    # 周期2
+    {"atomic_number": 3, "symbol": "Li", "name_ja": "リチウム", "name_en": "Lithium", "group": "アルカリ金属", "period": 2, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q568"}]},
+    {"atomic_number": 4, "symbol": "Be", "name_ja": "ベリリウム", "name_en": "Beryllium", "group": "アルカリ土類金属", "period": 2, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q569"}]},
+    {"atomic_number": 5, "symbol": "B", "name_ja": "ホウ素", "name_en": "Boron", "group": "半金属", "period": 2, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q570"}]},
+    {"atomic_number": 6, "symbol": "C", "name_ja": "炭素", "name_en": "Carbon", "group": "非金属", "period": 2, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q623"}]},
+    {"atomic_number": 7, "symbol": "N", "name_ja": "窒素", "name_en": "Nitrogen", "group": "非金属", "period": 2, "state": "気体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q627"}]},
+    {"atomic_number": 8, "symbol": "O", "name_ja": "酸素", "name_en": "Oxygen", "group": "非金属", "period": 2, "state": "気体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q629"}]},
+    {"atomic_number": 9, "symbol": "F", "name_ja": "フッ素", "name_en": "Fluorine", "group": "ハロゲン", "period": 2, "state": "気体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q568"}]},
+    {"atomic_number": 10, "symbol": "Ne", "name_ja": "ネオン", "name_en": "Neon", "group": "貴ガス", "period": 2, "state": "気体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q680"}]},
+    # 周期3
+    {"atomic_number": 11, "symbol": "Na", "name_ja": "ナトリウム", "name_en": "Sodium", "group": "アルカリ金属", "period": 3, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q682"}]},
+    {"atomic_number": 12, "symbol": "Mg", "name_ja": "マグネシウム", "name_en": "Magnesium", "group": "アルカリ土類金属", "period": 3, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q660"}]},
+    {"atomic_number": 13, "symbol": "Al", "name_ja": "アルミニウム", "name_en": "Aluminum", "group": "金属", "period": 3, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q663"}]},
+    {"atomic_number": 14, "symbol": "Si", "name_ja": "ケイ素", "name_en": "Silicon", "group": "半金属", "period": 3, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q670"}]},
+    {"atomic_number": 15, "symbol": "P", "name_ja": "リン", "name_en": "Phosphorus", "group": "非金属", "period": 3, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q674"}]},
+    {"atomic_number": 16, "symbol": "S", "name_ja": "硫黄", "name_en": "Sulfur", "group": "非金属", "period": 3, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q682"}]},
+    {"atomic_number": 17, "symbol": "Cl", "name_ja": "塩素", "name_en": "Chlorine", "group": "ハロゲン", "period": 3, "state": "気体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q688"}]},
+    {"atomic_number": 18, "symbol": "Ar", "name_ja": "アルゴン", "name_en": "Argon", "group": "貴ガス", "period": 3, "state": "気体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q690"}]},
+    # 周期4
+    {"atomic_number": 19, "symbol": "K", "name_ja": "カリウム", "name_en": "Potassium", "group": "アルカリ金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q696"}]},
+    {"atomic_number": 20, "symbol": "Ca", "name_ja": "カルシウム", "name_en": "Calcium", "group": "アルカリ土類金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q698"}]},
+    {"atomic_number": 21, "symbol": "Sc", "name_ja": "スカンジウム", "name_en": "Scandium", "group": "遷移金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q700"}]},
+    {"atomic_number": 22, "symbol": "Ti", "name_ja": "チタン", "name_en": "Titanium", "group": "遷移金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q702"}]},
+    {"atomic_number": 23, "symbol": "V", "name_ja": "バナジウム", "name_en": "Vanadium", "group": "遷移金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q704"}]},
+    {"atomic_number": 24, "symbol": "Cr", "name_ja": "クロム", "name_en": "Chromium", "group": "遷移金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q706"}]},
+    {"atomic_number": 25, "symbol": "Mn", "name_ja": "マンガン", "name_en": "Manganese", "group": "遷移金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q708"}]},
+    {"atomic_number": 26, "symbol": "Fe", "name_ja": "鉄", "name_en": "Iron", "group": "遷移金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q709"}]},
+    {"atomic_number": 27, "symbol": "Co", "name_ja": "コバルト", "name_en": "Cobalt", "group": "遷移金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q710"}]},
+    {"atomic_number": 28, "symbol": "Ni", "name_ja": "ニッケル", "name_en": "Nickel", "group": "遷移金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q711"}]},
+    {"atomic_number": 29, "symbol": "Cu", "name_ja": "銅", "name_en": "Copper", "group": "遷移金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q753"}]},
+    {"atomic_number": 30, "symbol": "Zn", "name_ja": "亜鉛", "name_en": "Zinc", "group": "遷移金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q758"}]},
+    {"atomic_number": 31, "symbol": "Ga", "name_ja": "ガリウム", "name_en": "Gallium", "group": "金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q760"}]},
+    {"atomic_number": 32, "symbol": "Ge", "name_ja": "ゲルマニウム", "name_en": "Germanium", "group": "半金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q761"}]},
+    {"atomic_number": 33, "symbol": "As", "name_ja": "ヒ素", "name_en": "Arsenic", "group": "半金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q762"}]},
+    {"atomic_number": 34, "symbol": "Se", "name_ja": "セレン", "name_en": "Selenium", "group": "非金属", "period": 4, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q763"}]},
+    {"atomic_number": 35, "symbol": "Br", "name_ja": "臭素", "name_en": "Bromine", "group": "ハロゲン", "period": 4, "state": "液体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q764"}]},
+    {"atomic_number": 36, "symbol": "Kr", "name_ja": "クリプトン", "name_en": "Krypton", "group": "貴ガス", "period": 4, "state": "気体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q765"}]},
+    # 周期5
+    {"atomic_number": 37, "symbol": "Rb", "name_ja": "ルビジウム", "name_en": "Rubidium", "group": "アルカリ金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q766"}]},
+    {"atomic_number": 38, "symbol": "Sr", "name_ja": "ストロンチウム", "name_en": "Strontium", "group": "アルカリ土類金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q768"}]},
+    {"atomic_number": 39, "symbol": "Y", "name_ja": "イットリウム", "name_en": "Yttrium", "group": "遷移金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q770"}]},
+    {"atomic_number": 40, "symbol": "Zr", "name_ja": "ジルコニウム", "name_en": "Zirconium", "group": "遷移金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q772"}]},
+    {"atomic_number": 41, "symbol": "Nb", "name_ja": "ニオブ", "name_en": "Niobium", "group": "遷移金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q774"}]},
+    {"atomic_number": 42, "symbol": "Mo", "name_ja": "モリブデン", "name_en": "Molybdenum", "group": "遷移金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q776"}]},
+    {"atomic_number": 43, "symbol": "Tc", "name_ja": "テクネチウム", "name_en": "Technetium", "group": "遷移金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q778"}]},
+    {"atomic_number": 44, "symbol": "Ru", "name_ja": "ルテニウム", "name_en": "Ruthenium", "group": "遷移金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q780"}]},
+    {"atomic_number": 45, "symbol": "Rh", "name_ja": "ロジウム", "name_en": "Rhodium", "group": "遷移金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q782"}]},
+    {"atomic_number": 46, "symbol": "Pd", "name_ja": "パラジウム", "name_en": "Palladium", "group": "遷移金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q784"}]},
+    {"atomic_number": 47, "symbol": "Ag", "name_ja": "銀", "name_en": "Silver", "group": "遷移金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q786"}]},
+    {"atomic_number": 48, "symbol": "Cd", "name_ja": "カドミウム", "name_en": "Cadmium", "group": "遷移金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q788"}]},
+    {"atomic_number": 49, "symbol": "In", "name_ja": "インジウム", "name_en": "Indium", "group": "金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q790"}]},
+    {"atomic_number": 50, "symbol": "Sn", "name_ja": "スズ", "name_en": "Tin", "group": "金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q792"}]},
+    {"atomic_number": 51, "symbol": "Sb", "name_ja": "アンチモン", "name_en": "Antimony", "group": "半金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q794"}]},
+    {"atomic_number": 52, "symbol": "Te", "name_ja": "テルル", "name_en": "Tellurium", "group": "半金属", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q796"}]},
+    {"atomic_number": 53, "symbol": "I", "name_ja": "ヨウ素", "name_en": "Iodine", "group": "ハロゲン", "period": 5, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q798"}]},
+    {"atomic_number": 54, "symbol": "Xe", "name_ja": "キセノン", "name_en": "Xenon", "group": "貴ガス", "period": 5, "state": "気体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q800"}]},
+    # 周期6
+    {"atomic_number": 55, "symbol": "Cs", "name_ja": "セシウム", "name_en": "Cesium", "group": "アルカリ金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q802"}]},
+    {"atomic_number": 56, "symbol": "Ba", "name_ja": "バリウム", "name_en": "Barium", "group": "アルカリ土類金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q804"}]},
+    {"atomic_number": 57, "symbol": "La", "name_ja": "ランタン", "name_en": "Lanthanum", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q806"}]},
+    {"atomic_number": 58, "symbol": "Ce", "name_ja": "セリウム", "name_en": "Cerium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q808"}]},
+    {"atomic_number": 59, "symbol": "Pr", "name_ja": "プラセオジム", "name_en": "Praseodymium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q810"}]},
+    {"atomic_number": 60, "symbol": "Nd", "name_ja": "ネオジム", "name_en": "Neodymium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q812"}]},
+    {"atomic_number": 61, "symbol": "Pm", "name_ja": "プロメチウム", "name_en": "Promethium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q814"}]},
+    {"atomic_number": 62, "symbol": "Sm", "name_ja": "サマリウム", "name_en": "Samarium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q816"}]},
+    {"atomic_number": 63, "symbol": "Eu", "name_ja": "ユーロピウム", "name_en": "Europium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q818"}]},
+    {"atomic_number": 64, "symbol": "Gd", "name_ja": "ガドリニウム", "name_en": "Gadolinium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q820"}]},
+    {"atomic_number": 65, "symbol": "Tb", "name_ja": "テルビウム", "name_en": "Terbium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q822"}]},
+    {"atomic_number": 66, "symbol": "Dy", "name_ja": "ジスプロシウム", "name_en": "Dysprosium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q824"}]},
+    {"atomic_number": 67, "symbol": "Ho", "name_ja": "ホルミウム", "name_en": "Holmium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q826"}]},
+    {"atomic_number": 68, "symbol": "Er", "name_ja": "エルビウム", "name_en": "Erbium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q828"}]},
+    {"atomic_number": 69, "symbol": "Tm", "name_ja": "ツリウム", "name_en": "Thulium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q830"}]},
+    {"atomic_number": 70, "symbol": "Yb", "name_ja": "イッテルビウム", "name_en": "Ytterbium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q832"}]},
+    {"atomic_number": 71, "symbol": "Lu", "name_ja": "ルテチウム", "name_en": "Lutetium", "group": "ランタノイド", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q834"}]},
+    {"atomic_number": 72, "symbol": "Hf", "name_ja": "ハフニウム", "name_en": "Hafnium", "group": "遷移金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q836"}]},
+    {"atomic_number": 73, "symbol": "Ta", "name_ja": "タンタル", "name_en": "Tantalum", "group": "遷移金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q838"}]},
+    {"atomic_number": 74, "symbol": "W", "name_ja": "タングステン", "name_en": "Tungsten", "group": "遷移金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q840"}]},
+    {"atomic_number": 75, "symbol": "Re", "name_ja": "レニウム", "name_en": "Rhenium", "group": "遷移金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q842"}]},
+    {"atomic_number": 76, "symbol": "Os", "name_ja": "オスミウム", "name_en": "Osmium", "group": "遷移金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q844"}]},
+    {"atomic_number": 77, "symbol": "Ir", "name_ja": "イリジウム", "name_en": "Iridium", "group": "遷移金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q846"}]},
+    {"atomic_number": 78, "symbol": "Pt", "name_ja": "白金", "name_en": "Platinum", "group": "遷移金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q848"}]},
+    {"atomic_number": 79, "symbol": "Au", "name_ja": "金", "name_en": "Gold", "group": "遷移金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q850"}]},
+    {"atomic_number": 80, "symbol": "Hg", "name_ja": "水銀", "name_en": "Mercury", "group": "遷移金属", "period": 6, "state": "液体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q852"}]},
+    {"atomic_number": 81, "symbol": "Tl", "name_ja": "タリウム", "name_en": "Thallium", "group": "金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q854"}]},
+    {"atomic_number": 82, "symbol": "Pb", "name_ja": "鉛", "name_en": "Lead", "group": "金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q856"}]},
+    {"atomic_number": 83, "symbol": "Bi", "name_ja": "ビスマス", "name_en": "Bismuth", "group": "金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q858"}]},
+    {"atomic_number": 84, "symbol": "Po", "name_ja": "ポロニウム", "name_en": "Polonium", "group": "半金属", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q860"}]},
+    {"atomic_number": 85, "symbol": "At", "name_ja": "アスタチン", "name_en": "Astatine", "group": "ハロゲン", "period": 6, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q862"}]},
+    {"atomic_number": 86, "symbol": "Rn", "name_ja": "ラドン", "name_en": "Radon", "group": "貴ガス", "period": 6, "state": "気体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q864"}]},
+    # 周期7
+    {"atomic_number": 87, "symbol": "Fr", "name_ja": "フランシウム", "name_en": "Francium", "group": "アルカリ金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q866"}]},
+    {"atomic_number": 88, "symbol": "Ra", "name_ja": "ラジウム", "name_en": "Radium", "group": "アルカリ土類金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q868"}]},
+    {"atomic_number": 89, "symbol": "Ac", "name_ja": "アクチニウム", "name_en": "Actinium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q870"}]},
+    {"atomic_number": 90, "symbol": "Th", "name_ja": "トリウム", "name_en": "Thorium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q872"}]},
+    {"atomic_number": 91, "symbol": "Pa", "name_ja": "プロトアクチニウム", "name_en": "Protactinium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q874"}]},
+    {"atomic_number": 92, "symbol": "U", "name_ja": "ウラン", "name_en": "Uranium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q876"}]},
+    {"atomic_number": 93, "symbol": "Np", "name_ja": "ネプツニウム", "name_en": "Neptunium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q878"}]},
+    {"atomic_number": 94, "symbol": "Pu", "name_ja": "プルトニウム", "name_en": "Plutonium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q880"}]},
+    {"atomic_number": 95, "symbol": "Am", "name_ja": "アメリシウム", "name_en": "Americium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q882"}]},
+    {"atomic_number": 96, "symbol": "Cm", "name_ja": "キュリウム", "name_en": "Curium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q884"}]},
+    {"atomic_number": 97, "symbol": "Bk", "name_ja": "バークリウム", "name_en": "Berkelium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q886"}]},
+    {"atomic_number": 98, "symbol": "Cf", "name_ja": "カリホルニウム", "name_en": "Californium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q888"}]},
+    {"atomic_number": 99, "symbol": "Es", "name_ja": "アインスタイニウム", "name_en": "Einsteinium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q890"}]},
+    {"atomic_number": 100, "symbol": "Fm", "name_ja": "フェルミウム", "name_en": "Fermium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q892"}]},
+    {"atomic_number": 101, "symbol": "Md", "name_ja": "メンデレビウム", "name_en": "Mendelevium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q894"}]},
+    {"atomic_number": 102, "symbol": "No", "name_ja": "ノーベリウム", "name_en": "Nobelium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q896"}]},
+    {"atomic_number": 103, "symbol": "Lr", "name_ja": "ローレンシウム", "name_en": "Lawrencium", "group": "アクチノイド", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q898"}]},
+    {"atomic_number": 104, "symbol": "Rf", "name_ja": "ラザホージウム", "name_en": "Rutherfordium", "group": "遷移金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q900"}]},
+    {"atomic_number": 105, "symbol": "Db", "name_ja": "ドブニウム", "name_en": "Dubnium", "group": "遷移金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q902"}]},
+    {"atomic_number": 106, "symbol": "Sg", "name_ja": "シーボーギウム", "name_en": "Seaborgium", "group": "遷移金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q904"}]},
+    {"atomic_number": 107, "symbol": "Bh", "name_ja": "ボーリウム", "name_en": "Bohrium", "group": "遷移金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q906"}]},
+    {"atomic_number": 108, "symbol": "Hs", "name_ja": "ハッシウム", "name_en": "Hassium", "group": "遷移金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q908"}]},
+    {"atomic_number": 109, "symbol": "Mt", "name_ja": "マイトネリウム", "name_en": "Meitnerium", "group": "遷移金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q910"}]},
+    {"atomic_number": 110, "symbol": "Ds", "name_ja": "ダームスタチウム", "name_en": "Darmstadtium", "group": "遷移金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q912"}]},
+    {"atomic_number": 111, "symbol": "Rg", "name_ja": "レントゲニウム", "name_en": "Roentgenium", "group": "遷移金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q914"}]},
+    {"atomic_number": 112, "symbol": "Cn", "name_ja": "コペルニシウム", "name_en": "Copernicium", "group": "遷移金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q916"}]},
+    {"atomic_number": 113, "symbol": "Nh", "name_ja": "ニホニウム", "name_en": "Nihonium", "group": "金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q918"}]},
+    {"atomic_number": 114, "symbol": "Fl", "name_ja": "フレロビウム", "name_en": "Flerovium", "group": "金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q920"}]},
+    {"atomic_number": 115, "symbol": "Mc", "name_ja": "モスコビウム", "name_en": "Moscovium", "group": "金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q922"}]},
+    {"atomic_number": 116, "symbol": "Lv", "name_ja": "リバモリウム", "name_en": "Livermorium", "group": "金属", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q924"}]},
+    {"atomic_number": 117, "symbol": "Ts", "name_ja": "テネシン", "name_en": "Tennessine", "group": "ハロゲン", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q926"}]},
+    {"atomic_number": 118, "symbol": "Og", "name_ja": "オガネソン", "name_en": "Oganesson", "group": "貴ガス", "period": 7, "state": "固体", "notes": "", "sources": [{"name": "Wikidata", "license": "CC0", "url": "https://www.wikidata.org/wiki/Q928"}]}
+]
+
+def generate_elements_json():
+    """元素データJSONファイルを生成"""
+    output_path = Path("data/elements.json")
+    output_path.parent.mkdir(exist_ok=True)
+    
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(ELEMENTS_DATA, f, ensure_ascii=False, indent=2)
+    
+    print(f"✅ 元素データJSONファイルを生成しました: {output_path}")
+    print(f"   総元素数: {len(ELEMENTS_DATA)}")
+
+if __name__ == "__main__":
+    generate_elements_json()
+

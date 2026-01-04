@@ -21,6 +21,7 @@ from sqlalchemy import select, func
 from card_generator import generate_material_card
 from models import MaterialCard
 from material_form_detailed import show_detailed_material_form
+from periodic_table_ui import show_periodic_table
 
 # クラウド環境でのポート設定
 if 'PORT' in os.environ:
@@ -653,7 +654,7 @@ def main():
         
         page = st.radio(
             "ページを選択",
-            ["ホーム", "材料一覧", "材料登録", "ダッシュボード", "検索", "素材カード"],
+            ["ホーム", "材料一覧", "材料登録", "ダッシュボード", "検索", "素材カード", "元素周期表"],
             label_visibility="collapsed"
         )
         
@@ -699,6 +700,8 @@ def main():
         show_search()
     elif page == "素材カード":
         show_material_cards()
+    elif page == "元素周期表":
+        show_periodic_table()
 
 def show_home():
     """ホームページ"""
