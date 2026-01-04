@@ -197,29 +197,36 @@ def show_procurement_uses_tab(material):
         if material.cost_value and material.cost_unit:
             st.markdown(f"**価格**: {material.cost_value} {material.cost_unit}")
     
-    # 参照URL（入手先URL）
-    if hasattr(material, 'reference_urls') and material.reference_urls:
-        st.markdown("---")
-        st.markdown("### 参照URL")
-        for ref_url in material.reference_urls:
-            st.markdown(f"- [{ref_url.url or 'URL'}]({ref_url.url})")
-            if ref_url.description:
-                st.markdown(f"  *{ref_url.description}*")
-    else:
-        # データベースから直接取得を試みる
-        from database import SessionLocal, ReferenceURL
-        db = SessionLocal()
-        try:
-            ref_urls = db.query(ReferenceURL).filter(ReferenceURL.material_id == material.id).all()
-            if ref_urls:
-                st.markdown("---")
-                st.markdown("### 参照URL")
-                for ref_url in ref_urls:
-                    st.markdown(f"- [{ref_url.url or 'URL'}]({ref_url.url})")
-                    if ref_url.description:
-                        st.markdown(f"  *{ref_url.description}*")
-        finally:
-            db.close()
+    # 参照URL（入手先URL）- DetachedInstanceError対策
+    try:
+        # eager load済みのreference_urlsにアクセス
+        if hasattr(material, 'reference_urls') and material.reference_urls:
+            st.markdown("---")
+            st.markdown("### 参照URL")
+            for ref_url in material.reference_urls:
+                st.markdown(f"- [{ref_url.url or 'URL'}]({ref_url.url})")
+                if ref_url.description:
+                    st.markdown(f"  *{ref_url.description}*")
+        else:
+            # データベースから直接取得を試みる（フォールバック）
+            from database import SessionLocal, ReferenceURL
+            db = SessionLocal()
+            try:
+                ref_urls = db.query(ReferenceURL).filter(ReferenceURL.material_id == material.id).all()
+                if ref_urls:
+                    st.markdown("---")
+                    st.markdown("### 参照URL")
+                    for ref_url in ref_urls:
+                        st.markdown(f"- [{ref_url.url or 'URL'}]({ref_url.url})")
+                        if ref_url.description:
+                            st.markdown(f"  *{ref_url.description}*")
+            finally:
+                db.close()
+    except Exception as e:
+        # DetachedInstanceError等の例外をキャッチ（アプリを落とさない）
+        import traceback
+        print(f"参照URL取得エラー: {e}")
+        traceback.print_exc()
     
     st.markdown("---")
     
@@ -245,31 +252,38 @@ def show_procurement_uses_tab(material):
                     ">{cat}</div>
                     """, unsafe_allow_html=True)
     
-    # 用途例（UseExample）
-    if hasattr(material, 'use_examples') and material.use_examples:
-        st.markdown("#### 用途例")
-        for use_ex in material.use_examples:
-            st.markdown(f"- **{use_ex.example_name or '用途例'}**")
-            if use_ex.description:
-                st.markdown(f"  {use_ex.description}")
-            if use_ex.url:
-                st.markdown(f"  [詳細リンク]({use_ex.url})")
-    else:
-        # データベースから直接取得を試みる
-        from database import SessionLocal, UseExample
-        db = SessionLocal()
-        try:
-            use_examples = db.query(UseExample).filter(UseExample.material_id == material.id).all()
-            if use_examples:
-                st.markdown("#### 用途例")
-                for use_ex in use_examples:
-                    st.markdown(f"- **{use_ex.example_name or '用途例'}**")
-                    if use_ex.description:
-                        st.markdown(f"  {use_ex.description}")
-                    if use_ex.url:
-                        st.markdown(f"  [詳細リンク]({use_ex.url})")
-        finally:
-            db.close()
+    # 用途例（UseExample）- DetachedInstanceError対策
+    try:
+        # eager load済みのuse_examplesにアクセス
+        if hasattr(material, 'use_examples') and material.use_examples:
+            st.markdown("#### 用途例")
+            for use_ex in material.use_examples:
+                st.markdown(f"- **{use_ex.example_name or '用途例'}**")
+                if use_ex.description:
+                    st.markdown(f"  {use_ex.description}")
+                if use_ex.url:
+                    st.markdown(f"  [詳細リンク]({use_ex.url})")
+        else:
+            # データベースから直接取得を試みる（フォールバック）
+            from database import SessionLocal, UseExample
+            db = SessionLocal()
+            try:
+                use_examples = db.query(UseExample).filter(UseExample.material_id == material.id).all()
+                if use_examples:
+                    st.markdown("#### 用途例")
+                    for use_ex in use_examples:
+                        st.markdown(f"- **{use_ex.example_name or '用途例'}**")
+                        if use_ex.description:
+                            st.markdown(f"  {use_ex.description}")
+                        if use_ex.url:
+                            st.markdown(f"  [詳細リンク]({use_ex.url})")
+            finally:
+                db.close()
+    except Exception as e:
+        # DetachedInstanceError等の例外をキャッチ（アプリを落とさない）
+        import traceback
+        print(f"用途例取得エラー: {e}")
+        traceback.print_exc()
     
     # 用途イメージ画像（画像表示の1本化）
     st.markdown("---")

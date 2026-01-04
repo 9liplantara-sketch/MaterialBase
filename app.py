@@ -108,11 +108,22 @@ def get_icon_svg_inline(icon_name: str, size: int = 48, color: str = "#999999") 
 # 注意: この変数はmain()関数内で設定されるため、ここでは定義のみ
 debug_no_css = False
 
-# WOTA風シンプルなカスタムCSS（視認性重視）
+# WOTA風シンプルなカスタムCSS（視認性重視・コントラスト確保）
 def get_custom_css():
-    """カスタムCSSを生成（WOTA風シンプルデザイン）"""
+    """カスタムCSSを生成（WOTA風シンプルデザイン・コントラスト確保）"""
     return f"""
 <style>
+    /* CSS変数（コントラスト確保のための共通ルール） */
+    :root {{
+        --bg: #ffffff;
+        --text: #111111;
+        --muted: #666666;
+        --surface: #f7f7f7;
+        --border: #e5e5e5;
+        --primary: #1a1a1a;
+        --on-primary: #ffffff;
+    }}
+    
     /* ベースフォント - シンプルなサンセリフ（WOTA風） */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
     
@@ -122,7 +133,7 @@ def get_custom_css():
     
     /* ベース文字色を確保（視認性向上） */
     html, body, [class*="st-"], p, span, div, h1, h2, h3, h4, h5, h6 {{
-        color: #1a1a1a !important;
+        color: var(--text) !important;
     }}
     
     /* メイン背景 - WOTA風シンプル（白背景） */
@@ -282,11 +293,13 @@ def get_custom_css():
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }}
     
-    /* ボタンスタイル - WOTA風シンプル */
-    .stButton>button {{
-        background: #1a1a1a;
-        color: #ffffff;
-        border: 1px solid #1a1a1a;
+    /* ボタンスタイル - WOTA風シンプル（コントラスト確保） */
+    .stButton>button,
+    button[data-baseweb="button"],
+    [data-testid="baseButton-secondary"] {{
+        background: var(--primary) !important;
+        color: var(--on-primary) !important;
+        border: 1px solid var(--primary) !important;
         border-radius: 4px;
         padding: 0.75rem 2rem;
         font-weight: 500;
@@ -298,11 +311,28 @@ def get_custom_css():
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }}
     
-    .stButton>button:hover {{
-        background: #333333;
-        border-color: #333333;
+    .stButton>button:hover,
+    button[data-baseweb="button"]:hover {{
+        background: #333333 !important;
+        border-color: #333333 !important;
+        color: var(--on-primary) !important;
         transform: none;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }}
+    
+    /* 黒背景のヘッダー/バー部分の文字色を白に統一 */
+    [style*="background: #1a1a1a"],
+    [style*="background:#1a1a1a"],
+    [style*="background-color: #1a1a1a"],
+    [style*="background-color:#1a1a1a"],
+    .black-bar,
+    .dark-header {{
+        color: var(--on-primary) !important;
+    }}
+    
+    .black-bar *,
+    .dark-header * {{
+        color: var(--on-primary) !important;
     }}
     
     /* サイドバー - WOTA風シンプル */
@@ -511,16 +541,18 @@ def get_db():
     return SessionLocal()
 
 def get_all_materials():
-    """全材料を取得（Eager Loadでリレーションも先読み）"""
+    """全材料を取得（Eager Loadでリレーションも先読み・全リレーション網羅）"""
     db = get_db()
     try:
-        # Eager Loadでproperties, images, metadata_itemsを先読み
+        # Eager Loadで全リレーションを先読み（DetachedInstanceErrorを防ぐ）
         stmt = (
             select(Material)
             .options(
                 selectinload(Material.properties),
                 selectinload(Material.images),
                 selectinload(Material.metadata_items),
+                selectinload(Material.reference_urls),  # 追加
+                selectinload(Material.use_examples),    # 追加
             )
             .order_by(Material.created_at.desc() if hasattr(Material, 'created_at') else Material.id.desc())
         )
@@ -530,7 +562,7 @@ def get_all_materials():
         db.close()
 
 def get_material_by_id(material_id: int):
-    """IDで材料を取得（Eager Loadでリレーションも先読み）"""
+    """IDで材料を取得（Eager Loadでリレーションも先読み・全リレーション網羅）"""
     db = get_db()
     try:
         stmt = (
@@ -539,6 +571,8 @@ def get_material_by_id(material_id: int):
                 selectinload(Material.properties),
                 selectinload(Material.images),
                 selectinload(Material.metadata_items),
+                selectinload(Material.reference_urls),  # 追加
+                selectinload(Material.use_examples),    # 追加
             )
             .filter(Material.id == material_id)
         )
@@ -927,8 +961,11 @@ def show_materials_list():
             st.markdown("---")
             st.markdown(f"# {material.name_official or material.name}")
             
-            # 3タブ構造で詳細表示
-            show_material_detail_tabs(material)
+            # 3タブ構造で詳細表示（eager load済みのmaterialを渡す）
+            # 念のため、再度取得してeager loadを保証
+            material = get_material_by_id(material.id)
+            if material:
+                show_material_detail_tabs(material)
             return
         else:
             st.error("材料が見つかりませんでした。")
