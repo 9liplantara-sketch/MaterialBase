@@ -976,11 +976,41 @@ def show_materials_list():
                 material_name = material.name_official or material.name or "名称不明"
                 material_desc = material.description or ""
                 
+                # 素材画像を取得（主役として表示）
+                from utils.image_display import get_material_image
+                pil_img, img_status, img_message = get_material_image(material, Path.cwd(), auto_regenerate=True)
+                
+                # 画像HTML（プレースホルダー含む）
+                if pil_img and img_status == "ok":
+                    from io import BytesIO
+                    import base64
+                    buffer = BytesIO()
+                    pil_img.save(buffer, format='PNG')
+                    img_base64 = base64.b64encode(buffer.getvalue()).decode()
+                    img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
+                else:
+                    # プレースホルダー
+                    img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
+                
+                # カテゴリ名（長い場合は省略）
+                category_name = material.category_main or material.category or '未分類'
+                if len(category_name) > 20:
+                    category_display = category_name[:17] + "..."
+                    category_title = category_name
+                else:
+                    category_display = category_name
+                    category_title = ""
+                
                 st.markdown(f"""
                 <div class="material-card-container material-texture">
-                    <h3 style="color: #667eea; margin-top: 0; font-size: 1.4rem; font-weight: 700;">{material_name}</h3>
-                    <span class="category-badge">{material.category_main or material.category or '未分類'}</span>
-                    <p style="color: #666; margin: 20px 0; font-size: 0.95rem; line-height: 1.6;">
+                    {img_html}
+                    <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; margin-top: 16px;">
+                        <h3 style="color: #1a1a1a; margin: 0; font-size: 1.4rem; font-weight: 700; flex: 1;">{material_name}</h3>
+                    </div>
+                    <div style="margin-bottom: 12px;">
+                        <span class="category-badge" title="{category_title}">{category_display}</span>
+                    </div>
+                    <p style="color: #666; margin: 0; font-size: 0.95rem; line-height: 1.6;">
                         {material_desc[:80] if material_desc else '説明なし'}...
                     </p>
                     <div style="margin: 20px 0;">
