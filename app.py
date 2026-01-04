@@ -68,19 +68,40 @@ sub_bg_path = get_image_path("サブ.webp")
 main_bg_base64 = get_base64_image(main_bg_path) if main_bg_path else None
 sub_bg_base64 = get_base64_image(sub_bg_path) if sub_bg_path else None
 
-# グレーのシンプルな記号を生成（SVG）
-def generate_simple_symbol(symbol_type="square", size=48, color="#999999"):
-    """シンプルなグレーの記号をSVGで生成"""
-    symbols = {
-        "square": f'<svg width="{size}" height="{size}" xmlns="http://www.w3.org/2000/svg"><rect width="{size}" height="{size}" fill="{color}"/></svg>',
-        "circle": f'<svg width="{size}" height="{size}" xmlns="http://www.w3.org/2000/svg"><circle cx="{size//2}" cy="{size//2}" r="{size//2-2}" fill="{color}"/></svg>',
-        "triangle": f'<svg width="{size}" height="{size}" xmlns="http://www.w3.org/2000/svg"><polygon points="{size//2},2 {size-2},{size-2} 2,{size-2}" fill="{color}"/></svg>',
-        "diamond": f'<svg width="{size}" height="{size}" xmlns="http://www.w3.org/2000/svg"><polygon points="{size//2},2 {size-2},{size//2} {size//2},{size-2} 2,{size//2}" fill="{color}"/></svg>',
-        "line": f'<svg width="{size}" height="{size}" xmlns="http://www.w3.org/2000/svg"><line x1="2" y1="{size//2}" x2="{size-2}" y2="{size//2}" stroke="{color}" stroke-width="3"/></svg>',
-        "plus": f'<svg width="{size}" height="{size}" xmlns="http://www.w3.org/2000/svg"><line x1="{size//2}" y1="2" x2="{size//2}" y2="{size-2}" stroke="{color}" stroke-width="3"/><line x1="2" y1="{size//2}" x2="{size-2}" y2="{size//2}" stroke="{color}" stroke-width="3"/></svg>',
-    }
-    svg = symbols.get(symbol_type, symbols["square"])
-    return base64.b64encode(svg.encode()).decode()
+# アイコンファイルの読み込み（iconmonstr風のシンプルなSVGアイコン）
+def get_icon_path(icon_name: str) -> Optional[str]:
+    """アイコンファイルのパスを取得"""
+    icon_path = Path("static/icons") / f"{icon_name}.svg"
+    if icon_path.exists():
+        return str(icon_path)
+    return None
+
+def get_icon_base64(icon_name: str) -> Optional[str]:
+    """アイコンをBase64エンコードして返す"""
+    icon_path = get_icon_path(icon_name)
+    if icon_path:
+        try:
+            with open(icon_path, "rb") as f:
+                return base64.b64encode(f.read()).decode()
+        except Exception:
+            return None
+    return None
+
+def get_icon_svg_inline(icon_name: str, size: int = 48, color: str = "#999999") -> str:
+    """アイコンをインラインSVGとして返す（色とサイズを調整）"""
+    icon_path = get_icon_path(icon_name)
+    if icon_path:
+        try:
+            with open(icon_path, "r", encoding="utf-8") as f:
+                svg_content = f.read()
+                # 色とサイズを置換
+                svg_content = svg_content.replace('stroke="#999999"', f'stroke="{color}"')
+                svg_content = svg_content.replace('width="48"', f'width="{size}"')
+                svg_content = svg_content.replace('height="48"', f'height="{size}"')
+                return base64.b64encode(svg_content.encode()).decode()
+        except Exception:
+            pass
+    return ""
 
 # デバッグスイッチ（サイドバーでCSSを無効化可能）
 # 注意: この変数はmain()関数内で設定されるため、ここでは定義のみ
@@ -755,19 +776,19 @@ def show_home():
         </div>
         """, unsafe_allow_html=True)
     
-    # 機能紹介カード（グレーのシンプルな記号を使用）
+    # 機能紹介カード（iconmonstr風のアイコンを使用）
     st.markdown('<h3 class="section-title">主な機能</h3>', unsafe_allow_html=True)
     col1, col2, col3 = st.columns(3)
     
-    symbol1 = generate_simple_symbol("square", 40, "#999999")
-    symbol2 = generate_simple_symbol("circle", 40, "#999999")
-    symbol3 = generate_simple_symbol("triangle", 40, "#999999")
+    icon1 = get_icon_svg_inline("icon-register", 40, "#999999")
+    icon2 = get_icon_svg_inline("icon-chart", 40, "#999999")
+    icon3 = get_icon_svg_inline("icon-card", 40, "#999999")
     
     with col1:
         st.markdown(f"""
         <div class="stat-card">
             <div style="margin-bottom: 15px; text-align: center;">
-                <img src="data:image/svg+xml;base64,{symbol1}" style="width: 40px; height: 40px; opacity: 0.6;" />
+                <img src="data:image/svg+xml;base64,{icon1}" style="width: 40px; height: 40px; opacity: 0.6;" />
             </div>
             <h3 style="color: #1a1a1a; margin: 15px 0; font-weight: 600; font-size: 1.1rem;">材料登録</h3>
             <p style="color: #666; margin: 0; font-size: 14px;">簡単に材料情報を登録・管理</p>
@@ -778,7 +799,7 @@ def show_home():
         st.markdown(f"""
         <div class="stat-card">
             <div style="margin-bottom: 15px; text-align: center;">
-                <img src="data:image/svg+xml;base64,{symbol2}" style="width: 40px; height: 40px; opacity: 0.6;" />
+                <img src="data:image/svg+xml;base64,{icon2}" style="width: 40px; height: 40px; opacity: 0.6;" />
             </div>
             <h3 style="color: #1a1a1a; margin: 15px 0; font-weight: 600; font-size: 1.1rem;">データ可視化</h3>
             <p style="color: #666; margin: 0; font-size: 14px;">グラフで材料データを分析</p>
@@ -789,7 +810,7 @@ def show_home():
         st.markdown(f"""
         <div class="stat-card">
             <div style="margin-bottom: 15px; text-align: center;">
-                <img src="data:image/svg+xml;base64,{symbol3}" style="width: 40px; height: 40px; opacity: 0.6;" />
+                <img src="data:image/svg+xml;base64,{icon3}" style="width: 40px; height: 40px; opacity: 0.6;" />
             </div>
             <h3 style="color: #1a1a1a; margin: 15px 0; font-weight: 600; font-size: 1.1rem;">素材カード</h3>
             <p style="color: #666; margin: 0; font-size: 14px;">素材カードを自動生成</p>
@@ -831,25 +852,25 @@ def show_home():
                     </div>
                     """, unsafe_allow_html=True)
     
-    # 将来の機能（グレーのシンプルな記号を使用）
+    # 将来の機能（iconmonstr風のアイコンを使用）
     st.markdown("---")
     st.markdown('<h3 class="section-title">将来の機能（LLM統合予定）</h3>', unsafe_allow_html=True)
     
     future_features = [
-        ("diamond", "自然言語検索", "「高強度で軽量な材料」など、自然な言葉で検索"),
-        ("plus", "材料推奨", "要件に基づいて最適な材料を自動推奨"),
-        ("line", "物性予測", "AIによる物性データの予測"),
-        ("circle", "類似度分析", "材料間の類似性を分析")
+        ("icon-search", "自然言語検索", "「高強度で軽量な材料」など、自然な言葉で検索"),
+        ("icon-recommend", "材料推奨", "要件に基づいて最適な材料を自動推奨"),
+        ("icon-predict", "物性予測", "AIによる物性データの予測"),
+        ("icon-similarity", "類似度分析", "材料間の類似性を分析")
     ]
     
     cols = st.columns(4)
-    for idx, (symbol_type, title, desc) in enumerate(future_features):
-        symbol = generate_simple_symbol(symbol_type, 48, "#999999")
+    for idx, (icon_name, title, desc) in enumerate(future_features):
+        icon = get_icon_svg_inline(icon_name, 48, "#999999")
         with cols[idx]:
             st.markdown(f"""
             <div class="material-card-container" style="padding: 25px; text-align: center;">
                 <div style="margin-bottom: 15px; text-align: center;">
-                    <img src="data:image/svg+xml;base64,{symbol}" style="width: 48px; height: 48px; opacity: 0.6;" />
+                    <img src="data:image/svg+xml;base64,{icon}" style="width: 48px; height: 48px; opacity: 0.6;" />
                 </div>
                 <h4 style="color: #1a1a1a; margin: 15px 0; font-weight: 600; font-size: 1rem;">{title}</h4>
                 <p style="color: #666; font-size: 13px; margin: 0; line-height: 1.6;">{desc}</p>

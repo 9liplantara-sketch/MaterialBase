@@ -247,12 +247,12 @@ def render_periodic_table(
     # ランタノイド（fブロック）
     st.markdown("---")
     st.markdown("#### ランタノイド（fブロック）")
-    render_f_block(LANTHANIDES, selected_atomic_number, highlighted_elements)
+    render_f_block(LANTHANIDES, selected_atomic_number, highlighted_elements, section="lanthanides")
     
     # アクチノイド（fブロック）
     st.markdown("---")
     st.markdown("#### アクチノイド（fブロック）")
-    render_f_block(ACTINIDES, selected_atomic_number, highlighted_elements)
+    render_f_block(ACTINIDES, selected_atomic_number, highlighted_elements, section="actinides")
 
 
 def render_period_row(
@@ -273,20 +273,30 @@ def render_period_row(
             atomic_num = layout.get(group, 0)
             
             if atomic_num == 0:
-                # 空セル
+                # 空セル（keyは不要）
                 st.markdown("<div style='height: 60px;'></div>", unsafe_allow_html=True)
             else:
                 element = get_element_by_atomic_number(atomic_num)
                 if element:
                     is_selected = selected_atomic_number == atomic_num
                     is_highlighted = atomic_num in highlighted_elements
-                    render_element_cell(element, is_selected, is_highlighted)
+                    # keyを一意化: block="main", section="periodic", row=period, col=group
+                    render_element_cell(
+                        element, 
+                        is_selected, 
+                        is_highlighted,
+                        block="main",
+                        section="periodic",
+                        row=period,
+                        col=group
+                    )
 
 
 def render_f_block(
     atomic_numbers: List[int],
     selected_atomic_number: Optional[int] = None,
-    highlighted_elements: Optional[set] = None
+    highlighted_elements: Optional[set] = None,
+    section: str = "fblock"
 ):
     """fブロック（ランタノイド・アクチノイド）をレンダリング（材料×元素マッピング対応）"""
     if highlighted_elements is None:
@@ -300,11 +310,29 @@ def render_f_block(
             if element:
                 is_selected = selected_atomic_number == atomic_num
                 is_highlighted = atomic_num in highlighted_elements
-                render_element_cell(element, is_selected, is_highlighted)
+                # keyを一意化: block="fblock", section=section, row=0, col=idx
+                render_element_cell(
+                    element, 
+                    is_selected, 
+                    is_highlighted,
+                    block="fblock",
+                    section=section,
+                    row=0,
+                    col=idx
+                )
 
 
-def render_element_cell(element: Dict, is_selected: bool = False, is_highlighted: bool = False):
-    """元素セルをレンダリング（クリック可能、材料×元素マッピング対応）"""
+def render_element_cell(
+    element: Dict, 
+    is_selected: bool = False, 
+    is_highlighted: bool = False,
+    *,
+    block: str = "main",
+    section: str = "periodic",
+    row: int = 0,
+    col: int = 0
+):
+    """元素セルをレンダリング（クリック可能、材料×元素マッピング対応、key一意化対応）"""
     atomic_num = element["atomic_number"]
     symbol = element.get("symbol", f"E{atomic_num}")
     group = element.get("group", "未分類")
@@ -321,8 +349,19 @@ def render_element_cell(element: Dict, is_selected: bool = False, is_highlighted
         border_style = "1px solid #ccc"
         bg_color_selected = bg_color
     
-    # ボタンとして表示（クリック可能）
-    button_key = f"element_{atomic_num}"
+    # ボタンkeyを一意化（block, section, row, colを含める）
+    # これにより、周期表とfブロックで同じ原子番号でも重複しない
+    button_key = f"ptbtn:{block}:{section}:{row}:{col}:{atomic_num}"
+    
+    # 開発時のみkey重複を検知（環境変数で制御）
+    import os
+    if os.getenv("DEBUG_KEYS") == "1":
+        if not hasattr(st.session_state, '_button_keys'):
+            st.session_state._button_keys = set()
+        if button_key in st.session_state._button_keys:
+            st.error(f"⚠️ Key重複検知: {button_key}")
+        else:
+            st.session_state._button_keys.add(button_key)
     
     # 元素名を取得（日本語優先）
     name = element.get("name_ja") or element.get("name_en") or f"Element {atomic_num}"
