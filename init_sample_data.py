@@ -224,46 +224,47 @@ def init_sample_data():
             category="金属・合金",
             description="純アルミニウム。軽量で加工性が良く、耐食性に優れる。JIS H 4000準拠。"
         )
-        db.add(material4)
-        db.flush()
-        
-        db.add(Property(material_id=material4.id, property_name="密度", value=2.70, unit="g/cm³"))
-        db.add(Property(material_id=material4.id, property_name="引張強度", value=70, unit="MPa"))
-        db.add(Property(material_id=material4.id, property_name="降伏強度", value=20, unit="MPa"))
-        db.add(Property(material_id=material4.id, property_name="融点", value=660, unit="°C"))
-        db.add(Property(material_id=material4.id, property_name="熱伝導率", value=237, unit="W/(m·K)"))
-        db.add(Property(material_id=material4.id, property_name="JIS規格", value=None, unit="JIS H 4000"))
-        
-        ensure_material_image("アルミニウム", "金属・合金", material4.id, db)
-        
-        # 用途例を追加（画像付き）
-        from utils.use_example_image_generator import ensure_use_example_image
-        use1_img = ensure_use_example_image("アルミニウム", "アルミ鍋", "キッチン")
-        use2_img = ensure_use_example_image("アルミニウム", "アルミサッシ", "建築")
-        
-        db.add(UseExample(
-            material_id=material4.id,
-            example_name="アルミ鍋",
-            domain="キッチン",
-            description="調理器具として広く使用される。熱伝導性が良く、軽量。",
-            image_path=use1_img or "",
-            source_name="Generated",
-            source_url="",
-            license_note="自前生成"
-        ))
-        db.add(UseExample(
-            material_id=material4.id,
-            example_name="アルミサッシ/外装材",
-            domain="建築",
-            description="建築外装材として使用。軽量で耐候性に優れる。",
-            image_path=use2_img or "",
-            source_name="Generated",
-            source_url="",
-            license_note="自前生成"
-        ))
-        
-        materials_data.append(material4)
-        print(f"    ✓ アルミニウム（純アルミ） (ID: {material4.id})")
+            db.add(material4)
+            db.flush()
+            
+            db.add(Property(material_id=material4.id, property_name="密度", value=2.70, unit="g/cm³"))
+            db.add(Property(material_id=material4.id, property_name="引張強度", value=70, unit="MPa"))
+            db.add(Property(material_id=material4.id, property_name="降伏強度", value=20, unit="MPa"))
+            db.add(Property(material_id=material4.id, property_name="融点", value=660, unit="°C"))
+            db.add(Property(material_id=material4.id, property_name="熱伝導率", value=237, unit="W/(m·K)"))
+            db.add(Property(material_id=material4.id, property_name="JIS規格", value=None, unit="JIS H 4000"))
+            
+            ensure_material_image("アルミニウム", "金属・合金", material4.id, db)
+            
+            # 用途例を追加（画像付き）
+            from utils.use_example_image_generator import ensure_use_example_image
+            use1_img = ensure_use_example_image("アルミニウム", "アルミ鍋", "キッチン")
+            use2_img = ensure_use_example_image("アルミニウム", "アルミサッシ", "建築")
+            
+            db.add(UseExample(
+                material_id=material4.id,
+                example_name="アルミ鍋",
+                domain="キッチン",
+                description="調理器具として広く使用される。熱伝導性が良く、軽量。",
+                image_path=use1_img or "",
+                source_name="Generated",
+                source_url="",
+                license_note="自前生成"
+            ))
+            db.add(UseExample(
+                material_id=material4.id,
+                example_name="アルミサッシ/外装材",
+                domain="建築",
+                description="建築外装材として使用。軽量で耐候性に優れる。",
+                image_path=use2_img or "",
+                source_name="Generated",
+                source_url="",
+                license_note="自前生成"
+            ))
+            
+            materials_data.append(material4)
+            print(f"    ✓ アルミニウム（純アルミ） (ID: {material4.id})")
+            existing_names.add("アルミニウム（純アルミ）")
         
         # 5. ステンレス鋼 SUS304
         print("  5. ステンレス鋼 SUS304を登録中...")
@@ -329,6 +330,7 @@ def init_sample_data():
             
             materials_data.append(material5)
             print(f"    ✓ ステンレス鋼 SUS304 (ID: {material5.id})")
+            existing_names.add("ステンレス鋼 SUS304")
             existing_names.add("ステンレス鋼 SUS304")
         
         # 6. 真鍮（黄銅）（重複チェック）
@@ -399,6 +401,7 @@ def init_sample_data():
             
             materials_data.append(material6)
             print(f"    ✓ 真鍮（黄銅） (ID: {material6.id})")
+            existing_names.add("真鍮（黄銅）")
             existing_names.add("真鍮（黄銅）")
         
         # ========== プラスチック ==========
@@ -483,6 +486,7 @@ def init_sample_data():
             materials_data.append(material7)
             print(f"    ✓ ポリプロピレン（PP） (ID: {material7.id})")
             existing_names.add("ポリプロピレン（PP）")
+            existing_names.add("ポリプロピレン（PP）")
         
         # 8. ポリエチレン（PE）（重複チェック）
         if "ポリエチレン（PE）" in existing_names:
@@ -552,6 +556,7 @@ def init_sample_data():
             materials_data.append(material8)
             print(f"    ✓ ポリエチレン（PE） (ID: {material8.id})")
             existing_names.add("ポリエチレン（PE）")
+            existing_names.add("ポリエチレン（PE）")
         
         # 9. ポリ塩化ビニル（PVC）（重複チェック）
         if "ポリ塩化ビニル（PVC）" in existing_names:
@@ -592,34 +597,35 @@ def init_sample_data():
             category="高分子（樹脂・エラストマー等）",
             description="ポリ塩化ビニル樹脂。硬質と軟質があり、建築材料やパイプなどに広く使用される。JIS K 6723準拠。"
         )
-        db.add(material9)
-        db.flush()
-        
-        db.add(Property(material_id=material9.id, property_name="密度", value=1.38, unit="g/cm³"))
-        db.add(Property(material_id=material9.id, property_name="引張強度", value=50, unit="MPa"))
-        db.add(Property(material_id=material9.id, property_name="降伏強度", value=45, unit="MPa"))
-        db.add(Property(material_id=material9.id, property_name="ガラス転移温度", value=87, unit="°C"))
-        db.add(Property(material_id=material9.id, property_name="JIS規格", value=None, unit="JIS K 6723"))
-        
-        ensure_material_image("ポリ塩化ビニル", "高分子（樹脂・エラストマー等）", material9.id, db)
-        
-        # 用途例を追加（画像付き）
-        from utils.use_example_image_generator import ensure_use_example_image
-        use1_img = ensure_use_example_image("ポリ塩化ビニル", "シート/内装材", "建築")
-        
-        db.add(UseExample(
-            material_id=material9.id,
-            example_name="シート/内装材",
-            domain="建築",
-            description="建築内装材として使用。耐候性と加工性に優れる。",
-            image_path=use1_img or "",
-            source_name="Generated",
-            source_url="",
-            license_note="自前生成"
-        ))
-        
-        materials_data.append(material9)
-        print(f"    ✓ ポリ塩化ビニル（PVC） (ID: {material9.id})")
+            db.add(material9)
+            db.flush()
+            
+            db.add(Property(material_id=material9.id, property_name="密度", value=1.38, unit="g/cm³"))
+            db.add(Property(material_id=material9.id, property_name="引張強度", value=50, unit="MPa"))
+            db.add(Property(material_id=material9.id, property_name="降伏強度", value=45, unit="MPa"))
+            db.add(Property(material_id=material9.id, property_name="ガラス転移温度", value=87, unit="°C"))
+            db.add(Property(material_id=material9.id, property_name="JIS規格", value=None, unit="JIS K 6723"))
+            
+            ensure_material_image("ポリ塩化ビニル", "高分子（樹脂・エラストマー等）", material9.id, db)
+            
+            # 用途例を追加（画像付き）
+            from utils.use_example_image_generator import ensure_use_example_image
+            use1_img = ensure_use_example_image("ポリ塩化ビニル", "シート/内装材", "建築")
+            
+            db.add(UseExample(
+                material_id=material9.id,
+                example_name="シート/内装材",
+                domain="建築",
+                description="建築内装材として使用。耐候性と加工性に優れる。",
+                image_path=use1_img or "",
+                source_name="Generated",
+                source_url="",
+                license_note="自前生成"
+            ))
+            
+            materials_data.append(material9)
+            print(f"    ✓ ポリ塩化ビニル（PVC） (ID: {material9.id})")
+            existing_names.add("ポリ塩化ビニル（PVC）")
         
         db.commit()
         print("\n" + "=" * 60)
