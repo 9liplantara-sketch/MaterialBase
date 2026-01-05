@@ -80,6 +80,11 @@ def show_material_detail_tabs(material):
 
 def show_properties_tab(material):
     """タブ1: 材料物性"""
+    # テクスチャ画像を表示（上部、URL優先）
+    from utils.image_display import get_display_image_source, display_image_unified
+    texture_source = get_display_image_source(material, Path.cwd())
+    if texture_source:
+        display_image_unified(texture_source, caption="テクスチャ画像", use_container_width=True)
     # テクスチャ画像を表示（上部）
     if hasattr(material, 'texture_image_path') and material.texture_image_path:
         from utils.paths import resolve_path
@@ -235,17 +240,17 @@ def show_properties_tab(material):
                             resolved_path = resolve_path(image_path) if not Path(image_path).is_absolute() else Path(image_path)
                             
                             if resolved_path.exists():
-                                from PIL import Image as PILImage
-                                pil_img = PILImage.open(resolved_path)
-                                # RGBモードに変換
-                                if pil_img.mode != 'RGB':
-                                    rgb_img = PILImage.new('RGB', pil_img.size, (255, 255, 255))
-                                    if pil_img.mode == 'RGBA':
-                                        rgb_img.paste(pil_img, mask=pil_img.split()[3])
-                                    else:
-                                        rgb_img = pil_img.convert('RGB')
-                                    pil_img = rgb_img
-                                st.image(pil_img, caption=method, width=280, use_container_width=False)
+                                # 統一関数を使用（URL優先）
+                                from utils.image_display import get_display_image_source, display_image_unified
+                                # ProcessExampleImageオブジェクトを作成（一時的）
+                                from database import ProcessExampleImage
+                                temp_process_image = ProcessExampleImage(
+                                    material_id=material.id,
+                                    process_method=method,
+                                    image_path=str(resolved_path)
+                                )
+                                image_source = get_display_image_source(temp_process_image, Path.cwd())
+                                display_image_unified(image_source, caption=method, width=280, placeholder_size=(280, 200))
                             else:
                                 st.caption(f"{method} (画像ファイルが見つかりません)")
                         else:
