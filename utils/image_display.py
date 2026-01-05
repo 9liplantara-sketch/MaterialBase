@@ -107,6 +107,7 @@ def display_image_unified(
     """
     統一画像表示関数（URLまたはPILImageを受け取り、st.image()で表示）
     画像が無い場合はプレースホルダーを表示（真っ白回避）
+    例外時もアプリは落ちない（画像だけスキップ）
     
     Args:
         image_source: URL文字列、PILImage、またはNone
@@ -115,32 +116,42 @@ def display_image_unified(
         use_container_width: コンテナ幅を使用するか
         placeholder_size: プレースホルダーのサイズ（幅, 高さ）
     """
-    if image_source:
-        # URLまたはPILImageを表示
-        st.image(image_source, caption=caption, width=width, use_container_width=use_container_width)
-    else:
-        # プレースホルダーを表示（真っ白回避）
-        placeholder = PILImage.new('RGB', placeholder_size, (240, 240, 240))
-        from PIL import ImageDraw, ImageFont
-        draw = ImageDraw.Draw(placeholder)
-        try:
-            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
-        except:
-            font = ImageFont.load_default()
-        text = "画像なし"
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        draw.text(
-            ((placeholder_size[0] - text_width) // 2, (placeholder_size[1] - text_height) // 2),
-            text,
-            fill=(150, 150, 150),
-            font=font
-        )
+    try:
+        if image_source:
+            # URLまたはPILImageを表示（例外時もアプリは落ちない）
             try:
-                st.image(placeholder, caption=caption or "プレースホルダー", width=width, use_container_width=use_container_width)
+                st.image(image_source, caption=caption, width=width, use_container_width=use_container_width)
             except Exception:
-                # プレースホルダー表示も失敗した場合は何も表示しない（アプリは落ちない）
+                # 画像表示エラー時はプレースホルダーを表示（アプリは落ちない）
+                image_source = None
+        
+        if not image_source:
+            # プレースホルダーを表示（真っ白回避）
+            try:
+                placeholder = PILImage.new('RGB', placeholder_size, (240, 240, 240))
+                from PIL import ImageDraw, ImageFont
+                draw = ImageDraw.Draw(placeholder)
+                try:
+                    font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
+                except:
+                    font = ImageFont.load_default()
+                text = "画像なし"
+                bbox = draw.textbbox((0, 0), text, font=font)
+                text_width = bbox[2] - bbox[0]
+                text_height = bbox[3] - bbox[1]
+                draw.text(
+                    ((placeholder_size[0] - text_width) // 2, (placeholder_size[1] - text_height) // 2),
+                    text,
+                    fill=(150, 150, 150),
+                    font=font
+                )
+                try:
+                    st.image(placeholder, caption=caption or "プレースホルダー", width=width, use_container_width=use_container_width)
+                except Exception:
+                    # プレースホルダー表示も失敗した場合は何も表示しない（アプリは落ちない）
+                    pass
+            except Exception:
+                # プレースホルダー生成も失敗した場合は何も表示しない（アプリは落ちない）
                 pass
     except Exception:
         # 全体の例外時もアプリは落ちない（画像だけスキップ）
