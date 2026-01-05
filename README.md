@@ -114,8 +114,23 @@ Streamlit Cloudでは再起動時に一時ファイルが消える可能性が�
 
 - **materials**: 材料情報
 - **properties**: 物性データ
-- **images**: 画像情報
+- **images**: 画像情報（`file_path` + `url` カラムでS3対応）
 - **metadata**: メタデータ
+- **use_examples**: 用途例（`image_path` + `image_url` カラムでS3対応）
+- **process_example_images**: 加工例画像（`image_path` + `image_url` カラムでS3対応）
+
+### S3画像URL対応
+
+データベーススキーマにS3画像URL対応を追加しました：
+
+- **`Image.url`**: S3 URL（優先）、`file_path`は後方互換のため保持
+- **`Material.texture_image_url`**: テクスチャ画像URL（優先）、`texture_image_path`は後方互換のため保持
+- **`UseExample.image_url`**: 用途写真URL（優先）、`image_path`は後方互換のため保持
+- **`ProcessExampleImage.image_url`**: 加工例画像URL（優先）、`image_path`は後方互換のため保持
+
+**画像参照の優先順位**: URLがある場合はURL優先、URLがない場合は従来のローカルパス表示
+
+詳細は `DB_MIGRATION_S3_URL.md` を参照してください。
 
 ## 画像生成機能
 

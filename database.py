@@ -128,7 +128,8 @@ class Material(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # 画像パス（生成物）
-    texture_image_path = Column(String(500))  # テクスチャ画像パス（相対パス）
+    texture_image_path = Column(String(500))  # テクスチャ画像パス（相対パス、後方互換）
+    texture_image_url = Column(String(1000))  # テクスチャ画像URL（S3 URL、新規追加）
     
     # リレーション
     properties = relationship("Property", back_populates="material", cascade="all, delete-orphan")
@@ -160,7 +161,8 @@ class Image(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     material_id = Column(Integer, ForeignKey("materials.id"), nullable=False)
-    file_path = Column(String(500), nullable=False)
+    file_path = Column(String(500))  # ローカルパス（後方互換、nullableに変更）
+    url = Column(String(1000))  # S3 URL（新規追加、nullable）
     image_type = Column(String(50))  # sample, microscope, etc.
     description = Column(Text)
 
@@ -204,7 +206,8 @@ class UseExample(Base):
     example_name = Column(String(255), nullable=False)  # 製品名/事例名（タイトル）
     domain = Column(String(100))  # 領域（内装/プロダクト/建築/キッチン等）
     description = Column(Text)  # 短い説明
-    image_path = Column(String(500))  # 画像パス（相対パス）
+    image_path = Column(String(500))  # 画像パス（相対パス、後方互換）
+    image_url = Column(String(1000))  # 画像URL（S3 URL、新規追加）
     source_name = Column(String(255))  # 出典名（例: "Generated", "PhotoAC"）
     source_url = Column(String(500))  # 出典URL
     license_note = Column(Text)  # ライセンス表記
@@ -221,7 +224,8 @@ class ProcessExampleImage(Base):
     id = Column(Integer, primary_key=True, index=True)
     material_id = Column(Integer, ForeignKey("materials.id"), nullable=False)
     process_method = Column(String(100), nullable=False)  # 加工方法名（例: "射出成形"）
-    image_path = Column(String(500), nullable=False)  # 画像パス（相対パス）
+    image_path = Column(String(500))  # 画像パス（相対パス、後方互換、nullableに変更）
+    image_url = Column(String(1000))  # 画像URL（S3 URL、新規追加）
     description = Column(Text)  # 説明
     source_name = Column(String(255), default="Generated")  # 出典名
     source_url = Column(String(500))  # 出典URL
@@ -233,21 +237,86 @@ class ProcessExampleImage(Base):
 
 # データベーステーブルの作成
 def init_db():
-    """データベースを初期化（既存テーブルは保持）"""
+    """
+    データベースを初期化（既存テーブルは保持）
+    
+    S3画像URL対応のマイグレーション:
+    - Image.url カラム追加
+    - Material.texture_image_url カラム追加
+    - UseExample.image_url カラム追加
+    - ProcessExampleImage.image_url カラム追加
+    - Image.file_path を nullable に変更（既存データは保持）
+    - ProcessExampleImage.image_path を nullable に変更（既存データは保持）
+    
+    注意: 既存の file_path / image_path カラムは削除せず保持（後方互換性）
+    """
     Base.metadata.create_all(bind=engine)
     
     # 既存データベースへのカラム追加（安全にALTER）
     try:
         from sqlalchemy import inspect, text
         inspector = inspect(engine)
-        existing_columns = [col['name'] for col in inspector.get_columns('materials')]
         
-        # texture_image_pathカラムが存在しない場合は追加
-        if 'texture_image_path' not in existing_columns:
-            with engine.connect() as conn:
-                conn.execute(text("ALTER TABLE materials ADD COLUMN texture_image_path VARCHAR(500)"))
-                conn.commit()
-            print("✓ texture_image_pathカラムを追加しました")
+        # materials テーブルのカラム確認
+        if 'materials' in inspector.get_table_names():
+            existing_columns = [col['name'] for col in inspector.get_columns('materials')]
+            
+            # texture_image_pathカラムが存在しない場合は追加
+            if 'texture_image_path' not in existing_columns:
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE materials ADD COLUMN texture_image_path VARCHAR(500)"))
+                    conn.commit()
+                print("✓ texture_image_pathカラムを追加しました")
+            
+            # texture_image_urlカラムが存在しない場合は追加
+            if 'texture_image_url' not in existing_columns:
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE materials ADD COLUMN texture_image_url VARCHAR(1000)"))
+                    conn.commit()
+                print("✓ texture_image_urlカラムを追加しました")
+        
+        # images テーブルのカラム確認
+        if 'images' in inspector.get_table_names():
+            existing_columns = [col['name'] for col in inspector.get_columns('images')]
+            
+            # urlカラムが存在しない場合は追加
+            if 'url' not in existing_columns:
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE images ADD COLUMN url VARCHAR(1000)"))
+                    conn.commit()
+                print("✓ images.urlカラムを追加しました")
+            
+            # file_pathをnullableに変更（既存データは保持）
+            # SQLiteではALTER COLUMNが直接できないため、新しいテーブルを作成して移行する必要がある
+            # ただし、既存データに影響を与えないため、ここではカラム追加のみ行う
+            # file_pathのnullable変更は、既存データが存在する場合は手動で行うか、移行スクリプトで対応
+        
+        # use_examples テーブルのカラム確認
+        if 'use_examples' in inspector.get_table_names():
+            existing_columns = [col['name'] for col in inspector.get_columns('use_examples')]
+            
+            # image_urlカラムが存在しない場合は追加
+            if 'image_url' not in existing_columns:
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE use_examples ADD COLUMN image_url VARCHAR(1000)"))
+                    conn.commit()
+                print("✓ use_examples.image_urlカラムを追加しました")
+        
+        # process_example_images テーブルのカラム確認
+        if 'process_example_images' in inspector.get_table_names():
+            existing_columns = [col['name'] for col in inspector.get_columns('process_example_images')]
+            
+            # image_urlカラムが存在しない場合は追加
+            if 'image_url' not in existing_columns:
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE process_example_images ADD COLUMN image_url VARCHAR(1000)"))
+                    conn.commit()
+                print("✓ process_example_images.image_urlカラムを追加しました")
+            
+            # image_pathをnullableに変更（既存データは保持）
+            # SQLiteではALTER COLUMNが直接できないため、新しいテーブルを作成して移行する必要がある
+            # ただし、既存データに影響を与えないため、ここではカラム追加のみ行う
+        
     except Exception as e:
         # 既に存在するか、その他のエラー（無視して続行）
         print(f"スキーマ拡張チェック: {e}")
