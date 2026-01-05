@@ -1,13 +1,133 @@
 """
 画像表示の1本化モジュール
 すべての画像表示をこのモジュール経由で行う
+URL優先、フォールバックでローカルパス
 """
 import streamlit as st
 from pathlib import Path
 from PIL import Image as PILImage
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from utils.image_health import check_image_health, resolve_image_path, normalize_image_path
+from utils.paths import resolve_path
 from image_generator import ensure_material_image
+
+
+def get_display_image_source(
+    image_record,
+    project_root: Optional[Path] = None
+) -> Optional[Union[str, PILImage.Image]]:
+    """
+    画像表示用のソースを取得（URL優先、フォールバックでローカルパス）
+    
+    Args:
+        image_record: Image/UseExample/ProcessExampleImage/Materialオブジェクト
+        project_root: プロジェクトルートのパス
+    
+    Returns:
+        URL文字列、PILImage、またはNone
+        - URLがある場合: URL文字列を返す（st.image()で直接使用可能）
+        - URLがなくローカルパスがある場合: PILImageオブジェクトを返す
+        - どちらもない場合: None
+    """
+    if project_root is None:
+        project_root = Path.cwd()
+    else:
+        project_root = Path(project_root)
+    
+    # URLを優先的にチェック
+    url = None
+    file_path = None
+    
+    # オブジェクトの種類に応じてURL/パスを取得
+    if hasattr(image_record, 'url') and image_record.url:
+        url = image_record.url
+    elif hasattr(image_record, 'image_url') and image_record.image_url:
+        url = image_record.image_url
+    elif hasattr(image_record, 'texture_image_url') and image_record.texture_image_url:
+        url = image_record.texture_image_url
+    
+    # URLがある場合はそれを返す
+    if url:
+        return url
+    
+    # ローカルパスを取得
+    if hasattr(image_record, 'file_path') and image_record.file_path:
+        file_path = image_record.file_path
+    elif hasattr(image_record, 'image_path') and image_record.image_path:
+        file_path = image_record.image_path
+    elif hasattr(image_record, 'texture_image_path') and image_record.texture_image_path:
+        file_path = image_record.texture_image_path
+    
+    # ローカルパスがある場合は画像を読み込んで返す
+    if file_path:
+        try:
+            # パスを解決
+            resolved_path = resolve_path(file_path) if not Path(file_path).is_absolute() else Path(file_path)
+            
+            if resolved_path.exists():
+                pil_img = PILImage.open(resolved_path)
+                # RGBモードに変換
+                if pil_img.mode != 'RGB':
+                    if pil_img.mode in ('RGBA', 'LA', 'P'):
+                        rgb_img = PILImage.new('RGB', pil_img.size, (255, 255, 255))
+                        if pil_img.mode == 'RGBA':
+                            rgb_img.paste(pil_img, mask=pil_img.split()[3])
+                        elif pil_img.mode == 'LA':
+                            rgb_img.paste(pil_img.convert('RGB'), mask=pil_img.split()[1])
+                        else:
+                            rgb_img = pil_img.convert('RGB')
+                        pil_img = rgb_img
+                    else:
+                        pil_img = pil_img.convert('RGB')
+                return pil_img
+        except Exception as e:
+            # 読み込みエラーは無視してNoneを返す
+            pass
+    
+    return None
+
+
+def display_image_unified(
+    image_source: Optional[Union[str, PILImage.Image]],
+    caption: Optional[str] = None,
+    width: Optional[int] = None,
+    use_container_width: bool = False,
+    placeholder_size: Tuple[int, int] = (400, 300)
+):
+    """
+    統一画像表示関数（URLまたはPILImageを受け取り、st.image()で表示）
+    画像が無い場合はプレースホルダーを表示（真っ白回避）
+    
+    Args:
+        image_source: URL文字列、PILImage、またはNone
+        caption: 画像キャプション
+        width: 画像幅
+        use_container_width: コンテナ幅を使用するか
+        placeholder_size: プレースホルダーのサイズ（幅, 高さ）
+    """
+    if image_source:
+        # URLまたはPILImageを表示
+        st.image(image_source, caption=caption, width=width, use_container_width=use_container_width)
+    else:
+        # プレースホルダーを表示（真っ白回避）
+        placeholder = PILImage.new('RGB', placeholder_size, (240, 240, 240))
+        from PIL import ImageDraw, ImageFont
+        draw = ImageDraw.Draw(placeholder)
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
+        except:
+            font = ImageFont.load_default()
+        text = "画像なし"
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        draw.text(
+            ((placeholder_size[0] - text_width) // 2, (placeholder_size[1] - text_height) // 2),
+            text,
+            fill=(150, 150, 150),
+            font=font
+        )
+        st.image(placeholder, caption=caption or "プレースホルダー", width=width, use_container_width=use_container_width)
 
 
 def get_material_image(
@@ -200,4 +320,5 @@ def display_material_image(
             font=font
         )
         st.image(placeholder, caption="プレースホルダー", width=width, use_container_width=use_container_width)
+
 

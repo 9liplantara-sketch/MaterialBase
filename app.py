@@ -867,6 +867,65 @@ def show_asset_diagnostics(asset_stats: dict):
     st.info("💡 ヒント: 欠損がある場合は、アプリを再起動すると自動生成されます。")
 
 # メインアプリケーション
+def get_assets_mode_stats():
+    """
+    Assets Mode診断: URLを持つ画像数をカウント
+    
+    Returns:
+        (mode, url_count, total_count) のタプル
+    """
+    db = get_db()
+    try:
+        # Imageテーブル
+        total_images = db.query(func.count(Image.id)).scalar() or 0
+        url_images = db.query(func.count(Image.id)).filter(
+            Image.url != None,
+            Image.url != ""
+        ).scalar() or 0
+        
+        # Material.texture_image_url
+        total_textures = db.query(func.count(Material.id)).filter(
+            Material.texture_image_path != None,
+            Material.texture_image_path != ""
+        ).scalar() or 0
+        url_textures = db.query(func.count(Material.id)).filter(
+            Material.texture_image_url != None,
+            Material.texture_image_url != ""
+        ).scalar() or 0
+        
+        # UseExample.image_url
+        total_use_cases = db.query(func.count(UseExample.id)).filter(
+            UseExample.image_path != None,
+            UseExample.image_path != ""
+        ).scalar() or 0
+        url_use_cases = db.query(func.count(UseExample.id)).filter(
+            UseExample.image_url != None,
+            UseExample.image_url != ""
+        ).scalar() or 0
+        
+        # ProcessExampleImage.image_url
+        total_process = db.query(func.count(ProcessExampleImage.id)).filter(
+            ProcessExampleImage.image_path != None,
+            ProcessExampleImage.image_path != ""
+        ).scalar() or 0
+        url_process = db.query(func.count(ProcessExampleImage.id)).filter(
+            ProcessExampleImage.image_url != None,
+            ProcessExampleImage.image_url != ""
+        ).scalar() or 0
+        
+        total_count = total_images + total_textures + total_use_cases + total_process
+        url_count = url_images + url_textures + url_use_cases + url_process
+        
+        if url_count > 0:
+            mode = "url" if url_count == total_count else "mixed"
+        else:
+            mode = "local"
+        
+        return mode, url_count, total_count
+    finally:
+        db.close()
+
+
 def main():
     # ビルド情報をサイドバーに表示
     sha = get_git_sha()
@@ -874,6 +933,22 @@ def main():
     with st.sidebar:
         st.caption(f"build: {sha}")
         st.caption(f"time: {current_time}")
+        
+        # Assets Mode診断
+        try:
+            mode, url_count, total_count = get_assets_mode_stats()
+            if total_count > 0:
+                mode_label = {
+                    "local": "🔵 local",
+                    "url": "🟢 url",
+                    "mixed": "🟡 mixed"
+                }.get(mode, mode)
+                st.markdown("---")
+                st.markdown(f"**Assets Mode:** {mode_label}")
+                st.caption(f"URL画像: {url_count}/{total_count} ({url_count/total_count*100:.1f}%)" if total_count > 0 else "URL画像: 0/0")
+        except Exception as e:
+            # エラー時は表示しない（無視）
+            pass
     
     # サンプルデータの自動投入（初回起動時のみ）
     ensure_sample_data()
@@ -1126,35 +1201,28 @@ def show_home():
                 col_img, col_info = st.columns([1, 3])
                 
                 with col_img:
-                    # サムネ画像を表示（utils/image_display.pyを使用）
-                    from utils.image_display import get_material_image
-                    pil_img, img_status, img_message = get_material_image(material, Path.cwd(), auto_regenerate=True)
+                    # サムネ画像を表示（URL優先の統一関数を使用）
+                    from utils.image_display import get_display_image_source, display_image_unified
                     
-                    if pil_img and img_status == "ok":
-                        # サムネサイズにリサイズ（aspect ratio 1:1）
-                        thumb_size = (120, 120)
-                        pil_img.thumbnail(thumb_size, PILImage.Resampling.LANCZOS)
-                        st.image(pil_img, width=120, use_container_width=False)
+                    # 材料の主画像を取得（Imageテーブルから）
+                    image_source = None
+                    if material.images:
+                        image_source = get_display_image_source(material.images[0], Path.cwd())
+                    
+                    # サムネサイズで表示（プレースホルダー付き）
+                    if image_source:
+                        # URLの場合はそのまま、PILImageの場合はリサイズ
+                        if isinstance(image_source, str):
+                            # URLの場合はそのまま表示
+                            st.image(image_source, width=120, use_container_width=False)
+                        else:
+                            # PILImageの場合はリサイズ
+                            thumb_size = (120, 120)
+                            image_source.thumbnail(thumb_size, PILImage.Resampling.LANCZOS)
+                            st.image(image_source, width=120, use_container_width=False)
                     else:
-                        # プレースホルダー（黒画像は出さない）
-                        placeholder = PILImage.new('RGB', (120, 120), (240, 240, 240))
-                        from PIL import ImageDraw, ImageFont
-                        draw = ImageDraw.Draw(placeholder)
-                        try:
-                            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 14)
-                        except:
-                            font = ImageFont.load_default()
-                        text = "画像なし"
-                        bbox = draw.textbbox((0, 0), text, font=font)
-                        text_width = bbox[2] - bbox[0]
-                        text_height = bbox[3] - bbox[1]
-                        draw.text(
-                            ((120 - text_width) // 2, (120 - text_height) // 2),
-                            text,
-                            fill=(150, 150, 150),
-                            font=font
-                        )
-                        st.image(placeholder, width=120, use_container_width=False)
+                        # プレースホルダーを表示
+                        display_image_unified(None, width=120, placeholder_size=(120, 120))
                 
                 with col_info:
                     # 材料名
@@ -1281,12 +1349,14 @@ def show_materials_list():
                 material_name = material.name_official or material.name or "名称不明"
                 material_desc = material.description or ""
                 
-                # 素材画像を取得（主役として表示）
-                from utils.image_display import get_material_image
-                pil_img, img_status, img_message = get_material_image(material, Path.cwd(), auto_regenerate=True)
+                # 素材画像を取得（主役として表示、URL優先）
+                from utils.image_display import get_display_image_source, display_image_unified
+                image_source = None
+                if material.images:
+                    image_source = get_display_image_source(material.images[0], Path.cwd())
                 
                 # 画像HTML（プレースホルダー含む）
-                if pil_img and img_status == "ok":
+                if image_source:
                     from io import BytesIO
                     import base64
                     buffer = BytesIO()
