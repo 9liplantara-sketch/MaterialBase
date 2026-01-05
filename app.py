@@ -1357,12 +1357,17 @@ def show_materials_list():
                 
                 # 画像HTML（プレースホルダー含む）
                 if image_source:
-                    from io import BytesIO
-                    import base64
-                    buffer = BytesIO()
-                    pil_img.save(buffer, format='PNG')
-                    img_base64 = base64.b64encode(buffer.getvalue()).decode()
-                    img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
+                    if isinstance(image_source, str):
+                        # URLの場合は直接使用
+                        img_html = f'<img src="{image_source}" class="material-hero-image" alt="{material_name}" />'
+                    else:
+                        # PILImageの場合はBase64エンコード
+                        from io import BytesIO
+                        import base64
+                        buffer = BytesIO()
+                        image_source.save(buffer, format='PNG')
+                        img_base64 = base64.b64encode(buffer.getvalue()).decode()
+                        img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
                 else:
                     # プレースホルダー
                     img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
@@ -1550,18 +1555,25 @@ def show_search():
                         
                         prop_text = f'<p style="color: #555; margin-top: 12px;"><strong>物性データ:</strong> {prop_count}個</p>' if prop_count > 0 else ''
                         
-                        # 素材画像を取得（主役として表示）
-                        from utils.image_display import get_material_image
-                        pil_img, img_status, img_message = get_material_image(material, Path.cwd(), auto_regenerate=True)
+                        # 素材画像を取得（主役として表示、URL優先）
+                        from utils.image_display import get_display_image_source
+                        image_source = None
+                        if material.images:
+                            image_source = get_display_image_source(material.images[0], Path.cwd())
                         
                         # 画像HTML（プレースホルダー含む）
-                        if pil_img and img_status == "ok":
-                            from io import BytesIO
-                            import base64
-                            buffer = BytesIO()
-                            pil_img.save(buffer, format='PNG')
-                            img_base64 = base64.b64encode(buffer.getvalue()).decode()
-                            img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material.name}" />'
+                        if image_source:
+                            if isinstance(image_source, str):
+                                # URLの場合は直接使用
+                                img_html = f'<img src="{image_source}" class="material-hero-image" alt="{material.name}" />'
+                            else:
+                                # PILImageの場合はBase64エンコード
+                                from io import BytesIO
+                                import base64
+                                buffer = BytesIO()
+                                image_source.save(buffer, format='PNG')
+                                img_base64 = base64.b64encode(buffer.getvalue()).decode()
+                                img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material.name}" />'
                         else:
                             # プレースホルダー
                             img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
