@@ -371,6 +371,11 @@ def main():
                 print(f"    ✅ uploads側とstatic側が同一（同期済み）")
             elif result == "DIFF":
                 print(f"    ⚠️  uploads側とstatic側が異なる（同期が必要）")
+                if upload_path and static_path:
+                    upload_md5 = get_file_md5(upload_path)
+                    static_md5 = get_file_md5(static_path)
+                    print(f"      uploads md5: {upload_md5}")
+                    print(f"      static md5:  {static_md5}")
             elif result == "UPLOAD_MISSING":
                 print(f"    ⚠️  uploads側にファイルなし")
             elif result == "STATIC_MISSING":
