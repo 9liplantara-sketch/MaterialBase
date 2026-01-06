@@ -262,7 +262,49 @@ python scripts/migrate_images_to_s3.py --limit 5
 
 ---
 
-## 5. トラブルシューティング
+## 5. Streamlit Cloud更新停止時の対処法
+
+### 問題: "Applications are not updated when new commits are..." 警告が出続く
+
+**症状:**
+- GitHubへpushした変更がCloudに反映されない
+- 「View latest updates / Last updated X hours ago」が表示され続ける
+
+**原因:**
+- GitHub連携（Source control account）が無効または権限失効
+- リポジトリ名・オーナー変更
+- Workspaceとrepoオーナーの不一致
+
+**対処法（段階的）:**
+
+1. **Version/Build表示を確認**
+   - サイドバーで`Version`と`Build`を確認
+   - 最新のコミットSHAと一致しているか確認
+   ```bash
+   git rev-parse --short HEAD
+   ```
+
+2. **GitHub連携の再認証**
+   - Streamlit Cloudの「Settings」→「Source control」を開く
+   - 「Disconnect」→「Connect GitHub」で再認証
+
+3. **リポジトリの再選択**
+   - 「Settings」→「Source control」でリポジトリを再選択
+   - ブランチを確認（`main`または`master`）
+
+4. **アプリの再起動**
+   - 「Manage app」→「Reboot」を実行
+
+5. **最終手段: アプリ削除→再デプロイ**
+   - Secretsをバックアップ
+   - アプリを削除
+   - 再デプロイ（Secretsを再設定）
+
+詳細は [CLOUD_TROUBLESHOOTING.md](./CLOUD_TROUBLESHOOTING.md) を参照してください。
+
+---
+
+## 6. トラブルシューティング
 
 ### エラー: "S3_BUCKET環境変数が設定されていません"
 

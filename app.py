@@ -41,9 +41,12 @@ def get_git_sha() -> str:
 if 'PORT' in os.environ:
     port = int(os.environ.get("PORT", 8501))
 
-# ページ設定
+# バージョン情報を取得
+from material_map_version import APP_VERSION, BUILD_TIME_UTC
+
+# ページ設定（タイトルを"Material Map"に統一）
 st.set_page_config(
-    page_title="マテリアルデータベース | Material Database",
+    page_title="Material Map",
     page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
@@ -1018,12 +1021,11 @@ def get_assets_mode_stats():
 
 
 def main():
-    # ビルド情報をサイドバーに表示
-    sha = get_git_sha()
-    current_time = datetime.now().isoformat(timespec="seconds")
+    # ビルド情報をサイドバーに表示（Version/Build表示）
     with st.sidebar:
-        st.caption(f"build: {sha}")
-        st.caption(f"time: {current_time}")
+        st.markdown("---")
+        st.caption(f"**Version:** {APP_VERSION}")
+        st.caption(f"**Build:** {BUILD_TIME_UTC}")
         
         # Assets Mode診断
         try:

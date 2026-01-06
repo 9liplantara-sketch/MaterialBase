@@ -8,10 +8,12 @@ uploads/ と uploads/uses/ にある画像を static/images/materials/ に同期
 
 拡張子は jpg/jpeg/png/webp を許容。優先順位: jpg > jpeg > png > webp
 
-出力先:
-- static/images/materials/{safe_slug}/primary.{ext}
-- static/images/materials/{safe_slug}/uses/space.{ext}
-- static/images/materials/{safe_slug}/uses/product.{ext}
+出力先（JPG固定）:
+- static/images/materials/{safe_slug}/primary.jpg
+- static/images/materials/{safe_slug}/uses/space.jpg
+- static/images/materials/{safe_slug}/uses/product.jpg
+
+注意: 入力がpng/jpeg/webpでも、出力は常にJPGに統一されます。
 """
 import os
 import re
@@ -105,20 +107,22 @@ def files_are_identical(source_path: Path, dest_path: Path) -> bool:
         return False
 
 
-def copy_image_preserving_ext(source_path: Path, dest_path: Path) -> bool:
+def copy_image_to_jpg(source_path: Path, dest_path: Path) -> Tuple[bool, bool]:
     """
-    画像を拡張子を保持してコピー（透過対策で白背景合成）
+    画像をJPGに変換して保存（透過対策で白背景合成）
     
     Args:
-        source_path: 元画像のパス
-        dest_path: 保存先のパス（拡張子を含む）
+        source_path: 元画像のパス（任意の拡張子）
+        dest_path: 保存先のパス（.jpg固定）
     
     Returns:
-        成功した場合True
+        (成功した場合True, 変換が必要だった場合True)
     """
     try:
         # 画像を開く
         img = Image.open(source_path)
+        source_ext = source_path.suffix.lower()
+        needs_conversion = source_ext not in ['.jpg', '.jpeg']
         
         # RGBモードに変換（透過対策で白背景合成）
         if img.mode in ('RGBA', 'LA', 'P'):
@@ -135,25 +139,18 @@ def copy_image_preserving_ext(source_path: Path, dest_path: Path) -> bool:
                 else:
                     rgb_img = img.convert('RGB')
             img = rgb_img
+            needs_conversion = True
         elif img.mode != 'RGB':
             img = img.convert('RGB')
+            needs_conversion = True
         
-        # 拡張子を保持して保存
+        # JPGとして保存（拡張子は常に.jpg）
         ensure_dir(dest_path.parent)
-        ext = dest_path.suffix.lower()
-        if ext in ['.jpg', '.jpeg']:
-            img.save(dest_path, 'JPEG', quality=95)
-        elif ext == '.png':
-            img.save(dest_path, 'PNG', optimize=True)
-        elif ext == '.webp':
-            img.save(dest_path, 'WEBP', quality=95)
-        else:
-            # 不明な拡張子はPNGにフォールバック
-            img.save(dest_path.with_suffix('.png'), 'PNG', optimize=True)
-        return True
+        img.save(dest_path, 'JPEG', quality=95)
+        return True, needs_conversion
     except Exception as e:
         print(f"  ❌ エラー: {source_path} -> {dest_path}: {e}")
-        return False
+        return False, False
 
 
 def find_material_files(
