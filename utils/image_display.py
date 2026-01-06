@@ -355,18 +355,26 @@ def find_material_image_paths(
     project_root: Optional[Path] = None
 ) -> Dict[str, Optional[Path]]:
     """
-    材料の画像パスを探索（統一構成に対応）
+    材料の画像パスを探索（統一構成に対応・命名規則100%対応）
     
-    探索順序:
-    1. static/images/materials/{safe_slug}/primary/primary.png
-    2. static/images/materials/{safe_slug}/primary/primary.webp
-    3. static/images/materials/{safe_slug}/primary/primary.jpg
-    4. static/images/materials/{safe_slug}/uses/space.png (uses)
-    5. static/images/materials/{safe_slug}/uses/space.webp (uses)
-    6. static/images/materials/{safe_slug}/uses/{name}1.* (uses, フォールバック)
-    7. static/images/materials/{safe_slug}/uses/product.png (uses)
-    8. static/images/materials/{safe_slug}/uses/product.webp (uses)
-    9. static/images/materials/{safe_slug}/uses/{name}2.* (uses, フォールバック)
+    探索順序（拡張子優先順位: jpg > jpeg > png > webp）:
+    1. static/images/materials/{safe_slug}/primary.jpg
+    2. static/images/materials/{safe_slug}/primary.jpeg
+    3. static/images/materials/{safe_slug}/primary.png
+    4. static/images/materials/{safe_slug}/primary.webp
+    5. static/images/materials/{safe_slug}/uses/space.jpg
+    6. static/images/materials/{safe_slug}/uses/space.jpeg
+    7. static/images/materials/{safe_slug}/uses/space.png
+    8. static/images/materials/{safe_slug}/uses/space.webp
+    9. static/images/materials/{safe_slug}/uses/product.jpg
+    10. static/images/materials/{safe_slug}/uses/product.jpeg
+    11. static/images/materials/{safe_slug}/uses/product.png
+    12. static/images/materials/{safe_slug}/uses/product.webp
+    
+    旧仕様フォールバック（後方互換性）:
+    - static/images/materials/{safe_slug}/primary/primary.*
+    - static/images/materials/{safe_slug}/uses/{name}1.*
+    - static/images/materials/{safe_slug}/uses/{name}2.*
     
     Args:
         material_name_or_slug: 材料名またはスラッグ
@@ -398,41 +406,51 @@ def find_material_image_paths(
         'product': None
     }
     
-    # primary画像を探索
-    primary_dir = material_dir / 'primary'
-    if primary_dir.exists():
-        # 優先順位: png > webp > jpg > jpeg
-        for ext in ['.png', '.webp', '.jpg', '.jpeg']:
-            primary_path = primary_dir / f'primary{ext}'
-            if primary_path.exists():
-                result['primary'] = primary_path
-                break
+    # 拡張子優先順位: jpg > jpeg > png > webp
+    ext_priority = ['.jpg', '.jpeg', '.png', '.webp']
+    
+    # primary画像を探索（新仕様: primary.{ext}）
+    for ext in ext_priority:
+        primary_path = material_dir / f'primary{ext}'
+        if primary_path.exists():
+            result['primary'] = primary_path
+            break
+    
+    # 旧仕様フォールバック: primary/primary.*
+    if result['primary'] is None:
+        primary_dir = material_dir / 'primary'
+        if primary_dir.exists():
+            for ext in ext_priority:
+                primary_path = primary_dir / f'primary{ext}'
+                if primary_path.exists():
+                    result['primary'] = primary_path
+                    break
     
     # uses画像を探索
     uses_dir = material_dir / 'uses'
     if uses_dir.exists():
-        # space画像を探索
-        for ext in ['.png', '.webp', '.jpg', '.jpeg']:
+        # space画像を探索（新仕様: uses/space.{ext}）
+        for ext in ext_priority:
             space_path = uses_dir / f'space{ext}'
             if space_path.exists():
                 result['space'] = space_path
                 break
         
-        # spaceが見つからない場合、{name}1.* を探索（フォールバック）
+        # 旧仕様フォールバック: uses/{name}1.*
         if result['space'] is None:
             for file_path in uses_dir.iterdir():
                 if file_path.is_file() and re.match(rf'^{re.escape(material_name_or_slug)}1\..+$', file_path.name):
                     result['space'] = file_path
                     break
         
-        # product画像を探索
-        for ext in ['.png', '.webp', '.jpg', '.jpeg']:
+        # product画像を探索（新仕様: uses/product.{ext}）
+        for ext in ext_priority:
             product_path = uses_dir / f'product{ext}'
             if product_path.exists():
                 result['product'] = product_path
                 break
         
-        # productが見つからない場合、{name}2.* を探索（フォールバック）
+        # 旧仕様フォールバック: uses/{name}2.*
         if result['product'] is None:
             for file_path in uses_dir.iterdir():
                 if file_path.is_file() and re.match(rf'^{re.escape(material_name_or_slug)}2\..+$', file_path.name):
