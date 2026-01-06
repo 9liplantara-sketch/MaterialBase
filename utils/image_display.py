@@ -6,7 +6,7 @@ URL優先、フォールバックでローカルパス
 import streamlit as st
 from pathlib import Path
 from PIL import Image as PILImage
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Dict
 from utils.image_health import check_image_health, resolve_image_path, normalize_image_path
 from utils.paths import resolve_path
 from image_generator import ensure_material_image
@@ -348,5 +348,186 @@ def display_material_image(
             font=font
         )
         st.image(placeholder, caption="プレースホルダー", width=width, use_container_width=use_container_width)
+
+
+def find_material_image_paths(
+    material_name_or_slug: str,
+    project_root: Optional[Path] = None
+) -> Dict[str, Optional[Path]]:
+    """
+    材料の画像パスを探索（統一構成に対応）
+    
+    探索順序:
+    1. static/images/materials/{safe_slug}/primary/primary.png
+    2. static/images/materials/{safe_slug}/primary/primary.webp
+    3. static/images/materials/{safe_slug}/primary/primary.jpg
+    4. static/images/materials/{safe_slug}/uses/space.png (uses)
+    5. static/images/materials/{safe_slug}/uses/space.webp (uses)
+    6. static/images/materials/{safe_slug}/uses/{name}1.* (uses, フォールバック)
+    7. static/images/materials/{safe_slug}/uses/product.png (uses)
+    8. static/images/materials/{safe_slug}/uses/product.webp (uses)
+    9. static/images/materials/{safe_slug}/uses/{name}2.* (uses, フォールバック)
+    
+    Args:
+        material_name_or_slug: 材料名またはスラッグ
+        project_root: プロジェクトルートのパス
+    
+    Returns:
+        {
+            'primary': Path or None,
+            'space': Path or None,
+            'product': Path or None
+        }
+    """
+    if project_root is None:
+        project_root = resolve_path('.')
+    else:
+        project_root = Path(project_root)
+    
+    # 安全なスラッグに変換
+    import re
+    safe_slug = material_name_or_slug.strip()
+    forbidden_chars = r'[/\\:*?"<>|]'
+    safe_slug = re.sub(forbidden_chars, '_', safe_slug)
+    
+    material_dir = project_root / 'static' / 'images' / 'materials' / safe_slug
+    
+    result = {
+        'primary': None,
+        'space': None,
+        'product': None
+    }
+    
+    # primary画像を探索
+    primary_dir = material_dir / 'primary'
+    if primary_dir.exists():
+        # 優先順位: png > webp > jpg > jpeg
+        for ext in ['.png', '.webp', '.jpg', '.jpeg']:
+            primary_path = primary_dir / f'primary{ext}'
+            if primary_path.exists():
+                result['primary'] = primary_path
+                break
+    
+    # uses画像を探索
+    uses_dir = material_dir / 'uses'
+    if uses_dir.exists():
+        # space画像を探索
+        for ext in ['.png', '.webp', '.jpg', '.jpeg']:
+            space_path = uses_dir / f'space{ext}'
+            if space_path.exists():
+                result['space'] = space_path
+                break
+        
+        # spaceが見つからない場合、{name}1.* を探索（フォールバック）
+        if result['space'] is None:
+            for file_path in uses_dir.iterdir():
+                if file_path.is_file() and re.match(rf'^{re.escape(material_name_or_slug)}1\..+$', file_path.name):
+                    result['space'] = file_path
+                    break
+        
+        # product画像を探索
+        for ext in ['.png', '.webp', '.jpg', '.jpeg']:
+            product_path = uses_dir / f'product{ext}'
+            if product_path.exists():
+                result['product'] = product_path
+                break
+        
+        # productが見つからない場合、{name}2.* を探索（フォールバック）
+        if result['product'] is None:
+            for file_path in uses_dir.iterdir():
+                if file_path.is_file() and re.match(rf'^{re.escape(material_name_or_slug)}2\..+$', file_path.name):
+                    result['product'] = file_path
+                    break
+    
+    return result
+
+
+def display_material_image_paths(
+    material_name_or_slug: str,
+    caption_prefix: Optional[str] = None,
+    project_root: Optional[Path] = None
+):
+    """
+    材料の画像を表示（統一構成に対応、プレースホルダー対応）
+    
+    Args:
+        material_name_or_slug: 材料名またはスラッグ
+        caption_prefix: キャプションのプレフィックス（例: "材料: "）
+        project_root: プロジェクトルートのパス
+    """
+    paths = find_material_image_paths(material_name_or_slug, project_root)
+    
+    # primary画像を表示
+    if paths['primary']:
+        caption = f"{caption_prefix or ''}メイン画像" if caption_prefix else "メイン画像"
+        try:
+            img = PILImage.open(paths['primary'])
+            if img.mode != 'RGB':
+                if img.mode in ('RGBA', 'LA', 'P'):
+                    rgb_img = PILImage.new('RGB', img.size, (255, 255, 255))
+                    if img.mode == 'RGBA':
+                        rgb_img.paste(img, mask=img.split()[3])
+                    elif img.mode == 'LA':
+                        rgb_img.paste(img.convert('RGB'), mask=img.split()[1])
+                    else:
+                        rgb_img = img.convert('RGB')
+                    img = rgb_img
+                else:
+                    img = img.convert('RGB')
+            st.image(img, caption=caption, use_container_width=True)
+        except Exception:
+            display_image_unified(None, caption=caption)
+    else:
+        display_image_unified(None, caption=f"{caption_prefix or ''}メイン画像" if caption_prefix else "メイン画像")
+    
+    # uses画像を表示（space, product）
+    if paths['space'] or paths['product']:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if paths['space']:
+                caption = f"{caption_prefix or ''}空間の使用例" if caption_prefix else "空間の使用例"
+                try:
+                    img = PILImage.open(paths['space'])
+                    if img.mode != 'RGB':
+                        if img.mode in ('RGBA', 'LA', 'P'):
+                            rgb_img = PILImage.new('RGB', img.size, (255, 255, 255))
+                            if img.mode == 'RGBA':
+                                rgb_img.paste(img, mask=img.split()[3])
+                            elif img.mode == 'LA':
+                                rgb_img.paste(img.convert('RGB'), mask=img.split()[1])
+                            else:
+                                rgb_img = img.convert('RGB')
+                            img = rgb_img
+                        else:
+                            img = img.convert('RGB')
+                    st.image(img, caption=caption, use_container_width=True)
+                except Exception:
+                    display_image_unified(None, caption=caption)
+            else:
+                display_image_unified(None, caption=f"{caption_prefix or ''}空間の使用例" if caption_prefix else "空間の使用例")
+        
+        with col2:
+            if paths['product']:
+                caption = f"{caption_prefix or ''}プロダクトの使用例" if caption_prefix else "プロダクトの使用例"
+                try:
+                    img = PILImage.open(paths['product'])
+                    if img.mode != 'RGB':
+                        if img.mode in ('RGBA', 'LA', 'P'):
+                            rgb_img = PILImage.new('RGB', img.size, (255, 255, 255))
+                            if img.mode == 'RGBA':
+                                rgb_img.paste(img, mask=img.split()[3])
+                            elif img.mode == 'LA':
+                                rgb_img.paste(img.convert('RGB'), mask=img.split()[1])
+                            else:
+                                rgb_img = img.convert('RGB')
+                            img = rgb_img
+                        else:
+                            img = img.convert('RGB')
+                    st.image(img, caption=caption, use_container_width=True)
+                except Exception:
+                    display_image_unified(None, caption=caption)
+            else:
+                display_image_unified(None, caption=f"{caption_prefix or ''}プロダクトの使用例" if caption_prefix else "プロダクトの使用例")
 
 
