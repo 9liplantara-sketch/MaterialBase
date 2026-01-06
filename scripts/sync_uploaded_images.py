@@ -144,13 +144,30 @@ def copy_image_to_jpg(source_path: Path, dest_path: Path) -> Tuple[bool, bool]:
             img = img.convert('RGB')
             needs_conversion = True
         
-        # JPGとして保存（拡張子は常に.jpg）
+        # JPGとして保存（拡張子は常に.jpg、quality=90, optimize=True）
         ensure_dir(dest_path.parent)
-        img.save(dest_path, 'JPEG', quality=95)
+        img.save(dest_path, 'JPEG', quality=90, optimize=True)
         return True, needs_conversion
     except Exception as e:
         print(f"  ❌ エラー: {source_path} -> {dest_path}: {e}")
         return False, False
+
+
+def copy_image_preserving_ext(source_path: Path, dest_path: Path) -> bool:
+    """
+    互換性のためのラッパー関数（JPG固定出力）
+    
+    注意: 名前は"preserving_ext"だが、実際はJPG固定で保存します。
+    
+    Args:
+        source_path: 元画像のパス（任意の拡張子）
+        dest_path: 保存先のパス（.jpg固定）
+    
+    Returns:
+        成功した場合True
+    """
+    success, _ = copy_image_to_jpg(source_path, dest_path)
+    return success
 
 
 def find_material_files(
@@ -294,70 +311,109 @@ def sync_images(
         synced_results[material_name] = {}
         missing = []
         
-        # メイン画像（primary）
+        # クリーンアップ関数（旧ファイル削除）
+        def cleanup_old_files(base_path: Path, filename_base: str) -> List[str]:
+            """同一スロットの旧ファイル（jpeg/png/webp）を削除"""
+            old_exts = ['.jpeg', '.png', '.webp']
+            deleted = []
+            for old_ext in old_exts:
+                old_path = base_path / f'{filename_base}{old_ext}'
+                if old_path.exists() and old_path != base_path / f'{filename_base}.jpg':
+                    try:
+                        old_path.unlink()
+                        deleted.append(old_ext[1:])  # .png -> png
+                    except Exception as e:
+                        print(f"    ⚠️  旧ファイル削除失敗: {old_path.name} ({e})")
+            return deleted
+        
+        # メイン画像（primary）- JPG固定
+        primary_dest = material_base_dir / 'primary.jpg'
         if files['primary']:
             source_path, ext = files['primary'][0]
-            dest_path = material_base_dir / f'primary{ext}'
             
-            # べき等性チェック
-            if files_are_identical(source_path, dest_path):
-                print(f"  ⏭️  primary: {source_path.name} -> {dest_path.name} (同一ファイル、スキップ)")
-                synced_results[material_name]['primary'] = str(dest_path.relative_to(project_root))
+            # クリーンアップを先に実行（スキップ判定より前）
+            if not dry_run:
+                deleted = cleanup_old_files(material_base_dir, 'primary')
+                if deleted:
+                    print(f"  🗑️  旧ファイル削除: {', '.join(deleted)}")
+            
+            # べき等性チェック（JPGファイルと比較）
+            if primary_dest.exists() and files_are_identical(source_path, primary_dest):
+                print(f"  ⏭️  primary: {source_path.name} -> primary.jpg (同一ファイル、スキップ)")
+                synced_results[material_name]['primary'] = str(primary_dest.relative_to(project_root))
             else:
                 if dry_run:
-                    print(f"  🔍 ドライラン: {source_path.name} -> {dest_path.name}")
-                    synced_results[material_name]['primary'] = str(dest_path.relative_to(project_root))
+                    print(f"  🔍 ドライラン: {source_path.name} -> primary.jpg")
+                    synced_results[material_name]['primary'] = str(primary_dest.relative_to(project_root))
                 else:
-                    if copy_image_preserving_ext(source_path, dest_path):
-                        print(f"  ✅ primary: {source_path.name} -> {dest_path.name} (拡張子: {ext})")
-                        synced_results[material_name]['primary'] = str(dest_path.relative_to(project_root))
+                    success, converted = copy_image_to_jpg(source_path, primary_dest)
+                    if success:
+                        conv_msg = f" ({ext} -> jpg変換)" if converted else " (既にjpg)"
+                        print(f"  ✅ primary: {source_path.name} -> primary.jpg{conv_msg}")
+                        synced_results[material_name]['primary'] = str(primary_dest.relative_to(project_root))
                     else:
                         print(f"  ❌ primary: コピー失敗")
         else:
             print(f"  ⏭️  primary: ファイルなし")
             missing.append('primary')
         
-        # 使用例1（space）
+        # 使用例1（space）- JPG固定
         uses_dir = material_base_dir / 'uses'
+        space_dest = uses_dir / 'space.jpg'
         if files['space']:
             source_path, ext = files['space'][0]
-            dest_path = uses_dir / f'space{ext}'
             
-            # べき等性チェック
-            if files_are_identical(source_path, dest_path):
-                print(f"  ⏭️  space: {source_path.name} -> {dest_path.name} (同一ファイル、スキップ)")
-                synced_results[material_name]['space'] = str(dest_path.relative_to(project_root))
+            # クリーンアップを先に実行
+            if not dry_run:
+                deleted = cleanup_old_files(uses_dir, 'space')
+                if deleted:
+                    print(f"  🗑️  旧ファイル削除: {', '.join(deleted)}")
+            
+            # べき等性チェック（JPGファイルと比較）
+            if space_dest.exists() and files_are_identical(source_path, space_dest):
+                print(f"  ⏭️  space: {source_path.name} -> space.jpg (同一ファイル、スキップ)")
+                synced_results[material_name]['space'] = str(space_dest.relative_to(project_root))
             else:
                 if dry_run:
-                    print(f"  🔍 ドライラン: {source_path.name} -> {dest_path.name}")
-                    synced_results[material_name]['space'] = str(dest_path.relative_to(project_root))
+                    print(f"  🔍 ドライラン: {source_path.name} -> space.jpg")
+                    synced_results[material_name]['space'] = str(space_dest.relative_to(project_root))
                 else:
-                    if copy_image_preserving_ext(source_path, dest_path):
-                        print(f"  ✅ space: {source_path.name} -> {dest_path.name} (拡張子: {ext})")
-                        synced_results[material_name]['space'] = str(dest_path.relative_to(project_root))
+                    success, converted = copy_image_to_jpg(source_path, space_dest)
+                    if success:
+                        conv_msg = f" ({ext} -> jpg変換)" if converted else " (既にjpg)"
+                        print(f"  ✅ space: {source_path.name} -> space.jpg{conv_msg}")
+                        synced_results[material_name]['space'] = str(space_dest.relative_to(project_root))
                     else:
                         print(f"  ❌ space: コピー失敗")
         else:
             print(f"  ⏭️  space: ファイルなし")
             missing.append('space')
         
-        # 使用例2（product）
+        # 使用例2（product）- JPG固定
+        product_dest = uses_dir / 'product.jpg'
         if files['product']:
             source_path, ext = files['product'][0]
-            dest_path = uses_dir / f'product{ext}'
             
-            # べき等性チェック
-            if files_are_identical(source_path, dest_path):
-                print(f"  ⏭️  product: {source_path.name} -> {dest_path.name} (同一ファイル、スキップ)")
-                synced_results[material_name]['product'] = str(dest_path.relative_to(project_root))
+            # クリーンアップを先に実行
+            if not dry_run:
+                deleted = cleanup_old_files(uses_dir, 'product')
+                if deleted:
+                    print(f"  🗑️  旧ファイル削除: {', '.join(deleted)}")
+            
+            # べき等性チェック（JPGファイルと比較）
+            if product_dest.exists() and files_are_identical(source_path, product_dest):
+                print(f"  ⏭️  product: {source_path.name} -> product.jpg (同一ファイル、スキップ)")
+                synced_results[material_name]['product'] = str(product_dest.relative_to(project_root))
             else:
                 if dry_run:
-                    print(f"  🔍 ドライラン: {source_path.name} -> {dest_path.name}")
-                    synced_results[material_name]['product'] = str(dest_path.relative_to(project_root))
+                    print(f"  🔍 ドライラン: {source_path.name} -> product.jpg")
+                    synced_results[material_name]['product'] = str(product_dest.relative_to(project_root))
                 else:
-                    if copy_image_preserving_ext(source_path, dest_path):
-                        print(f"  ✅ product: {source_path.name} -> {dest_path.name} (拡張子: {ext})")
-                        synced_results[material_name]['product'] = str(dest_path.relative_to(project_root))
+                    success, converted = copy_image_to_jpg(source_path, product_dest)
+                    if success:
+                        conv_msg = f" ({ext} -> jpg変換)" if converted else " (既にjpg)"
+                        print(f"  ✅ product: {source_path.name} -> product.jpg{conv_msg}")
+                        synced_results[material_name]['product'] = str(product_dest.relative_to(project_root))
                     else:
                         print(f"  ❌ product: コピー失敗")
         else:
@@ -370,34 +426,56 @@ def sync_images(
     return synced_results, missing_summary
 
 
-def load_db_materials() -> Dict[str, int]:
+def load_db_materials() -> Optional[Dict[str, int]]:
     """
-    DBから材料名マッピングを取得
+    DBから材料名マッピングを取得（DBスキーマ不整合に耐性あり）
     
     Returns:
-        {正規化名: material_id}
+        {正規化名: material_id} または None（DB接続失敗時）
     """
     try:
         from database import SessionLocal, Material
+    except ImportError as e:
+        print(f"⚠️  DBモジュールインポートエラー（--no-db相当で続行）: {e}")
+        return None
+    except Exception as e:
+        print(f"⚠️  DBモジュール読み込みエラー（--no-db相当で続行）: {e}")
+        return None
+    
+    try:
         db = SessionLocal()
-        try:
-            materials = db.query(Material).all()
-            result = {}
-            for m in materials:
+    except Exception as e:
+        print(f"⚠️  DB接続エラー（--no-db相当で続行）: {e}")
+        return None
+    
+    try:
+        materials = db.query(Material).all()
+        result = {}
+        for m in materials:
+            try:
                 # name_official を優先、なければ name
-                name = m.name_official or m.name
+                name = getattr(m, 'name_official', None) or getattr(m, 'name', None)
                 if name:
                     normalized = normalize_material_name(name)
-                    result[normalized] = m.id
-                    # 元の名前も追加（完全一致用）
-                    if name != normalized:
-                        result[name] = m.id
-            return result
-        finally:
-            db.close()
+                    material_id = getattr(m, 'id', None)
+                    if material_id:
+                        result[normalized] = material_id
+                        # 元の名前も追加（完全一致用）
+                        if name != normalized:
+                            result[name] = material_id
+            except Exception as e:
+                # 個別の材料でエラーが出ても続行
+                print(f"    ⚠️  材料データ取得エラー（スキップ）: {e}")
+                continue
+        return result
     except Exception as e:
-        print(f"⚠️  DB接続エラー（続行）: {e}")
-        return {}
+        print(f"⚠️  DBクエリエラー（--no-db相当で続行）: {e}")
+        return None
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 def main():
@@ -421,10 +499,18 @@ def main():
         print("🔍 ドライランモード")
     print()
     
-    # DBから材料名を取得
-    db_materials = None if args.no_db else load_db_materials()
-    if db_materials:
-        print(f"📊 DB材料数: {len(db_materials)} 件")
+    # DBから材料名を取得（DBスキーマ不整合に耐性あり）
+    db_materials = None
+    if not args.no_db:
+        db_materials = load_db_materials()
+        if db_materials is None:
+            print("⚠️  DB接続失敗またはスキーマ不整合のため、--no-db相当で続行します")
+            print()
+        else:
+            print(f"📊 DB材料数: {len(db_materials)} 件")
+            print()
+    else:
+        print("📊 DB突合をスキップ（--no-db）")
         print()
     
     # 画像同期
