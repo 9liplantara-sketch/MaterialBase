@@ -1209,7 +1209,7 @@ def render_debug_sidebar_early():
                 try:
                     # 絶対パス固定（相対パス事故を潰す）
                     db_path = Path(__file__).parent / "materials.db"
-                st.write("**materials.db fingerprint:**")
+                    st.write("**materials.db fingerprint:**")
                 
                 if not db_path.exists():
                     st.error(f"missing: {db_path}")
