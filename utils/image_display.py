@@ -54,6 +54,53 @@ def get_display_image_source(
     if url:
         return url
     
+    # まず、staticのjpgを最優先で探索（DBパスより優先）
+    # image_recordがMaterialオブジェクトの場合、材料名から統一構成のパスを探索
+    material_name = None
+    try:
+        if hasattr(image_record, 'material_id') and image_record.material_id:
+            # Imageオブジェクトの場合、material_idから材料名を取得
+            from database import SessionLocal, Material
+            db = SessionLocal()
+            try:
+                material = db.query(Material).filter(Material.id == image_record.material_id).first()
+                if material:
+                    material_name = material.name_official or material.name
+            finally:
+                db.close()
+        elif hasattr(image_record, 'name_official'):
+            material_name = image_record.name_official
+        elif hasattr(image_record, 'name'):
+            material_name = image_record.name
+    except Exception:
+        pass
+    
+    # 材料名がある場合、統一構成のパスを最優先で探索（正仕様: primary.jpgを最優先）
+    if material_name:
+        image_paths = find_material_image_paths(material_name, project_root)
+        if image_paths.get('primary'):
+            try:
+                with open(image_paths['primary'], 'rb') as f:
+                    pil_img = PILImage.open(f)
+                    pil_img.load()
+                    if pil_img.mode != 'RGB':
+                        if pil_img.mode in ('RGBA', 'LA', 'P'):
+                            rgb_img = PILImage.new('RGB', pil_img.size, (255, 255, 255))
+                            if pil_img.mode == 'RGBA':
+                                rgb_img.paste(pil_img, mask=pil_img.split()[3])
+                            elif pil_img.mode == 'LA':
+                                rgb_img.paste(pil_img.convert('RGB'), mask=pil_img.split()[1])
+                            else:
+                                rgb_img = pil_img.convert('RGB')
+                            pil_img = rgb_img
+                        else:
+                            pil_img = pil_img.convert('RGB')
+                    return pil_img
+            except Exception as e:
+                if os.getenv("DEBUG_IMAGE", "false").lower() == "true":
+                    print(f"統一構成画像読み込みエラー: {image_paths['primary']} - {e}")
+                pass
+    
     # ローカルパスを取得（例外時もアプリは落ちない）
     try:
         if hasattr(image_record, 'file_path') and image_record.file_path:
@@ -69,6 +116,8 @@ def get_display_image_source(
         file_path = None
     
     # ローカルパスがある場合は画像を読み込んで返す（例外時もアプリは落ちない）
+    # staticのjpgを最優先、DBパスはフォールバック
+    # 優先順位: staticのjpgを最優先、DBパスはフォールバック
     if file_path:
         try:
             # パスを解決（複数の可能性を試す）
@@ -78,26 +127,55 @@ def get_display_image_source(
             if Path(file_path).is_absolute():
                 resolved_paths.append(Path(file_path))
             else:
-                # 2. 相対パスの場合、複数の可能性を試す
-                # uploads/ からの相対パス
-                resolved_paths.append(project_root / "uploads" / file_path)
-                # static/images/materials/ からの相対パス（統一構成対応）
+                # 2. 相対パスの場合、staticのjpgを最優先
+                # static/images/materials/ からの相対パス（統一構成対応、最優先）
                 # file_pathが "1_image.jpg" のような形式の場合、材料名から推測
                 if "_" in file_path and file_path[0].isdigit():
-                    # material_id_filename 形式の場合
-                    parts = file_path.split("_", 1)
-                    if len(parts) == 2:
-                        material_id = parts[0]
-                        filename = parts[1]
-                        # DBから材料名を取得してパスを構築（オプション）
-                        # ここでは直接uploads/を試す
+                    # material_id_filename 形式の場合、DBから材料名を取得してパスを構築
+                    try:
+                        from database import SessionLocal, Material
+                        db = SessionLocal()
+                        try:
+                            parts = file_path.split("_", 1)
+                            if len(parts) == 2:
+                                material_id = int(parts[0])
+                                material = db.query(Material).filter(Material.id == material_id).first()
+                                if material:
+                                    material_name = material.name_official or material.name
+                                    if material_name:
+                                        # 統一構成のパスを最優先で追加
+                                        import re
+                                        safe_slug = material_name.strip()
+                                        forbidden_chars = r'[/\\:*?"<>|]'
+                                        safe_slug = re.sub(forbidden_chars, '_', safe_slug)
+                                        # 正仕様: static/images/materials/{safe_slug}/primary.jpg (最優先)
+                                        primary_jpg = project_root / "static" / "images" / "materials" / safe_slug / "primary.jpg"
+                                        if primary_jpg.exists():
+                                            resolved_paths.insert(0, primary_jpg)  # 最優先で追加
+                                        # フォールバック: primary.png
+                                        primary_png = project_root / "static" / "images" / "materials" / safe_slug / "primary.png"
+                                        if primary_png.exists():
+                                            resolved_paths.append(primary_png)
+                                        # 旧仕様: primary/primary.* (最後のフォールバック)
+                                        old_primary_jpg = project_root / "static" / "images" / "materials" / safe_slug / "primary" / "primary.jpg"
+                                        if old_primary_jpg.exists():
+                                            resolved_paths.append(old_primary_jpg)
+                                        old_primary_png = project_root / "static" / "images" / "materials" / safe_slug / "primary" / "primary.png"
+                                        if old_primary_png.exists():
+                                            resolved_paths.append(old_primary_png)
+                        finally:
+                            db.close()
+                    except Exception:
                         pass
-                # プロジェクトルートからの相対パス
-                resolved_paths.append(project_root / file_path)
+                
+                # static/images/materials/ からの相対パス（統一構成対応）
+                resolved_paths.append(project_root / "static" / "images" / "materials" / file_path)
                 # static/images/ からの相対パス
                 resolved_paths.append(project_root / "static" / "images" / file_path)
-                # static/images/materials/ からの相対パス
-                resolved_paths.append(project_root / "static" / "images" / "materials" / file_path)
+                # uploads/ からの相対パス（フォールバック）
+                resolved_paths.append(project_root / "uploads" / file_path)
+                # プロジェクトルートからの相対パス
+                resolved_paths.append(project_root / file_path)
                 # そのまま
                 resolved_paths.append(Path(file_path))
             
@@ -149,6 +227,156 @@ def get_display_image_source(
             pass
     
     return None
+
+
+def find_material_image_paths(
+    material_name: str,
+    project_root: Optional[Path] = None,
+    debug_info: Optional[Dict] = None
+) -> Dict[str, Optional[Path]]:
+    """
+    材料の画像パスを探索（統一構成対応）
+    
+    探索順序（正仕様を最優先）:
+    1. static/images/materials/{safe_slug}/primary.jpg (最優先)
+    2. static/images/materials/{safe_slug}/primary.png (フォールバック)
+    3. static/images/materials/{safe_slug}/primary.webp (フォールバック)
+    4. static/images/materials/{safe_slug}/uses/space.jpg (最優先)
+    5. static/images/materials/{safe_slug}/uses/space.png (フォールバック)
+    6. static/images/materials/{safe_slug}/uses/product.jpg (最優先)
+    7. static/images/materials/{safe_slug}/uses/product.png (フォールバック)
+    8. 旧仕様（primary/primary.*）は最後のフォールバック
+    
+    Args:
+        material_name: 材料名
+        project_root: プロジェクトルートのパス
+        debug_info: デバッグ情報を格納する辞書（オプション）
+    
+    Returns:
+        {
+            'primary': Path or None,
+            'space': Path or None,
+            'product': Path or None
+        }
+    """
+    if project_root is None:
+        project_root = Path.cwd()
+    else:
+        project_root = Path(project_root)
+    
+    # 安全なスラッグに変換
+    import re
+    safe_slug = material_name.strip()
+    forbidden_chars = r'[/\\:*?"<>|]'
+    safe_slug = re.sub(forbidden_chars, '_', safe_slug)
+    
+    material_dir = project_root / 'static' / 'images' / 'materials' / safe_slug
+    
+    result = {
+        'primary': None,
+        'space': None,
+        'product': None
+    }
+    
+    # デバッグ情報用
+    if debug_info is not None:
+        debug_info['material_name'] = material_name
+        debug_info['safe_slug'] = safe_slug
+        debug_info['material_dir'] = str(material_dir)
+        debug_info['tried_paths'] = {'primary': [], 'space': [], 'product': []}
+        debug_info['found_paths'] = {}
+    
+    # primary画像を探索（正仕様を最優先）
+    # 1. static/images/materials/{safe_slug}/primary.jpg (最優先)
+    primary_jpg = material_dir / 'primary.jpg'
+    if primary_jpg.exists():
+        result['primary'] = primary_jpg
+        if debug_info is not None:
+            debug_info['found_paths']['primary'] = str(primary_jpg)
+    else:
+        if debug_info is not None:
+            debug_info['tried_paths']['primary'].append(str(primary_jpg))
+        
+        # 2. static/images/materials/{safe_slug}/primary.png (フォールバック)
+        primary_png = material_dir / 'primary.png'
+        if primary_png.exists():
+            result['primary'] = primary_png
+            if debug_info is not None:
+                debug_info['found_paths']['primary'] = str(primary_png)
+        else:
+            if debug_info is not None:
+                debug_info['tried_paths']['primary'].append(str(primary_png))
+            
+            # 3. static/images/materials/{safe_slug}/primary.webp (フォールバック)
+            primary_webp = material_dir / 'primary.webp'
+            if primary_webp.exists():
+                result['primary'] = primary_webp
+                if debug_info is not None:
+                    debug_info['found_paths']['primary'] = str(primary_webp)
+            else:
+                if debug_info is not None:
+                    debug_info['tried_paths']['primary'].append(str(primary_webp))
+                
+                # 8. 旧仕様: static/images/materials/{safe_slug}/primary/primary.* (最後のフォールバック)
+                primary_dir = material_dir / 'primary'
+                if primary_dir.exists():
+                    for ext in ['.jpg', '.jpeg', '.png', '.webp']:
+                        old_primary_path = primary_dir / f'primary{ext}'
+                        if old_primary_path.exists():
+                            result['primary'] = old_primary_path
+                            if debug_info is not None:
+                                debug_info['found_paths']['primary'] = str(old_primary_path)
+                            break
+                        else:
+                            if debug_info is not None:
+                                debug_info['tried_paths']['primary'].append(str(old_primary_path))
+    
+    # uses画像を探索（正仕様を最優先）
+    uses_dir = material_dir / 'uses'
+    if uses_dir.exists():
+        # space画像を探索
+        # 4. static/images/materials/{safe_slug}/uses/space.jpg (最優先)
+        space_jpg = uses_dir / 'space.jpg'
+        if space_jpg.exists():
+            result['space'] = space_jpg
+            if debug_info is not None:
+                debug_info['found_paths']['space'] = str(space_jpg)
+        else:
+            if debug_info is not None:
+                debug_info['tried_paths']['space'].append(str(space_jpg))
+            
+            # 5. static/images/materials/{safe_slug}/uses/space.png (フォールバック)
+            space_png = uses_dir / 'space.png'
+            if space_png.exists():
+                result['space'] = space_png
+                if debug_info is not None:
+                    debug_info['found_paths']['space'] = str(space_png)
+            else:
+                if debug_info is not None:
+                    debug_info['tried_paths']['space'].append(str(space_png))
+        
+        # product画像を探索
+        # 6. static/images/materials/{safe_slug}/uses/product.jpg (最優先)
+        product_jpg = uses_dir / 'product.jpg'
+        if product_jpg.exists():
+            result['product'] = product_jpg
+            if debug_info is not None:
+                debug_info['found_paths']['product'] = str(product_jpg)
+        else:
+            if debug_info is not None:
+                debug_info['tried_paths']['product'].append(str(product_jpg))
+            
+            # 7. static/images/materials/{safe_slug}/uses/product.png (フォールバック)
+            product_png = uses_dir / 'product.png'
+            if product_png.exists():
+                result['product'] = product_png
+                if debug_info is not None:
+                    debug_info['found_paths']['product'] = str(product_png)
+            else:
+                if debug_info is not None:
+                    debug_info['tried_paths']['product'].append(str(product_png))
+    
+    return result
 
 
 def display_image_unified(

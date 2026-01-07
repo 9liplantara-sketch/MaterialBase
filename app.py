@@ -1041,20 +1041,36 @@ def main():
         
         # デバッグ情報（一時的）
         with st.expander("🔧 Debug (temporary)", expanded=False):
-            base = Path("static/images/materials/アルミニウム")
-            st.write("cwd:", os.getcwd())
-            st.write("exists base:", base.exists(), str(base))
-            if base.exists():
-                st.write("base files:", [p.name for p in base.glob("*")])
-            uses = base / "uses"
-            st.write("exists uses:", uses.exists(), str(uses))
-            if uses.exists():
-                st.write("uses files:", [p.name for p in uses.glob("*")])
-            # 他の材料も確認
-            materials_dir = Path("static/images/materials")
-            if materials_dir.exists():
-                st.write("materials dir exists")
-                st.write("materials:", [p.name for p in materials_dir.iterdir() if p.is_dir()][:10])
+            from utils.image_display import find_material_image_paths
+            debug_info = {}
+            image_paths = find_material_image_paths("アルミニウム", Path.cwd(), debug_info=debug_info)
+            
+            st.write("**材料名:**", debug_info.get('material_name'))
+            st.write("**safe_slug:**", debug_info.get('safe_slug'))
+            st.write("**material_dir:**", debug_info.get('material_dir'))
+            st.write("**material_dir exists:**", Path(debug_info.get('material_dir', '')).exists())
+            
+            st.write("---")
+            st.write("**試した候補パス:**")
+            for key in ['primary', 'space', 'product']:
+                st.write(f"**{key}:**")
+                tried = debug_info.get('tried_paths', {}).get(key, [])
+                if tried:
+                    for path in tried:
+                        exists = Path(path).exists() if path else False
+                        st.write(f"  - {path} {'✅' if exists else '❌'}")
+                else:
+                    st.write("  (候補なし)")
+            
+            st.write("---")
+            st.write("**最終採用パス:**")
+            found = debug_info.get('found_paths', {})
+            for key in ['primary', 'space', 'product']:
+                path = found.get(key) or image_paths.get(key)
+                if path:
+                    st.write(f"**{key}:** {path} ✅")
+                else:
+                    st.write(f"**{key}:** (見つかりませんでした) ❌")
         
         # Assets Mode診断
         try:
