@@ -160,6 +160,34 @@ DBに存在しない材料名のファイルはスキップされます（`--no-
 
 画像は自動的に探索され、存在する場合は表示されます。
 
+## DBスキーマ検証コマンド
+
+ローカルでDBスキーマを確認するためのコマンドです。
+
+### 1. DB初期化の確認
+
+```bash
+python -c "from database import init_db; init_db()"
+```
+
+### 2. PRAGMA table_info(materials) の確認
+
+```bash
+python -c "import sqlite3; conn = sqlite3.connect('materials.db'); cursor = conn.cursor(); cursor.execute('PRAGMA table_info(materials)'); print('\n'.join([f'{row[1]} ({row[2]})' for row in cursor.fetchall()])); conn.close()"
+```
+
+### 3. materials件数の確認
+
+```bash
+python -c "import sqlite3; conn = sqlite3.connect('materials.db'); cursor = conn.cursor(); cursor.execute('SELECT COUNT(*) FROM materials'); print(f'Count: {cursor.fetchone()[0]}'); conn.close()"
+```
+
+### 4. 不足カラムの確認
+
+```bash
+python -c "from database import Material; import sqlite3; conn = sqlite3.connect('materials.db'); cursor = conn.cursor(); cursor.execute('PRAGMA table_info(materials)'); existing = {row[1] for row in cursor.fetchall()}; model_cols = {col.name for col in Material.__table__.columns}; missing = model_cols - existing; print(f'Missing columns: {missing}' if missing else 'No missing columns'); conn.close()"
+```
+
 ## ローカル検証手順
 
 画像同期が正しく動作していることを確認するための手順です。

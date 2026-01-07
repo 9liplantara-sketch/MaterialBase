@@ -282,11 +282,36 @@ def _sqlite_ensure_columns(db_path: str, table: str, required: dict[str, str]) -
     return added
 
 
-def migrate_sqlite_schema_if_needed() -> None:
+def _sqlite_type_from_sqlalchemy_type(col_type) -> str:
     """
-    materials.db を壊さず、足りない列だけ足す。
+    SQLAlchemyの型をSQLite型に変換
+    
+    Args:
+        col_type: SQLAlchemyのColumn型
+    
+    Returns:
+        SQLite型文字列（INTEGER, REAL, TEXT）
+    """
+    type_name = str(col_type)
+    
+    if "Integer" in type_name or "Boolean" in type_name:
+        return "INTEGER"
+    elif "Float" in type_name or "Numeric" in type_name:
+        return "REAL"
+    else:
+        # String, Text, DateTime, JSON等は全てTEXT
+        return "TEXT"
+
+
+def migrate_sqlite_schema_if_needed(engine) -> None:
+    """
+    SQLite DBのスキーマをSQLAlchemyモデルに合わせて自動補完（不足カラムを全部追加）
+    
+    Args:
+        engine: SQLAlchemyエンジン
     """
     from pathlib import Path
+    import sqlite3
     
     # engine.url.database が "./materials.db" みたいな形でも動くように正規化
     db_path = getattr(engine.url, "database", None) or "materials.db"
@@ -297,18 +322,42 @@ def migrate_sqlite_schema_if_needed() -> None:
     if not p.exists():
         return
     
-    # まずは今回落ちてるカラムだけ確実に足す
-    required_materials = {
-        "main_elements": "TEXT",  # JSON文字列でもOK
-    }
+    # SQLiteでない場合はスキップ
+    if engine.url.get_backend_name() != "sqlite":
+        return
     
     try:
-        added = _sqlite_ensure_columns(str(p), "materials", required_materials)
-        if added:
-            print(f"[DB MIGRATION] Added columns to materials: {added}")
+        # PRAGMA table_info(materials) を取得
+        conn = sqlite3.connect(str(p))
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(materials)")
+        existing_columns = {row[1] for row in cursor.fetchall()}  # row[1] = column name
+        conn.close()
+        
+        # Material.__table__.columns を見て「DBに無い列」を列挙
+        missing_columns = {}
+        
+        for col in Material.__table__.columns:
+            col_name = col.name
+            if col_name not in existing_columns:
+                sqlite_type = _sqlite_type_from_sqlalchemy_type(col.type)
+                missing_columns[col_name] = sqlite_type
+        
+        # 不足カラムを追加
+        if missing_columns:
+            added = _sqlite_ensure_columns(str(p), "materials", missing_columns)
+            if added:
+                for col_name, col_type in missing_columns.items():
+                    if col_name in added:
+                        print(f"[DB MIGRATE] add column: {col_name} {col_type}")
+        else:
+            print("[DB MIGRATE] No missing columns found")
+            
     except Exception as e:
         # 起動を止めない（Cloudでログ確認できるようにする）
         print(f"[DB MIGRATION] Failed: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def init_db():
@@ -338,7 +387,13 @@ def init_db():
     
     # SQLiteの不足カラム補完（今回のコア修正）
     if engine.url.get_backend_name() == "sqlite":
-        migrate_sqlite_schema_if_needed()
+        try:
+            migrate_sqlite_schema_if_needed(engine)
+        except Exception as e:
+            # 例外は握りつぶさずログ出して継続
+            print(f"[DB MIGRATION] Error in migrate_sqlite_schema_if_needed: {e}")
+            import traceback
+            traceback.print_exc()
     
     # 既存データベースへのカラム追加（安全にALTER）
     try:

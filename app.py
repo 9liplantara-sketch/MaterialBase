@@ -709,18 +709,12 @@ def ensure_sample_data():
         init_sample_data()
         st.info("サンプルデータを自動投入しました。ページをリロードしてください。")
     except Exception as e:
-        # 例外はログに出力（アプリ起動を殺さない）
+        # 例外はログ＋画面にst.warning、でもアプリは落とさない
         import traceback
-        error_msg = f"サンプルデータの投入中にエラーが発生しました: {e}\n{traceback.format_exc()}"
-        print(f"ERROR: {error_msg}")
-        # Debug欄に表示（st.errorは表示されない場合があるため、printでログに残す）
+        error_msg = f"サンプルデータの投入中にエラーが発生しました: {e}"
+        print(f"ERROR: {error_msg}\n{traceback.format_exc()}")
+        st.warning(error_msg)
         # アプリ起動は続行
-    finally:
-        if db:
-            try:
-                db.close()
-            except:
-                pass
 
 def get_db():
     """データベースセッションを取得"""
@@ -730,6 +724,8 @@ def get_all_materials():
     """
     全材料を取得（Eager Loadでリレーションも先読み・全リレーション網羅）
     重複を除去して返す（DB由来のデータに一本化）
+    
+    OperationalErrorをキャッチしてUI崩壊を防ぐ
     """
     db = get_db()
     try:
@@ -750,6 +746,27 @@ def get_all_materials():
         result = db.execute(stmt)
         materials = result.unique().scalars().all()
         return materials
+    except Exception as e:
+        import sqlite3
+        if isinstance(e, sqlite3.OperationalError) or "no such column" in str(e).lower():
+            # DB schema mismatchエラー
+            st.error("DB schema mismatch detected. Please check Debug (temporary) for details.")
+            # PRAGMA table_info(materials) を全部出す
+            db_path = Path("materials.db")
+            if db_path.exists():
+                try:
+                    conn = sqlite3.connect(str(db_path.absolute()))
+                    cursor = conn.cursor()
+                    cursor.execute("PRAGMA table_info(materials)")
+                    columns = cursor.fetchall()
+                    st.write("**PRAGMA table_info(materials):**")
+                    for col in columns:
+                        st.write(f"- {col[1]} ({col[2]})")
+                    conn.close()
+                except:
+                    pass
+            st.stop()  # 以降のUIを止める（崩壊させない）
+        raise  # その他のエラーは再発生
     finally:
         db.close()
 
@@ -1097,69 +1114,23 @@ def get_assets_mode_stats():
         db.close()
 
 
-def main():
-    # ビルド情報をサイドバーに表示
-    sha = get_git_sha()
-    current_time = datetime.now().isoformat(timespec="seconds")
-    
-    # デバッグ情報（UIが出る前に死ぬ問題を回避する保険）
-    # 最低限の情報をprintで出力（Cloudログで確認可能）
+def render_debug_sidebar_early():
+    """
+    Debugを先に描画（UIが出る前に死ぬ問題を回避）
+    DBのpath/sha/columns/件数を表示
+    """
     db_path = Path("materials.db")
-    if db_path.exists():
-        try:
-            import sqlite3
-            import hashlib
-            conn = sqlite3.connect(str(db_path.absolute()))
-            try:
-                cursor = conn.cursor()
-                # PRAGMA table_info(materials) の列名一覧
-                cursor.execute("PRAGMA table_info(materials)")
-                columns = cursor.fetchall()
-                column_names = [col[1] for col in columns[:20]]  # col[1] = column name
-                print(f"[DEBUG] DB path: {db_path.absolute()}")
-                print(f"[DEBUG] DB columns (first 20): {', '.join(column_names)}")
-                
-                # sha256取得（先頭16桁）
-                with open(db_path, 'rb') as f:
-                    db_content = f.read()
-                    sha256_hash = hashlib.sha256(db_content).hexdigest()
-                    sha256_prefix = sha256_hash[:16]
-                    print(f"[DEBUG] DB sha256 (first 16): {sha256_prefix}")
-            finally:
-                conn.close()
-        except Exception as e:
-            import traceback
-            print(f"[DEBUG] DB check failed: {e}\n{traceback.format_exc()}")
     
     with st.sidebar:
-        st.caption(f"build: {sha}")
-        st.caption(f"time: {current_time}")
+        st.caption(f"build: {get_git_sha()}")
+        st.caption(f"time: {datetime.now().isoformat(timespec='seconds')}")
         
         # デバッグ情報（一時的）
-        with st.expander("🔧 Debug (temporary)", expanded=False):
-            # DBパスとスキーマ情報（UIが出る前に死ぬ問題を回避する保険）
-            st.write("**DB初期診断:**")
-            st.write(f"- **DB path:** {db_path.absolute()}")
-            
-            # PRAGMA table_info(materials) の列名一覧
-            if db_path.exists():
-                try:
-                    import sqlite3
-                    conn = sqlite3.connect(str(db_path.absolute()))
-                    try:
-                        cursor = conn.cursor()
-                        cursor.execute("PRAGMA table_info(materials)")
-                        columns = cursor.fetchall()
-                        column_names = [row[1] for row in columns[:20]]  # 最初の20件
-                        st.write(f"- **materials列名（先頭20件）:** {', '.join(column_names)}")
-                        if len(columns) > 20:
-                            st.write(f"  (他 {len(columns) - 20} 列)")
-                    finally:
-                        conn.close()
-                except Exception as e:
-                    st.write(f"- **列名取得エラー:** {str(e)}")
-            else:
-                st.write("- **DB path:** 見つかりませんでした")
+        with st.expander("🔧 Debug (temporary)", expanded=True):  # 初期は展開
+            # cwd, __file__を表示
+            st.write("**環境情報:**")
+            st.write(f"- **cwd:** {Path.cwd()}")
+            st.write(f"- **__file__:** {__file__}")
             
             st.write("---")
             
@@ -1190,15 +1161,17 @@ def main():
                             sha256_prefix = sha256_hash[:16]
                             st.write(f"- **sha256 (先頭16桁):** {sha256_prefix}")
                         
-                        # PRAGMA table_info(materials) の列名一覧（最初の20件）
+                        # PRAGMA table_info(materials) の列名一覧（全件 or 最初の50件）
                         cursor.execute("PRAGMA table_info(materials)")
                         columns = cursor.fetchall()
-                        column_names = [col[1] for col in columns[:20]]  # col[1] = column name
-                        st.write(f"- **columns (最初の20件):** {', '.join(column_names)}")
-                        if len(columns) > 20:
-                            st.write(f"  (他 {len(columns) - 20} 件)")
+                        column_names = [row[1] for row in columns]  # row[1] = column name
+                        if len(column_names) > 50:
+                            st.write(f"- **列名（先頭50件）:** {', '.join(column_names[:50])}")
+                            st.write(f"  (他 {len(column_names) - 50} 列)")
+                        else:
+                            st.write(f"- **列名（全{len(column_names)}件）:** {', '.join(column_names)}")
                         
-                        # 先頭レコードの材料名取得（count>0の時）
+                        # count>0なら SELECT name FROM materials LIMIT 1
                         if material_count > 0:
                             cursor.execute("SELECT name_official, name FROM materials LIMIT 1")
                             row = cursor.fetchone()
@@ -1228,103 +1201,24 @@ def main():
                     st.code(_card_generator_import_traceback, language="python")
             else:
                 st.write("**card_generator/schemas import:** ✅ 成功")
-            
-            st.write("---")
-            
-            # 画像ファイルの情報（アルミニウム）
-            st.write("**画像ファイル情報（アルミニウム）:**")
-            material_slug = "アルミニウム"
-            material_image_dir = Path("static/images/materials") / material_slug
-            
-            for image_type, filename in [("primary", "primary.jpg"), ("space", "space.jpg"), ("product", "product.jpg")]:
-                if image_type == "primary":
-                    image_path = material_image_dir / filename
-                else:
-                    image_path = material_image_dir / "uses" / filename
-                
-                if image_path.exists():
-                    stat = image_path.stat()
-                    st.write(f"**{image_type}:**")
-                    st.write(f"  - **path:** {image_path.absolute()}")
-                    st.write(f"  - **mtime:** {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
-                    st.write(f"  - **size:** {stat.st_size:,} bytes ({stat.st_size / 1024:.2f} KB)")
-                else:
-                    st.write(f"**{image_type}:** 見つかりませんでした ❌")
-            
-            st.write("---")
-            
-            # 画像パス探索の情報
-            from utils.image_display import find_material_image_paths
-            debug_info = {}
-            image_paths = find_material_image_paths("アルミニウム", Path.cwd(), debug_info=debug_info)
-            
-            st.write("**画像パス探索（アルミニウム）:**")
-            st.write("**材料名:**", debug_info.get('material_name'))
-            st.write("**safe_slug:**", debug_info.get('safe_slug'))
-            st.write("**material_dir:**", debug_info.get('material_dir'))
-            st.write("**material_dir exists:**", Path(debug_info.get('material_dir', '')).exists())
-            
-            st.write("---")
-            st.write("**試した候補パス:**")
-            for key in ['primary', 'space', 'product']:
-                st.write(f"**{key}:**")
-                tried = debug_info.get('tried_paths', {}).get(key, [])
-                if tried:
-                    for path in tried:
-                        exists = Path(path).exists() if path else False
-                        st.write(f"  - {path} {'✅' if exists else '❌'}")
-                else:
-                    st.write("  (候補なし)")
-            
-            st.write("---")
-            st.write("**最終採用パスと表示型:**")
-            # APP_VERSIONを取得（表示用）
-            try:
-                from material_map_version import APP_VERSION
-            except ImportError:
-                APP_VERSION = get_git_sha()
-            
-            found = debug_info.get('found_paths', {})
-            for key in ['primary', 'space', 'product']:
-                path = found.get(key) or image_paths.get(key)
-                if path:
-                    # pathはPathオブジェクトまたは文字列の可能性がある
-                    if isinstance(path, Path):
-                        path_obj = path
-                        path_str = str(path)
-                    else:
-                        path_str = str(path)
-                        path_obj = Path(path_str)
-                    
-                    # 表示に渡した型を判定
-                    if path_obj.exists() and path_obj.is_file():
-                        display_type = "PIL (ローカルファイル)"
-                    elif path_str.startswith(('http://', 'https://')):
-                        display_type = f"URL (キャッシュバスター: ?v={APP_VERSION})"
-                    elif path_str.startswith('data:'):
-                        display_type = "data: URL"
-                    else:
-                        display_type = "不明"
-                    st.write(f"**{key}:** {path_str} ✅")
-                    st.write(f"  - 表示型: {display_type}")
-                else:
-                    st.write(f"**{key}:** (見つかりませんでした) ❌")
-        
-        # Assets Mode診断
-        try:
-            mode, url_count, total_count = get_assets_mode_stats()
-            if total_count > 0:
-                mode_label = {
-                    "local": "🔵 local",
-                    "url": "🟢 url",
-                    "mixed": "🟡 mixed"
-                }.get(mode, mode)
-                st.markdown("---")
-                st.markdown(f"**Assets Mode:** {mode_label}")
-                st.caption(f"URL画像: {url_count}/{total_count} ({url_count/total_count*100:.1f}%)" if total_count > 0 else "URL画像: 0/0")
-        except Exception as e:
-            # エラー時は表示しない（無視）
-            pass
+
+
+def main():
+    # 起動順序を固定：Debug表示 → init_db() → その後に通常処理
+    
+    # 1. Debugを先に描画（UIが出る前に死ぬ問題を回避）
+    render_debug_sidebar_early()
+    
+    # 2. init_db()を呼ぶ（常に）
+    try:
+        init_db()
+    except Exception as e:
+        import traceback
+        st.error(f"DB初期化エラー: {e}")
+        st.code(traceback.format_exc(), language="python")
+        st.stop()  # 以降のUIを止める
+    
+    # 3. その後に通常処理（Debugは既にrender_debug_sidebar_early()で表示済み）
     
     # アセット確保（生成物の自動生成）
     try:
