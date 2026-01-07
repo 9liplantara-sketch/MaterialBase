@@ -1322,23 +1322,34 @@ def render_debug_sidebar_early():
                                 material_display_name = getattr(m, 'name_official', None) or getattr(m, 'name', None) or "N/A"
                                 
                                 with st.expander(f"📦 {material_display_name}", expanded=False):
-                                    # 簡潔表示: dir_name, chosen_branch, final_srcのみ
-                                    dir_name = primary_debug.get('resolved_dir') or space_debug.get('resolved_dir') or product_debug.get('resolved_dir') or "N/A"
+                                    # safe_slugとbase_dir_sampleを表示
+                                    safe_slug = primary_debug.get('safe_slug', 'N/A')
+                                    base_dir_sample = primary_debug.get('base_dir_sample', [])
                                     chosen_branch = primary_debug.get('chosen_branch', 'unknown')
                                     final_src_type = primary_debug.get('final_src_type', 'unknown')
+                                    final_path_exists = primary_debug.get('final_path_exists', False)
                                     
-                                    st.write(f"**dir_name:** {dir_name}")
+                                    st.write(f"**safe_slug:** {safe_slug}")
+                                    st.write(f"**base_dir_sample:** {', '.join(base_dir_sample[:10])}..." if len(base_dir_sample) > 10 else f"**base_dir_sample:** {', '.join(base_dir_sample)}")
                                     st.write(f"**chosen_branch:** {chosen_branch}")
                                     st.write(f"**final_src_type:** {final_src_type}")
+                                    st.write(f"**final_path_exists:** {final_path_exists}")
                                     
                                     if primary_src:
                                         if isinstance(primary_src, str):
                                             st.write(f"**final_url:** {primary_src[:80]}..." if len(primary_src) > 80 else f"**final_url:** {primary_src}")
                                         elif isinstance(primary_src, Path):
                                             st.write(f"**final_path:** {primary_src.resolve()}")
-                                            st.write(f"**exists:** {primary_debug.get('final_path_exists', False)}")
                                     else:
                                         st.warning("⚠️ primary.jpg not found")
+                                    
+                                    # candidate_pathsとfailed_pathsを表示
+                                    candidate_paths = primary_debug.get('candidate_paths', [])
+                                    failed_paths = primary_debug.get('failed_paths', [])
+                                    if candidate_paths:
+                                        st.write(f"**candidate_paths:** {len(candidate_paths)}件")
+                                    if failed_paths:
+                                        st.write(f"**failed_paths:** {len(failed_paths)}件")
                                     
                                     # 詳細情報はexpanderへ
                                     with st.expander("🔍 詳細デバッグ情報", expanded=False):
