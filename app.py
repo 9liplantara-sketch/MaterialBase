@@ -1181,9 +1181,11 @@ def render_debug_sidebar_early():
         try:
             st.caption(f"build: {get_git_sha()}")
             st.caption(f"time: {datetime.now().isoformat(timespec='seconds')}")
-        except Exception:
-            st.write("build/time debug failed")
-            st.code(traceback.format_exc())
+        except Exception as e:
+            # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
+            st.sidebar.warning("Sidebar: build/time debug failed")
+            with st.sidebar.expander("詳細", expanded=False):
+                st.sidebar.exception(e)
         
         # デバッグ情報（一時的）
         with st.expander("🔧 Debug (temporary)", expanded=True):  # 初期は展開
@@ -1192,9 +1194,11 @@ def render_debug_sidebar_early():
                 st.write("**環境情報:**")
                 st.write(f"- **cwd:** {str(Path.cwd())}")
                 st.write(f"- **__file__:** {__file__}")
-            except Exception:
-                st.write("env debug failed")
-                st.code(traceback.format_exc())
+            except Exception as e:
+                # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
+                st.sidebar.warning("Sidebar: env debug failed")
+                with st.sidebar.expander("詳細", expanded=False):
+                    st.sidebar.exception(e)
             
             st.write("---")
             
@@ -1232,9 +1236,11 @@ def render_debug_sidebar_early():
                                 st.write(f"- **first material name:** {first_name}")
                     finally:
                         con.close()
-            except Exception:
-                st.error("DB fingerprint failed")
-                st.code(traceback.format_exc())
+            except Exception as e:
+                # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
+                st.sidebar.warning("Sidebar: DB fingerprint failed")
+                with st.sidebar.expander("詳細", expanded=False):
+                    st.sidebar.exception(e)
             
             st.write("---")
             
@@ -1247,9 +1253,88 @@ def render_debug_sidebar_early():
                         st.code(_card_generator_import_traceback, language="python")
                 else:
                     st.write("**card_generator/schemas import:** ✅ 成功")
-            except Exception:
-                st.write("import error debug failed")
-                st.code(traceback.format_exc())
+            except Exception as e:
+                # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
+                st.sidebar.warning("Sidebar: import error debug failed")
+                with st.sidebar.expander("詳細", expanded=False):
+                    st.sidebar.exception(e)
+            
+            st.write("---")
+            
+            # 画像探索の詳細情報（Cloud上で実際のフォルダ・画像を確認）
+            try:
+                from utils.image_display import resolve_material_dir_name
+                import re
+                
+                base = Path(__file__).parent / "static" / "images" / "materials"
+                st.write("**画像探索情報:**")
+                st.write(f"- **base dir:** {str(base)}")
+                
+                if base.exists():
+                    dirs = [p.name for p in base.iterdir() if p.is_dir()]
+                    primaries = list(base.glob("*/primary.jpg"))
+                    st.write(f"- **dir count:** {len(dirs)}")
+                    st.write(f"- **dirs (sample, 先頭30):** {dirs[:30]}")
+                    st.write(f"- **primary.jpg count:** {len(primaries)}")
+                else:
+                    st.warning(f"base dir not exists: {base}")
+                    dirs = []
+                
+                # materialsを取得できている前提（取れない時はDB debugだけ出す）
+                try:
+                    materials = get_all_materials()
+                    if materials:
+                        st.write(f"- **materials count:** {len(materials)}")
+                        st.write("**素材ごとの探索結果:**")
+                        
+                        for m in materials[:30]:  # 先頭30件のみ
+                            try:
+                                # safe_slug生成（既存ロジック）
+                                material_name = getattr(m, 'name_official', None) or getattr(m, 'name', None) or ""
+                                safe_slug = material_name.strip()
+                                forbidden_chars = r'[/\\:*?"<>|]'
+                                safe_slug = re.sub(forbidden_chars, '_', safe_slug)
+                                
+                                # フォルダ名解決
+                                dir_name, dbg = resolve_material_dir_name(m, base, safe_slug)
+                                material_dir = base / dir_name
+                                
+                                p_primary = material_dir / "primary.jpg"
+                                p_space = material_dir / "uses" / "space.jpg"
+                                p_product = material_dir / "uses" / "product.jpg"
+                                
+                                material_display_name = getattr(m, 'name_official', None) or getattr(m, 'name', None) or "N/A"
+                                
+                                with st.expander(f"📦 {material_display_name}", expanded=False):
+                                    st.json({
+                                        "safe_slug": safe_slug,
+                                        "dir_name": dir_name,
+                                        "dir_exists": material_dir.exists(),
+                                        "primary": str(p_primary),
+                                        "primary_exists": p_primary.exists(),
+                                        "space_exists": p_space.exists(),
+                                        "product_exists": p_product.exists(),
+                                    })
+                                    
+                                    if not p_primary.exists():
+                                        st.warning("⚠️ primary.jpg not found")
+                                        with st.expander("🔍 why not found?", expanded=False):
+                                            st.json(dbg)
+                            except Exception as e:
+                                st.write(f"❌ {getattr(m, 'name_official', None) or 'N/A'}: {e}")
+                                with st.expander("詳細", expanded=False):
+                                    st.code(traceback.format_exc())
+                    else:
+                        st.write("- **materials:** 0件（DBが空）")
+                except Exception as e:
+                    st.warning("materials取得失敗（DB debugだけ表示）")
+                    with st.expander("詳細", expanded=False):
+                        st.code(traceback.format_exc())
+            except Exception as e:
+                # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
+                st.sidebar.warning("Sidebar: 画像探索情報の取得に失敗")
+                with st.sidebar.expander("詳細", expanded=False):
+                    st.sidebar.exception(e)
 
 
 def main():

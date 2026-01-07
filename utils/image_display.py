@@ -9,6 +9,8 @@ import streamlit as st
 from pathlib import Path
 from PIL import Image as PILImage
 from typing import Optional, Tuple, Union, Dict
+import unicodedata
+import re
 from utils.paths import resolve_path
 
 try:
@@ -246,28 +248,126 @@ def get_display_image_source(
     return None
 
 
+def _normalize_key(s: str) -> str:
+    """
+    文字列をNFKC正規化して、全角スペース等も潰す
+    
+    Args:
+        s: 正規化する文字列
+    
+    Returns:
+        正規化された文字列
+    """
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKC", str(s))
+    s = s.replace("\u3000", " ")  # 全角スペース→半角
+    return s.strip()
+
+
+def _dir_map(base_dir: Path) -> dict[str, str]:
+    """
+    static/images/materials/* のフォルダ一覧を取得し、正規化キー→実フォルダ名の辞書を作る
+    
+    Args:
+        base_dir: static/images/materials のパス
+    
+    Returns:
+        正規化キー→実フォルダ名の辞書
+    """
+    m = {}
+    if not base_dir.exists():
+        return m
+    for p in base_dir.iterdir():
+        if p.is_dir():
+            m[_normalize_key(p.name)] = p.name
+    return m
+
+
+def resolve_material_dir_name(material, base_dir: Path, safe_slug: str) -> tuple[str, dict]:
+    """
+    材料オブジェクトから実フォルダ名を解決（候補名×正規化×実フォルダ照合）
+    
+    Args:
+        material: Materialオブジェクト
+        base_dir: static/images/materials のパス
+        safe_slug: 既存のsafe_slug（フォールバック用）
+    
+    Returns:
+        (dir_name, debug_info) のタプル
+        - dir_name: 解決されたフォルダ名
+        - debug_info: デバッグ情報の辞書
+    """
+    dm = _dir_map(base_dir)
+    
+    candidates = []
+    # できるだけ多めに候補を集める（存在しない属性は getattr で回避）
+    for key in ["name_official", "name"]:
+        v = getattr(material, key, None)
+        if v:
+            candidates.append(str(v))
+    
+    # safe_slugも候補に追加（現状互換）
+    if safe_slug and safe_slug not in candidates:
+        candidates.append(safe_slug)
+    
+    # name_aliases を分解したもの（カンマ区切り等）
+    aliases = getattr(material, "name_aliases", None)
+    if aliases:
+        # listでもstrでもOKに
+        if isinstance(aliases, list):
+            candidates.extend([str(x) for x in aliases if x])
+        else:
+            # "A,B,C" などを想定
+            candidates.extend([x.strip() for x in str(aliases).split(",") if x.strip()])
+    
+    chosen = None
+    tried = []
+    for c in candidates:
+        nk = _normalize_key(c)
+        tried.append((c, nk))
+        if nk in dm:
+            chosen = dm[nk]
+            break
+    
+    if not chosen:
+        chosen = safe_slug  # fallback
+    
+    debug = {
+        "base_dir": str(base_dir),
+        "candidates": candidates,
+        "tried": tried,
+        "dir_map_sample": list(dm.items())[:30],
+        "chosen": chosen,
+        "chosen_exists": (base_dir / chosen).exists() if chosen else False,
+    }
+    return chosen, debug
+
+
 def find_material_image_paths(
     material_name: str,
     project_root: Optional[Path] = None,
-    debug_info: Optional[Dict] = None
+    debug_info: Optional[Dict] = None,
+    material_obj: Optional[object] = None
 ) -> Dict[str, Optional[Path]]:
     """
-    材料の画像パスを探索（統一構成対応）
+    材料の画像パスを探索（統一構成対応、表記ゆれ対応）
     
     探索順序（正仕様を最優先）:
-    1. static/images/materials/{safe_slug}/primary.jpg (最優先)
-    2. static/images/materials/{safe_slug}/primary.png (フォールバック)
-    3. static/images/materials/{safe_slug}/primary.webp (フォールバック)
-    4. static/images/materials/{safe_slug}/uses/space.jpg (最優先)
-    5. static/images/materials/{safe_slug}/uses/space.png (フォールバック)
-    6. static/images/materials/{safe_slug}/uses/product.jpg (最優先)
-    7. static/images/materials/{safe_slug}/uses/product.png (フォールバック)
+    1. static/images/materials/{resolved_dir}/primary.jpg (最優先)
+    2. static/images/materials/{resolved_dir}/primary.png (フォールバック)
+    3. static/images/materials/{resolved_dir}/primary.webp (フォールバック)
+    4. static/images/materials/{resolved_dir}/uses/space.jpg (最優先)
+    5. static/images/materials/{resolved_dir}/uses/space.png (フォールバック)
+    6. static/images/materials/{resolved_dir}/uses/product.jpg (最優先)
+    7. static/images/materials/{resolved_dir}/uses/product.png (フォールバック)
     8. 旧仕様（primary/primary.*）は最後のフォールバック
     
     Args:
         material_name: 材料名
         project_root: プロジェクトルートのパス
         debug_info: デバッグ情報を格納する辞書（オプション）
+        material_obj: Materialオブジェクト（表記ゆれ対応のため、指定推奨）
     
     Returns:
         {
@@ -281,13 +381,21 @@ def find_material_image_paths(
     else:
         project_root = Path(project_root)
     
-    # 安全なスラッグに変換
+    base_dir = project_root / 'static' / 'images' / 'materials'
+    
+    # 安全なスラッグに変換（フォールバック用）
     import re
     safe_slug = material_name.strip()
     forbidden_chars = r'[/\\:*?"<>|]'
     safe_slug = re.sub(forbidden_chars, '_', safe_slug)
     
-    material_dir = project_root / 'static' / 'images' / 'materials' / safe_slug
+    # material_objがある場合は表記ゆれ対応のフォルダ名解決を使用
+    if material_obj is not None:
+        dir_name, _ = resolve_material_dir_name(material_obj, base_dir, safe_slug)
+        material_dir = base_dir / dir_name
+    else:
+        # material_objがない場合は従来通りsafe_slugを使用
+        material_dir = base_dir / safe_slug
     
     result = {
         'primary': None,
