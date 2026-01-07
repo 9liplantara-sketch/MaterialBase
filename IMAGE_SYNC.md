@@ -159,3 +159,97 @@ DBに存在しない材料名のファイルはスキップされます（`--no-
 - **使用例画像**: 「入手先・用途」タブの「代表的な使用例」セクション
 
 画像は自動的に探索され、存在する場合は表示されます。
+
+## ローカル検証手順
+
+画像同期が正しく動作していることを確認するための手順です。
+
+### 1. 画像同期の実行
+
+```bash
+# DB突合をスキップして実行（推奨）
+python scripts/sync_uploaded_images.py --no-db
+```
+
+### 2. Git状態の確認
+
+```bash
+# static/images/materials/ の更新を確認
+git status
+
+# 更新されたファイルを確認
+git status static/images/materials/
+```
+
+**期待される結果:**
+- `static/images/materials/**/*.jpg` が更新されている（または新規追加されている）
+- 削除されたファイルが大量に出ていない
+
+### 3. Gitにコミット・プッシュ
+
+```bash
+# 更新された画像ファイルをステージング
+git add static/images/materials
+
+# コミット
+git commit -m "chore: sync material images"
+
+# プッシュ
+git push
+```
+
+### 4. Cloud Debugでの確認
+
+Streamlit Cloudにデプロイ後、アプリのサイドバーにある「🔧 Debug (temporary)」を展開して以下を確認：
+
+1. **materials.db 情報**
+   - path: 絶対パス
+   - mtime: 更新日時
+   - size: ファイルサイズ
+   - materials件数: DB内の材料数
+
+2. **画像ファイル情報（アルミニウム）**
+   - **primary**: `static/images/materials/アルミニウム/primary.jpg` の mtime/size
+   - **space**: `static/images/materials/アルミニウム/uses/space.jpg` の mtime/size
+   - **product**: `static/images/materials/アルミニウム/uses/product.jpg` の mtime/size
+
+**期待される結果:**
+- 画像ファイルの mtime が更新されている（同期実行後の日時になっている）
+- 画像ファイルの size が正しい（0バイトでない）
+
+### 5. 画像表示の確認
+
+アプリ上で以下を確認：
+
+1. **ホームページ**: 「最近登録された材料」で画像が表示される
+2. **材料一覧ページ**: 材料カードで画像が表示される
+3. **材料詳細ページ**: 「入手先・用途」タブで使用例画像が表示される
+
+**期待される結果:**
+- 更新した画像が正しく表示される
+- 古い画像が表示されない（キャッシュがクリアされている）
+
+## 画像処理の詳細
+
+### JPG/JPG入力の場合
+
+- **処理方法**: `shutil.copy2()` でそのままコピー
+- **特徴**:
+  - 再エンコードしない（バイト列が同一）
+  - mtime（更新日時）も維持される
+  - md5ハッシュが一致する
+
+### PNG/WEBP入力の場合
+
+- **処理方法**: Pillowで開いてJPGに変換
+- **特徴**:
+  - 透過画像は白背景に合成される
+  - 品質90で保存される
+  - md5ハッシュは一致しない（変換されるため）
+
+### 比較スクリプトでの判定
+
+`scripts/debug_image_state.py --compare-uploads` を実行すると：
+
+- **JPG/JPGの場合**: `SAME`（md5一致）または `DIFF`（md5不一致、同期が必要）
+- **PNG/WEBPの場合**: `CONVERTED`（変換されるためmd5不一致は正常、参考表示）

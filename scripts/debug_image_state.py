@@ -182,23 +182,38 @@ def print_file_info(
 def compare_files(
     upload_path: Optional[Path],
     static_path: Optional[Path]
-) -> str:
-    """2つのファイルを比較してSAME/DIFFを返す"""
-    if not upload_path or not upload_path.exists():
-        return "UPLOAD_MISSING"
-    if not static_path or not static_path.exists():
-        return "STATIC_MISSING"
+) -> Tuple[str, Optional[str]]:
+    """
+    2つのファイルを比較して結果を返す
     
+    Returns:
+        (比較結果, 備考メッセージ)
+        比較結果: "SAME", "DIFF", "CONVERTED", "UPLOAD_MISSING", "STATIC_MISSING", "COMPARE_ERROR"
+        備考: 変換元の拡張子など（Noneの場合はなし）
+    """
+    if not upload_path or not upload_path.exists():
+        return "UPLOAD_MISSING", None
+    if not static_path or not static_path.exists():
+        return "STATIC_MISSING", None
+    
+    upload_ext = upload_path.suffix.lower()
     upload_md5 = get_file_md5(upload_path)
     static_md5 = get_file_md5(static_path)
     
+    # uploadsがpng/webpの場合は変換されるので、md5比較は「参考」扱い
+    if upload_ext in ['.png', '.webp']:
+        # 変換されるので、md5は一致しないのが正常
+        note = f"note: converted from {upload_ext[1:]}"  # .png -> png
+        return "CONVERTED", note
+    
+    # uploadsがjpg/jpegの場合はmd5一致が期待される
     if upload_md5 and static_md5:
         if upload_md5 == static_md5:
-            return "SAME"
+            return "SAME", None
         else:
-            return "DIFF"
+            return "DIFF", None
     else:
-        return "COMPARE_ERROR"
+        return "COMPARE_ERROR", None
 
 
 def list_directory(dir_path: Path, project_root: Path):
@@ -364,7 +379,7 @@ def main():
             upload_path = upload_images.get(image_type)
             static_path = static_images.get(image_type)
             
-            result = compare_files(upload_path, static_path)
+            result, note = compare_files(upload_path, static_path)
             
             print(f"  {image_type.upper()}: {result}")
             if result == "SAME":
@@ -376,6 +391,15 @@ def main():
                     static_md5 = get_file_md5(static_path)
                     print(f"      uploads md5: {upload_md5}")
                     print(f"      static md5:  {static_md5}")
+            elif result == "CONVERTED":
+                print(f"    ℹ️  uploads側がpng/webpのため変換される（md5比較は参考）")
+                if note:
+                    print(f"      {note}")
+                if upload_path and static_path:
+                    upload_md5 = get_file_md5(upload_path)
+                    static_md5 = get_file_md5(static_path)
+                    print(f"      uploads md5: {upload_md5} (参考)")
+                    print(f"      static md5:  {static_md5} (参考、変換後)")
             elif result == "UPLOAD_MISSING":
                 print(f"    ⚠️  uploads側にファイルなし")
             elif result == "STATIC_MISSING":
@@ -398,8 +422,9 @@ def main():
     
     if args.compare_uploads:
         print("💡 ヒント:")
-        print("  - SAME: 同期済み（問題なし）")
-        print("  - DIFF: 同期が必要（scripts/sync_uploaded_images.py を実行）")
+        print("  - SAME: 同期済み（問題なし、jpg/jpegでmd5一致）")
+        print("  - DIFF: 同期が必要（jpg/jpegでmd5不一致、scripts/sync_uploaded_images.py を実行）")
+        print("  - CONVERTED: png/webpから変換されるためmd5不一致は正常（参考表示）")
         print("  - STATIC_MISSING: 同期が必要")
         print()
 

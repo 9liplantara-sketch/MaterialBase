@@ -4,7 +4,7 @@ LLM統合モジュール（将来拡張用）
 """
 
 from typing import List, Optional
-from models import Material
+from schemas import Material
 
 
 class MaterialLLMService:

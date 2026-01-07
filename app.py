@@ -31,8 +31,33 @@ from collections import Counter
 from database import SessionLocal, Material, Property, Image, MaterialMetadata, ReferenceURL, UseExample, ProcessExampleImage, init_db
 from sqlalchemy.orm import selectinload
 from sqlalchemy import select, func
-from card_generator import generate_material_card
-from models import MaterialCard
+
+# card_generatorとschemasのimport（循環インポート対策）
+# エラー情報をグローバル変数に保存（Debug欄で表示用）
+_card_generator_import_error = None
+_card_generator_import_traceback = None
+
+try:
+    from card_generator import generate_material_card
+    from schemas import MaterialCard
+except Exception as e:
+    # importエラー時のフォールバック（最低限の動作を保証）
+    import traceback
+    _card_generator_import_error = str(e)
+    _card_generator_import_traceback = traceback.format_exc()
+    print(f"Warning: card_generator/schemas import failed: {e}")
+    traceback.print_exc()
+    def generate_material_card(card_data):
+        """フォールバック: 仮のカードHTMLを返す"""
+        return f"<html><body><h1>Material Card (Fallback)</h1><p>ID: {getattr(card_data.payload, 'id', 'N/A')}</p></body></html>"
+    # MaterialCardのフォールバック定義
+    from pydantic import BaseModel
+    class MaterialCardPayload(BaseModel):
+        id: int
+        name: str
+    class MaterialCard(BaseModel):
+        payload: MaterialCardPayload
+
 from material_form_detailed import show_detailed_material_form
 from periodic_table_ui import show_periodic_table
 from material_detail_tabs import show_material_detail_tabs
@@ -615,46 +640,87 @@ def get_custom_css():
 """
 
 # データベース初期化
-if not os.path.exists("materials.db"):
-    init_db()
+# DB初期化（常に実行：既存DBでも不足カラムを自動追加）
+init_db()
+
+def get_material_count_sqlite(db_path: Path) -> int:
+    """
+    sqlite3で直接materials件数を取得（ORMを使わない安全な方法）
+    
+    Args:
+        db_path: データベースファイルのパス
+    
+    Returns:
+        materials件数（エラー時は0）
+    """
+    if not db_path.exists():
+        return 0
+    
+    try:
+        import sqlite3
+        conn = sqlite3.connect(str(db_path.absolute()))
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM materials")
+            count = cursor.fetchone()[0]
+            return count if count is not None else 0
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Warning: get_material_count_sqlite failed: {e}")
+        return 0
+
+
+def should_init_sample_data() -> bool:
+    """
+    サンプルデータを初期化すべきか判定
+    
+    Returns:
+        True: 初期化すべき（INIT_SAMPLE_DATA=1 かつ DBが空）
+        False: 初期化しない
+    """
+    # 環境変数フラグが設定されていない場合は実行しない
+    if os.getenv("INIT_SAMPLE_DATA") != "1":
+        return False
+    
+    # DBが空の場合のみ実行
+    db_path = Path("materials.db")
+    count = get_material_count_sqlite(db_path)
+    return count == 0
+
 
 def ensure_sample_data():
     """
     サンプルデータが存在しない場合、自動投入（idempotent）
-    重複投入を防ぐため、既存の材料名をチェックして差分のみ投入
+    
+    注意: 
+    - 環境変数 INIT_SAMPLE_DATA=1 が設定されている場合のみ実行
+    - DBが空（materials件数==0）の時だけ実行
+    - 例外が出てもアプリ起動を殺さない（ログ＆Debug表示）
     """
-    db = get_db()
+    # 初期化すべきか判定
+    if not should_init_sample_data():
+        return
+    
+    db = None
     try:
-        # 材料数をカウント
-        count = db.execute(select(func.count(Material.id))).scalar() or 0
-        if count == 0:
-            # サンプルデータを投入
-            from init_sample_data import init_sample_data
-            init_sample_data()
-            st.info("サンプルデータを自動投入しました。ページをリロードしてください。")
-        else:
-            # 既にデータがある場合は重複チェック（idempotent化）
-            # 既存の材料名を取得
-            existing_materials = db.query(Material).all()
-            existing_names = {m.name_official or m.name for m in existing_materials if m.name_official or m.name}
-            
-            # サンプルデータで投入予定の材料名リスト（init_sample_data.pyから）
-            sample_names = {
-                "カリン材", "栗材", "樫材",
-                "アルミニウム（純アルミ）", "ステンレス鋼 SUS304", "真鍮（黄銅）",
-                "ポリプロピレン（PP）", "ポリエチレン（PE）", "ポリ塩化ビニル（PVC）"
-            }
-            
-            # 差分のみ投入（重複投入を防ぐ）
-            missing_names = sample_names - existing_names
-            if missing_names:
-                # 一部のサンプルデータが欠けている場合は警告のみ（自動投入はしない）
-                # 手動でinit_sample_data.pyを実行してもらう
-                pass
+        # サンプルデータを投入
+        from init_sample_data import init_sample_data
+        init_sample_data()
+        st.info("サンプルデータを自動投入しました。ページをリロードしてください。")
     except Exception as e:
-        st.error(f"サンプルデータの投入中にエラーが発生しました: {e}")
+        # 例外はログに出力（アプリ起動を殺さない）
+        import traceback
+        error_msg = f"サンプルデータの投入中にエラーが発生しました: {e}\n{traceback.format_exc()}"
+        print(f"ERROR: {error_msg}")
+        # Debug欄に表示（st.errorは表示されない場合があるため、printでログに残す）
+        # アプリ起動は続行
     finally:
-        db.close()
+        if db:
+            try:
+                db.close()
+            except:
+                pass
 
 def get_db():
     """データベースセッションを取得"""
@@ -1035,14 +1101,69 @@ def main():
     # ビルド情報をサイドバーに表示
     sha = get_git_sha()
     current_time = datetime.now().isoformat(timespec="seconds")
+    
+    # デバッグ情報（UIが出る前に死ぬ問題を回避する保険）
+    # 最低限の情報をprintで出力（Cloudログで確認可能）
+    db_path = Path("materials.db")
+    if db_path.exists():
+        try:
+            import sqlite3
+            import hashlib
+            conn = sqlite3.connect(str(db_path.absolute()))
+            try:
+                cursor = conn.cursor()
+                # PRAGMA table_info(materials) の列名一覧
+                cursor.execute("PRAGMA table_info(materials)")
+                columns = cursor.fetchall()
+                column_names = [col[1] for col in columns[:20]]  # col[1] = column name
+                print(f"[DEBUG] DB path: {db_path.absolute()}")
+                print(f"[DEBUG] DB columns (first 20): {', '.join(column_names)}")
+                
+                # sha256取得（先頭16桁）
+                with open(db_path, 'rb') as f:
+                    db_content = f.read()
+                    sha256_hash = hashlib.sha256(db_content).hexdigest()
+                    sha256_prefix = sha256_hash[:16]
+                    print(f"[DEBUG] DB sha256 (first 16): {sha256_prefix}")
+            finally:
+                conn.close()
+        except Exception as e:
+            import traceback
+            print(f"[DEBUG] DB check failed: {e}\n{traceback.format_exc()}")
+    
     with st.sidebar:
         st.caption(f"build: {sha}")
         st.caption(f"time: {current_time}")
         
         # デバッグ情報（一時的）
         with st.expander("🔧 Debug (temporary)", expanded=False):
+            # DBパスとスキーマ情報（UIが出る前に死ぬ問題を回避する保険）
+            st.write("**DB初期診断:**")
+            st.write(f"- **DB path:** {db_path.absolute()}")
+            
+            # PRAGMA table_info(materials) の列名一覧
+            if db_path.exists():
+                try:
+                    import sqlite3
+                    conn = sqlite3.connect(str(db_path.absolute()))
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute("PRAGMA table_info(materials)")
+                        columns = cursor.fetchall()
+                        column_names = [row[1] for row in columns[:20]]  # 最初の20件
+                        st.write(f"- **materials列名（先頭20件）:** {', '.join(column_names)}")
+                        if len(columns) > 20:
+                            st.write(f"  (他 {len(columns) - 20} 列)")
+                    finally:
+                        conn.close()
+                except Exception as e:
+                    st.write(f"- **列名取得エラー:** {str(e)}")
+            else:
+                st.write("- **DB path:** 見つかりませんでした")
+            
+            st.write("---")
+            
             # materials.db の情報
-            db_path = Path("materials.db")
             if db_path.exists():
                 stat = db_path.stat()
                 st.write("**materials.db 情報:**")
@@ -1050,21 +1171,85 @@ def main():
                 st.write(f"- **mtime:** {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
                 st.write(f"- **size:** {stat.st_size:,} bytes ({stat.st_size / 1024:.2f} KB)")
                 
-                # DBのmaterials件数（sqlite3で直接取得）
+                # DBのmaterials件数とsha256（sqlite3で直接取得）
                 try:
                     import sqlite3
+                    import hashlib
                     conn = sqlite3.connect(str(db_path.absolute()))
                     try:
                         cursor = conn.cursor()
+                        # 件数取得
                         cursor.execute("SELECT COUNT(*) FROM materials")
                         material_count = cursor.fetchone()[0]
                         st.write(f"- **materials件数:** {material_count} 件 (sqlite3)")
+                        
+                        # sha256取得（先頭16桁）
+                        with open(db_path, 'rb') as f:
+                            db_content = f.read()
+                            sha256_hash = hashlib.sha256(db_content).hexdigest()
+                            sha256_prefix = sha256_hash[:16]
+                            st.write(f"- **sha256 (先頭16桁):** {sha256_prefix}")
+                        
+                        # PRAGMA table_info(materials) の列名一覧（最初の20件）
+                        cursor.execute("PRAGMA table_info(materials)")
+                        columns = cursor.fetchall()
+                        column_names = [col[1] for col in columns[:20]]  # col[1] = column name
+                        st.write(f"- **columns (最初の20件):** {', '.join(column_names)}")
+                        if len(columns) > 20:
+                            st.write(f"  (他 {len(columns) - 20} 件)")
+                        
+                        # 先頭レコードの材料名取得（count>0の時）
+                        if material_count > 0:
+                            cursor.execute("SELECT name_official, name FROM materials LIMIT 1")
+                            row = cursor.fetchone()
+                            if row:
+                                first_name = row[0] or row[1] or "N/A"
+                                st.write(f"- **first material name:** {first_name}")
+                            else:
+                                st.write(f"- **first material name:** (取得失敗)")
+                        else:
+                            st.write(f"- **first material name:** (DBが空)")
                     finally:
                         conn.close()
                 except Exception as e:
+                    import traceback
                     st.write(f"- **materials件数:** エラー ({str(e)})")
+                    st.write(f"- **詳細:** {traceback.format_exc()}")
             else:
                 st.write("**materials.db:** 見つかりませんでした ❌")
+            
+            st.write("---")
+            
+            # card_generator/schemasのimportエラー情報
+            if _card_generator_import_error:
+                st.write("**card_generator/schemas import エラー:**")
+                st.write(f"- **エラー:** {_card_generator_import_error}")
+                with st.expander("詳細なトレースバック", expanded=False):
+                    st.code(_card_generator_import_traceback, language="python")
+            else:
+                st.write("**card_generator/schemas import:** ✅ 成功")
+            
+            st.write("---")
+            
+            # 画像ファイルの情報（アルミニウム）
+            st.write("**画像ファイル情報（アルミニウム）:**")
+            material_slug = "アルミニウム"
+            material_image_dir = Path("static/images/materials") / material_slug
+            
+            for image_type, filename in [("primary", "primary.jpg"), ("space", "space.jpg"), ("product", "product.jpg")]:
+                if image_type == "primary":
+                    image_path = material_image_dir / filename
+                else:
+                    image_path = material_image_dir / "uses" / filename
+                
+                if image_path.exists():
+                    stat = image_path.stat()
+                    st.write(f"**{image_type}:**")
+                    st.write(f"  - **path:** {image_path.absolute()}")
+                    st.write(f"  - **mtime:** {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+                    st.write(f"  - **size:** {stat.st_size:,} bytes ({stat.st_size / 1024:.2f} KB)")
+                else:
+                    st.write(f"**{image_type}:** 見つかりませんでした ❌")
             
             st.write("---")
             
@@ -1141,9 +1326,6 @@ def main():
             # エラー時は表示しない（無視）
             pass
     
-    # サンプルデータの自動投入（初回起動時のみ）
-    ensure_sample_data()
-    
     # アセット確保（生成物の自動生成）
     try:
         from utils.ensure_assets import ensure_all_assets
@@ -1154,12 +1336,26 @@ def main():
         traceback.print_exc()
         asset_stats = {}
     
-    # 画像の自動修復（起動時）
+    # サンプルデータの自動投入（INIT_SAMPLE_DATA=1 かつ DBが空の時だけ実行）
+    # init_db()の後に実行（スキーマ補完完了後）
+    # 例外が出てもアプリ起動を殺さない
     try:
-        from utils.ensure_images import ensure_images
-        ensure_images(Path.cwd())
+        ensure_sample_data()
     except Exception as e:
-        print(f"画像自動修復エラー: {e}")
+        import traceback
+        print(f"ERROR: ensure_sample_data() failed: {e}\n{traceback.format_exc()}")
+        # アプリ起動は続行
+    
+    # 画像の自動修復（環境変数フラグがある場合のみ、かつDBが空の時だけ）
+    # init_db()の後に実行（スキーマ補完完了後）
+    if should_init_sample_data():
+        try:
+            from utils.ensure_images import ensure_images
+            ensure_images(Path.cwd())
+        except Exception as e:
+            import traceback
+            print(f"ERROR: 画像自動修復エラー: {e}\n{traceback.format_exc()}")
+            # アプリ起動は続行
     
     # デバッグスイッチ（サイドバーでCSSを無効化可能）
     debug_no_css = st.sidebar.checkbox("Debug: CSSを無効化", value=False, help="白飛びが発生している場合、このチェックをONにするとCSSを無効化して表示を確認できます")
@@ -1963,7 +2159,7 @@ def show_material_cards():
         st.markdown("### 素材カード（印刷用）")
         
         # MaterialCard用のDTOを作成（ValidationErrorを防ぐ）
-        from models import MaterialCardPayload, MaterialCard, PropertyDTO
+        from schemas import MaterialCardPayload, MaterialCard, PropertyDTO
         
         card_html = None
         error_message = None

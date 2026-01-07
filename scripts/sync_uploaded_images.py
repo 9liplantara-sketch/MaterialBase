@@ -13,11 +13,14 @@ uploads/ と uploads/uses/ にある画像を static/images/materials/ に同期
 - static/images/materials/{safe_slug}/uses/space.jpg
 - static/images/materials/{safe_slug}/uses/product.jpg
 
-注意: 入力がpng/jpeg/webpでも、出力は常にJPGに統一されます。
+注意:
+- 入力が.jpg/.jpegの場合: shutil.copy2()でそのままコピー（mtimeも維持、再エンコードしない）
+- 入力が.png/.webpの場合: Pillowで開いてJPGに変換（透過は白背景合成）
 """
 import os
 import re
 import hashlib
+import shutil
 from pathlib import Path
 from PIL import Image
 from typing import Optional, Dict, Tuple, List
@@ -109,7 +112,10 @@ def files_are_identical(source_path: Path, dest_path: Path) -> bool:
 
 def copy_image_to_jpg(source_path: Path, dest_path: Path) -> Tuple[bool, bool]:
     """
-    画像をJPGに変換して保存（透過対策で白背景合成）
+    画像をJPGに変換またはコピーして保存
+    
+    - 入力が.jpg/.jpegの場合: shutil.copy2()でそのままコピー（mtimeも維持、再エンコードしない）
+    - 入力が.png/.webpの場合: Pillowで開いてJPGに変換（透過は白背景合成）
     
     Args:
         source_path: 元画像のパス（任意の拡張子）
@@ -119,10 +125,18 @@ def copy_image_to_jpg(source_path: Path, dest_path: Path) -> Tuple[bool, bool]:
         (成功した場合True, 変換が必要だった場合True)
     """
     try:
+        source_ext = source_path.suffix.lower()
+        
+        # .jpg/.jpegの場合はそのままコピー（再エンコードしない）
+        if source_ext in ['.jpg', '.jpeg']:
+            ensure_dir(dest_path.parent)
+            shutil.copy2(source_path, dest_path)  # mtimeも維持
+            return True, False  # 変換不要
+        
+        # .png/.webpの場合はJPGに変換
         # 画像を開く
         img = Image.open(source_path)
-        source_ext = source_path.suffix.lower()
-        needs_conversion = source_ext not in ['.jpg', '.jpeg']
+        needs_conversion = True
         
         # RGBモードに変換（透過対策で白背景合成）
         if img.mode in ('RGBA', 'LA', 'P'):
@@ -139,10 +153,8 @@ def copy_image_to_jpg(source_path: Path, dest_path: Path) -> Tuple[bool, bool]:
                 else:
                     rgb_img = img.convert('RGB')
             img = rgb_img
-            needs_conversion = True
         elif img.mode != 'RGB':
             img = img.convert('RGB')
-            needs_conversion = True
         
         # JPGとして保存（拡張子は常に.jpg、quality=90, optimize=True）
         ensure_dir(dest_path.parent)
@@ -348,7 +360,10 @@ def sync_images(
                 else:
                     success, converted = copy_image_to_jpg(source_path, primary_dest)
                     if success:
-                        conv_msg = f" ({ext} -> jpg変換)" if converted else " (既にjpg)"
+                        if converted:
+                            conv_msg = f" ({ext} -> jpg変換)"
+                        else:
+                            conv_msg = " (jpgそのままコピー、mtime維持)"
                         print(f"  ✅ primary: {source_path.name} -> primary.jpg{conv_msg}")
                         synced_results[material_name]['primary'] = str(primary_dest.relative_to(project_root))
                     else:
@@ -380,7 +395,10 @@ def sync_images(
                 else:
                     success, converted = copy_image_to_jpg(source_path, space_dest)
                     if success:
-                        conv_msg = f" ({ext} -> jpg変換)" if converted else " (既にjpg)"
+                        if converted:
+                            conv_msg = f" ({ext} -> jpg変換)"
+                        else:
+                            conv_msg = " (jpgそのままコピー、mtime維持)"
                         print(f"  ✅ space: {source_path.name} -> space.jpg{conv_msg}")
                         synced_results[material_name]['space'] = str(space_dest.relative_to(project_root))
                     else:
@@ -411,7 +429,10 @@ def sync_images(
                 else:
                     success, converted = copy_image_to_jpg(source_path, product_dest)
                     if success:
-                        conv_msg = f" ({ext} -> jpg変換)" if converted else " (既にjpg)"
+                        if converted:
+                            conv_msg = f" ({ext} -> jpg変換)"
+                        else:
+                            conv_msg = " (jpgそのままコピー、mtime維持)"
                         print(f"  ✅ product: {source_path.name} -> product.jpg{conv_msg}")
                         synced_results[material_name]['product'] = str(product_dest.relative_to(project_root))
                     else:

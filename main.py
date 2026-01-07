@@ -12,7 +12,7 @@ import shutil
 from pathlib import Path
 
 from database import get_db, init_db, Material, Property, Image, MaterialMetadata
-from models import (
+from schemas import (
     MaterialCreate, MaterialUpdate, Material as MaterialModel,
     PropertyCreate, Property, Image as ImageModel, Metadata as MetadataModel,
     MaterialCard
@@ -208,7 +208,7 @@ async def get_material_card(material_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Material not found")
     
     # MaterialCard用のDTOを作成（ValidationErrorを防ぐ）
-    from models import MaterialCardPayload, PropertyDTO
+    from schemas import MaterialCardPayload, PropertyDTO
     
     try:
         # 主要画像を取得

@@ -248,6 +248,69 @@ class ProcessExampleImage(Base):
 
 
 # データベーステーブルの作成
+def _sqlite_ensure_columns(db_path: str, table: str, required: dict[str, str]) -> list[str]:
+    """
+    SQLiteテーブルに不足カラムを自動追加
+    
+    Args:
+        db_path: データベースファイルのパス
+        table: テーブル名
+        required: {column_name: sqlite_type_sql} の辞書
+                 例: {"main_elements": "TEXT"}
+    
+    Returns:
+        追加されたカラム名のリスト
+    """
+    import sqlite3
+    
+    con = sqlite3.connect(db_path)
+    cur = con.cursor()
+    cur.execute(f"PRAGMA table_info({table})")
+    existing = {row[1] for row in cur.fetchall()}  # row[1] = column name
+    
+    added = []
+    for col, coltype in required.items():
+        if col not in existing:
+            try:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
+                added.append(col)
+            except Exception as e:
+                print(f"Warning: Failed to add column {col} to {table}: {e}")
+    
+    con.commit()
+    con.close()
+    return added
+
+
+def migrate_sqlite_schema_if_needed() -> None:
+    """
+    materials.db を壊さず、足りない列だけ足す。
+    """
+    from pathlib import Path
+    
+    # engine.url.database が "./materials.db" みたいな形でも動くように正規化
+    db_path = getattr(engine.url, "database", None) or "materials.db"
+    db_path = db_path.lstrip("/")  # 念のため
+    p = Path(db_path)
+    
+    # DBが無ければ create_all が作るのでここでは何もしない
+    if not p.exists():
+        return
+    
+    # まずは今回落ちてるカラムだけ確実に足す
+    required_materials = {
+        "main_elements": "TEXT",  # JSON文字列でもOK
+    }
+    
+    try:
+        added = _sqlite_ensure_columns(str(p), "materials", required_materials)
+        if added:
+            print(f"[DB MIGRATION] Added columns to materials: {added}")
+    except Exception as e:
+        # 起動を止めない（Cloudでログ確認できるようにする）
+        print(f"[DB MIGRATION] Failed: {e}")
+
+
 def init_db():
     """
     データベースを初期化（既存テーブルは保持）
@@ -270,7 +333,12 @@ def init_db():
     注意: 一意制約は既存テーブルに追加できない場合がある（SQLite制限）ため、
           アプリ側のロジックでも二重ガードを実装
     """
+    # 既存のDBがあっても create_all は無害（足りないテーブルだけ作る）
     Base.metadata.create_all(bind=engine)
+    
+    # SQLiteの不足カラム補完（今回のコア修正）
+    if engine.url.get_backend_name() == "sqlite":
+        migrate_sqlite_schema_if_needed()
     
     # 既存データベースへのカラム追加（安全にALTER）
     try:

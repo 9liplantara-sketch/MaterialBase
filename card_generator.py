@@ -1,7 +1,7 @@
 """
 素材カード生成モジュール - マテリアル感のあるリッチなデザイン版
 """
-from models import MaterialCard
+from schemas import MaterialCard
 import qrcode
 from io import BytesIO
 import base64
@@ -82,6 +82,20 @@ def generate_material_card(card_data: MaterialCard) -> str:
     }
     primary_color = category_colors.get(material_category, "#667eea")
     secondary_color = "#764ba2"
+    
+    # f-string内でバックスラッシュを使うための変数
+    translate_y_up = "translateY(-2px)"
+    translate_y_zero = "translateY(0)"
+    box_shadow_hover = "0 15px 40px rgba(102, 126, 234, 0.4)"
+    box_shadow_normal = "0 10px 30px rgba(102, 126, 234, 0.3)"
+    display_none = "none"
+    display_block = "block"
+    
+    # 画像のonerror属性用のJavaScriptコード
+    if primary_image_path:
+        img_onerror = f'this.style.display="{display_none}"; this.nextElementSibling.style.display="{display_block}";'
+    else:
+        img_onerror = ""
     
     html = f"""
     <!DOCTYPE html>
@@ -357,8 +371,8 @@ def generate_material_card(card_data: MaterialCard) -> str:
             
             <div class="card-body">
                 <div class="image-section">
-                    {f'<img src="{image_url}" alt="{material_name}" class="material-image" onerror="this.style.display=\'none\'; this.nextElementSibling.style.display=\'block\';">' if primary_image_path else ''}
-                    {f'<div class="no-image" style="display:none;">📷 画像なし</div>' if primary_image_path else '<div class="no-image">📷 画像なし</div>'}
+                    {f'<img src="{image_url}" alt="{material_name}" class="material-image" onerror="{img_onerror}">' if primary_image_path else ''}
+                    {'<div class="no-image" style="display:none;">📷 画像なし</div>' if primary_image_path else '<div class="no-image">📷 画像なし</div>'}
                 </div>
                 
                 <div class="properties-section">
@@ -401,10 +415,10 @@ def generate_material_card(card_data: MaterialCard) -> str:
                 border: none;
                 border-radius: 30px;
                 cursor: pointer;
-                box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+                box-shadow: {box_shadow_normal};
                 transition: all 0.3s ease;
-            " onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 15px 40px rgba(102, 126, 234, 0.4)';" 
-               onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 10px 30px rgba(102, 126, 234, 0.3)';">
+            " onmouseover="this.style.transform='{translate_y_up}'; this.style.boxShadow='{box_shadow_hover}';" 
+               onmouseout="this.style.transform='{translate_y_zero}'; this.style.boxShadow='{box_shadow_normal}';">
                 🖨️ 印刷
             </button>
         </div>

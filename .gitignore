@@ -48,3 +48,4 @@ Thumbs.db
 .streamlit/secrets.toml
 
 動画/
+!materials.db
