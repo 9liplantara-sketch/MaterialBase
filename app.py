@@ -1351,12 +1351,12 @@ def render_debug_sidebar_early():
                                     st.write(f"❌ {getattr(m, 'name_official', None) or 'N/A'}: {e}")
                                     with st.expander("詳細", expanded=False):
                                         st.code(traceback.format_exc())
-                    else:
-                        st.write("- **materials:** 0件（DBが空）")
-                    except Exception as e:
-                        st.warning("materials取得失敗（DB debugだけ表示）")
-                        with st.expander("詳細", expanded=False):
-                            st.code(traceback.format_exc())
+                            else:
+                                st.write("- **materials:** 0件（DBが空）")
+                        except Exception as e:
+                            st.warning("materials取得失敗（DB debugだけ表示）")
+                            with st.expander("詳細", expanded=False):
+                                st.code(traceback.format_exc())
                 except Exception as e:
                     # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
                     st.sidebar.warning("Sidebar: 画像探索情報の取得に失敗")
