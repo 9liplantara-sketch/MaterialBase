@@ -2,14 +2,14 @@
 画像表示の1本化モジュール
 すべての画像表示をこのモジュール経由で行う
 URL優先、フォールバックでローカルパス
+Streamlit Cloud対応（キャッシュ対策含む）
 """
+import os
 import streamlit as st
 from pathlib import Path
 from PIL import Image as PILImage
 from typing import Optional, Tuple, Union, Dict
-from utils.image_health import check_image_health, resolve_image_path, normalize_image_path
 from utils.paths import resolve_path
-from image_generator import ensure_material_image
 
 
 def get_display_image_source(
@@ -71,27 +71,81 @@ def get_display_image_source(
     # ローカルパスがある場合は画像を読み込んで返す（例外時もアプリは落ちない）
     if file_path:
         try:
-            # パスを解決
-            resolved_path = resolve_path(file_path) if not Path(file_path).is_absolute() else Path(file_path)
+            # パスを解決（複数の可能性を試す）
+            resolved_paths = []
             
-            if resolved_path.exists():
-                pil_img = PILImage.open(resolved_path)
-                # RGBモードに変換
-                if pil_img.mode != 'RGB':
-                    if pil_img.mode in ('RGBA', 'LA', 'P'):
-                        rgb_img = PILImage.new('RGB', pil_img.size, (255, 255, 255))
-                        if pil_img.mode == 'RGBA':
-                            rgb_img.paste(pil_img, mask=pil_img.split()[3])
-                        elif pil_img.mode == 'LA':
-                            rgb_img.paste(pil_img.convert('RGB'), mask=pil_img.split()[1])
-                        else:
-                            rgb_img = pil_img.convert('RGB')
-                        pil_img = rgb_img
-                    else:
-                        pil_img = pil_img.convert('RGB')
-                return pil_img
-        except Exception:
+            # 1. 絶対パスの場合
+            if Path(file_path).is_absolute():
+                resolved_paths.append(Path(file_path))
+            else:
+                # 2. 相対パスの場合、複数の可能性を試す
+                # uploads/ からの相対パス
+                resolved_paths.append(project_root / "uploads" / file_path)
+                # static/images/materials/ からの相対パス（統一構成対応）
+                # file_pathが "1_image.jpg" のような形式の場合、材料名から推測
+                if "_" in file_path and file_path[0].isdigit():
+                    # material_id_filename 形式の場合
+                    parts = file_path.split("_", 1)
+                    if len(parts) == 2:
+                        material_id = parts[0]
+                        filename = parts[1]
+                        # DBから材料名を取得してパスを構築（オプション）
+                        # ここでは直接uploads/を試す
+                        pass
+                # プロジェクトルートからの相対パス
+                resolved_paths.append(project_root / file_path)
+                # static/images/ からの相対パス
+                resolved_paths.append(project_root / "static" / "images" / file_path)
+                # static/images/materials/ からの相対パス
+                resolved_paths.append(project_root / "static" / "images" / "materials" / file_path)
+                # そのまま
+                resolved_paths.append(Path(file_path))
+            
+            # 最初に見つかったパスを使用（最新のファイルを優先）
+            found_paths = []
+            for resolved_path in resolved_paths:
+                try:
+                    if resolved_path.exists() and resolved_path.is_file():
+                        # ファイルの更新日時を取得（最新のファイルを優先）
+                        mtime = resolved_path.stat().st_mtime
+                        found_paths.append((mtime, resolved_path))
+                except Exception:
+                    continue
+            
+            # 最新のファイルを選択（更新日時でソート）
+            if found_paths:
+                found_paths.sort(key=lambda x: x[0], reverse=True)
+                resolved_path = found_paths[0][1]
+                
+                try:
+                    # Streamlit Cloudでのキャッシュ対策: ファイルを強制的に再読み込み
+                    # ファイルを開いてすぐにメモリに読み込む
+                    with open(resolved_path, 'rb') as f:
+                        pil_img = PILImage.open(f)
+                        # 画像をメモリに読み込んでから閉じる（ファイルハンドルの問題を回避）
+                        pil_img.load()
+                        # RGBモードに変換
+                        if pil_img.mode != 'RGB':
+                            if pil_img.mode in ('RGBA', 'LA', 'P'):
+                                rgb_img = PILImage.new('RGB', pil_img.size, (255, 255, 255))
+                                if pil_img.mode == 'RGBA':
+                                    rgb_img.paste(pil_img, mask=pil_img.split()[3])
+                                elif pil_img.mode == 'LA':
+                                    rgb_img.paste(pil_img.convert('RGB'), mask=pil_img.split()[1])
+                                else:
+                                    rgb_img = pil_img.convert('RGB')
+                                pil_img = rgb_img
+                            else:
+                                pil_img = pil_img.convert('RGB')
+                        return pil_img
+                except Exception as e:
+                    # 読み込みエラーは無視してNoneを返す（アプリは落ちない）
+                    if os.getenv("DEBUG_IMAGE", "false").lower() == "true":
+                        print(f"画像読み込みエラー: {resolved_path} - {e}")
+                    pass
+        except Exception as e:
             # 読み込みエラーは無視してNoneを返す（アプリは落ちない）
+            print(f"画像読み込みエラー: {file_path} - {e}")
             pass
     
     return None
@@ -156,381 +210,4 @@ def display_image_unified(
     except Exception:
         # 全体の例外時もアプリは落ちない（画像だけスキップ）
         pass
-
-
-def get_material_image(
-    material,
-    project_root: Optional[Path] = None,
-    auto_regenerate: bool = True
-) -> Tuple[Optional[PILImage.Image], str, str]:
-    """
-    材料の画像を取得（健康状態チェック付き）
-    
-    Args:
-        material: Materialオブジェクト
-        project_root: プロジェクトルートのパス
-        auto_regenerate: 画像が存在しない場合に自動再生成するか
-    
-    Returns:
-        (PILImage, status, message) のタプル
-        - PILImage: 画像オブジェクト（取得できない場合はNone）
-        - status: "ok" | "missing" | "corrupt" | "blackout" | "regenerated" | "error"
-        - message: ステータスメッセージ
-    """
-    if project_root is None:
-        project_root = Path.cwd()
-    else:
-        project_root = Path(project_root)
-    
-    # 材料に画像が登録されているか確認
-    if not material.images:
-        if auto_regenerate:
-            # 自動再生成を試みる
-            try:
-                from database import SessionLocal
-                db = SessionLocal()
-                try:
-                    image_path = ensure_material_image(
-                        material.name_official or material.name,
-                        material.category_main or material.category or "その他",
-                        material.id,
-                        db
-                    )
-                    db.commit()
-                    if image_path:
-                        # 再生成成功、再帰的に取得
-                        return get_material_image(material, project_root, auto_regenerate=False)
-                finally:
-                    db.close()
-            except Exception as e:
-                return None, "error", f"画像再生成に失敗しました: {str(e)}"
-        
-        return None, "missing", "画像が登録されていません"
-    
-    # 最初の画像を使用
-    img_record = material.images[0]
-    
-    # パスを正規化
-    normalized_path = normalize_image_path(img_record.file_path, project_root)
-    resolved_path = resolve_image_path(img_record.file_path, project_root)
-    
-    # 健康状態をチェック
-    health = check_image_health(img_record.file_path, project_root)
-    
-    if health["status"] == "ok":
-        # 正常な画像を読み込む
-        try:
-            pil_img = PILImage.open(resolved_path)
-            # RGBモードに変換（表示時の問題を防ぐ）
-            if pil_img.mode != 'RGB':
-                if pil_img.mode in ('RGBA', 'LA', 'P'):
-                    rgb_img = PILImage.new('RGB', pil_img.size, (255, 255, 255))
-                    if pil_img.mode == 'RGBA':
-                        rgb_img.paste(pil_img, mask=pil_img.split()[3])
-                    elif pil_img.mode == 'LA':
-                        rgb_img.paste(pil_img.convert('RGB'), mask=pil_img.split()[1])
-                    else:
-                        rgb_img = pil_img.convert('RGB')
-                    pil_img = rgb_img
-                else:
-                    pil_img = pil_img.convert('RGB')
-            
-            return pil_img, "ok", "画像は正常です"
-        except Exception as e:
-            return None, "error", f"画像の読み込みに失敗しました: {str(e)}"
-    
-    elif health["status"] == "blackout":
-        # 黒画像の場合は再生成を試みる
-        if auto_regenerate:
-            try:
-                from database import SessionLocal
-                db = SessionLocal()
-                try:
-                    # 既存の画像レコードを削除
-                    from database import Image as ImageModel
-                    db.query(ImageModel).filter(ImageModel.id == img_record.id).delete()
-                    
-                    # 再生成
-                    image_path = ensure_material_image(
-                        material.name_official or material.name,
-                        material.category_main or material.category or "その他",
-                        material.id,
-                        db
-                    )
-                    db.commit()
-                    if image_path:
-                        # 再生成成功、再帰的に取得
-                        return get_material_image(material, project_root, auto_regenerate=False)
-                finally:
-                    db.close()
-            except Exception as e:
-                return None, "error", f"画像再生成に失敗しました: {str(e)}"
-        
-        return None, "blackout", f"画像が黒塗りです: {health['reason']}"
-    
-    elif health["status"] == "missing":
-        # ファイル不存在の場合は再生成を試みる
-        if auto_regenerate:
-            try:
-                from database import SessionLocal
-                db = SessionLocal()
-                try:
-                    image_path = ensure_material_image(
-                        material.name_official or material.name,
-                        material.category_main or material.category or "その他",
-                        material.id,
-                        db
-                    )
-                    db.commit()
-                    if image_path:
-                        # 再生成成功、再帰的に取得
-                        return get_material_image(material, project_root, auto_regenerate=False)
-                finally:
-                    db.close()
-            except Exception as e:
-                return None, "error", f"画像再生成に失敗しました: {str(e)}"
-        
-        return None, "missing", f"画像ファイルが存在しません: {health['reason']}"
-    
-    else:
-        # その他のエラー
-        return None, health["status"], health["reason"]
-
-
-def display_material_image(
-    material,
-    caption: Optional[str] = None,
-    width: Optional[int] = None,
-    use_container_width: bool = False,
-    project_root: Optional[Path] = None
-):
-    """
-    材料の画像を表示（健康状態チェック付き、自動修復対応）
-    
-    Args:
-        material: Materialオブジェクト
-        caption: 画像キャプション
-        width: 画像幅
-        use_container_width: コンテナ幅を使用するか
-        project_root: プロジェクトルートのパス
-    """
-    pil_img, status, message = get_material_image(material, project_root, auto_regenerate=True)
-    
-    if status == "ok" and pil_img:
-        # 正常な画像を表示
-        st.image(pil_img, caption=caption, width=width, use_container_width=use_container_width)
-    elif status == "regenerated":
-        # 再生成成功
-        st.success(f"✅ 画像を再生成しました: {message}")
-        # 再取得して表示
-        pil_img, status, message = get_material_image(material, project_root, auto_regenerate=False)
-        if status == "ok" and pil_img:
-            st.image(pil_img, caption=caption, width=width, use_container_width=use_container_width)
-    else:
-        # エラー時はプレースホルダーを表示（決して黒画像は出さない）
-        st.warning(f"⚠️ {message}")
-        # プレースホルダー画像を生成
-        placeholder = PILImage.new('RGB', (400, 300), (240, 240, 240))
-        from PIL import ImageDraw, ImageFont
-        draw = ImageDraw.Draw(placeholder)
-        try:
-            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 24)
-        except:
-            font = ImageFont.load_default()
-        text = "画像なし"
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        draw.text(
-            ((400 - text_width) // 2, (300 - text_height) // 2),
-            text,
-            fill=(150, 150, 150),
-            font=font
-        )
-        st.image(placeholder, caption="プレースホルダー", width=width, use_container_width=use_container_width)
-
-
-def find_material_image_paths(
-    material_name_or_slug: str,
-    project_root: Optional[Path] = None
-) -> Dict[str, Optional[Path]]:
-    """
-    材料の画像パスを探索（統一構成に対応・命名規則100%対応）
-    
-    探索順序（拡張子優先順位: jpg > jpeg > png > webp）:
-    1. static/images/materials/{safe_slug}/primary.jpg
-    2. static/images/materials/{safe_slug}/primary.jpeg
-    3. static/images/materials/{safe_slug}/primary.png
-    4. static/images/materials/{safe_slug}/primary.webp
-    5. static/images/materials/{safe_slug}/uses/space.jpg
-    6. static/images/materials/{safe_slug}/uses/space.jpeg
-    7. static/images/materials/{safe_slug}/uses/space.png
-    8. static/images/materials/{safe_slug}/uses/space.webp
-    9. static/images/materials/{safe_slug}/uses/product.jpg
-    10. static/images/materials/{safe_slug}/uses/product.jpeg
-    11. static/images/materials/{safe_slug}/uses/product.png
-    12. static/images/materials/{safe_slug}/uses/product.webp
-    
-    旧仕様フォールバック（後方互換性）:
-    - static/images/materials/{safe_slug}/primary/primary.*
-    - static/images/materials/{safe_slug}/uses/{name}1.*
-    - static/images/materials/{safe_slug}/uses/{name}2.*
-    
-    Args:
-        material_name_or_slug: 材料名またはスラッグ
-        project_root: プロジェクトルートのパス
-    
-    Returns:
-        {
-            'primary': Path or None,
-            'space': Path or None,
-            'product': Path or None
-        }
-    """
-    if project_root is None:
-        project_root = resolve_path('.')
-    else:
-        project_root = Path(project_root)
-    
-    # 安全なスラッグに変換
-    import re
-    safe_slug = material_name_or_slug.strip()
-    forbidden_chars = r'[/\\:*?"<>|]'
-    safe_slug = re.sub(forbidden_chars, '_', safe_slug)
-    
-    material_dir = project_root / 'static' / 'images' / 'materials' / safe_slug
-    
-    result = {
-        'primary': None,
-        'space': None,
-        'product': None
-    }
-    
-    # JPG固定運用：まずjpgのみ探索（最優先）
-    # primary画像を探索（新仕様: primary.jpg）
-    primary_path = material_dir / 'primary.jpg'
-    if primary_path.exists():
-        result['primary'] = primary_path
-    else:
-        # 旧仕様フォールバック: primary/primary.jpg
-        primary_dir = material_dir / 'primary'
-        if primary_dir.exists():
-            old_primary_path = primary_dir / 'primary.jpg'
-            if old_primary_path.exists():
-                result['primary'] = old_primary_path
-    
-    # uses画像を探索
-    uses_dir = material_dir / 'uses'
-    if uses_dir.exists():
-        # space画像を探索（新仕様: uses/space.jpg）
-        space_path = uses_dir / 'space.jpg'
-        if space_path.exists():
-            result['space'] = space_path
-        else:
-            # 旧仕様フォールバック: uses/{name}1.jpg
-            old_space_path = uses_dir / f'{material_name_or_slug}1.jpg'
-            if old_space_path.exists():
-                result['space'] = old_space_path
-        
-        # product画像を探索（新仕様: uses/product.jpg）
-        product_path = uses_dir / 'product.jpg'
-        if product_path.exists():
-            result['product'] = product_path
-        else:
-            # 旧仕様フォールバック: uses/{name}2.jpg
-            old_product_path = uses_dir / f'{material_name_or_slug}2.jpg'
-            if old_product_path.exists():
-                result['product'] = old_product_path
-    
-    return result
-
-
-def display_material_image_paths(
-    material_name_or_slug: str,
-    caption_prefix: Optional[str] = None,
-    project_root: Optional[Path] = None
-):
-    """
-    材料の画像を表示（統一構成に対応、プレースホルダー対応）
-    
-    Args:
-        material_name_or_slug: 材料名またはスラッグ
-        caption_prefix: キャプションのプレフィックス（例: "材料: "）
-        project_root: プロジェクトルートのパス
-    """
-    paths = find_material_image_paths(material_name_or_slug, project_root)
-    
-    # primary画像を表示
-    if paths['primary']:
-        caption = f"{caption_prefix or ''}メイン画像" if caption_prefix else "メイン画像"
-        try:
-            img = PILImage.open(paths['primary'])
-            if img.mode != 'RGB':
-                if img.mode in ('RGBA', 'LA', 'P'):
-                    rgb_img = PILImage.new('RGB', img.size, (255, 255, 255))
-                    if img.mode == 'RGBA':
-                        rgb_img.paste(img, mask=img.split()[3])
-                    elif img.mode == 'LA':
-                        rgb_img.paste(img.convert('RGB'), mask=img.split()[1])
-                    else:
-                        rgb_img = img.convert('RGB')
-                    img = rgb_img
-                else:
-                    img = img.convert('RGB')
-            st.image(img, caption=caption, use_container_width=True)
-        except Exception:
-            display_image_unified(None, caption=caption)
-    else:
-        display_image_unified(None, caption=f"{caption_prefix or ''}メイン画像" if caption_prefix else "メイン画像")
-    
-    # uses画像を表示（space, product）
-    if paths['space'] or paths['product']:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if paths['space']:
-                caption = f"{caption_prefix or ''}空間の使用例" if caption_prefix else "空間の使用例"
-                try:
-                    img = PILImage.open(paths['space'])
-                    if img.mode != 'RGB':
-                        if img.mode in ('RGBA', 'LA', 'P'):
-                            rgb_img = PILImage.new('RGB', img.size, (255, 255, 255))
-                            if img.mode == 'RGBA':
-                                rgb_img.paste(img, mask=img.split()[3])
-                            elif img.mode == 'LA':
-                                rgb_img.paste(img.convert('RGB'), mask=img.split()[1])
-                            else:
-                                rgb_img = img.convert('RGB')
-                            img = rgb_img
-                        else:
-                            img = img.convert('RGB')
-                    st.image(img, caption=caption, use_container_width=True)
-                except Exception:
-                    display_image_unified(None, caption=caption)
-            else:
-                display_image_unified(None, caption=f"{caption_prefix or ''}空間の使用例" if caption_prefix else "空間の使用例")
-        
-        with col2:
-            if paths['product']:
-                caption = f"{caption_prefix or ''}プロダクトの使用例" if caption_prefix else "プロダクトの使用例"
-                try:
-                    img = PILImage.open(paths['product'])
-                    if img.mode != 'RGB':
-                        if img.mode in ('RGBA', 'LA', 'P'):
-                            rgb_img = PILImage.new('RGB', img.size, (255, 255, 255))
-                            if img.mode == 'RGBA':
-                                rgb_img.paste(img, mask=img.split()[3])
-                            elif img.mode == 'LA':
-                                rgb_img.paste(img.convert('RGB'), mask=img.split()[1])
-                            else:
-                                rgb_img = img.convert('RGB')
-                            img = rgb_img
-                        else:
-                            img = img.convert('RGB')
-                    st.image(img, caption=caption, use_container_width=True)
-                except Exception:
-                    display_image_unified(None, caption=caption)
-            else:
-                display_image_unified(None, caption=f"{caption_prefix or ''}プロダクトの使用例" if caption_prefix else "プロダクトの使用例")
-
 

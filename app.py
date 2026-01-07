@@ -6,6 +6,16 @@ import streamlit as st
 import os
 import subprocess
 
+def get_build_sha() -> str:
+    # Streamlit Cloudではgitコマンドが使えることが多い
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        return sha
+    except Exception:
+        return "unknown"
 from pathlib import Path
 from typing import Optional
 from PIL import Image as PILImage
@@ -28,23 +38,24 @@ from periodic_table_ui import show_periodic_table
 from material_detail_tabs import show_material_detail_tabs
 
 # Git SHA取得関数（ビルド情報表示用）
+import subprocess
+
 def get_git_sha() -> str:
+    """Gitの短縮SHAを取得（失敗時は'no-git'を返す）"""
     try:
-        return subprocess.check_output(
+        sha = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
-    except Exception:
-        return os.environ.get("GIT_SHA", "unknown")
+            stderr=subprocess.DEVNULL
+        ).decode("utf-8").strip()
+        return sha
+    except (subprocess.CalledProcessError, FileNotFoundError, Exception):
+        return "no-git"
 
 # クラウド環境でのポート設定
 if 'PORT' in os.environ:
     port = int(os.environ.get("PORT", 8501))
 
-# バージョン情報を取得
-from material_map_version import APP_VERSION, BUILD_TIME_UTC
-
-# ページ設定（タイトルを"Material Map"に統一）
+# ページ設定
 st.set_page_config(
     page_title="Material Map",
     page_icon=None,
@@ -1021,11 +1032,29 @@ def get_assets_mode_stats():
 
 
 def main():
-    # ビルド情報をサイドバーに表示（Version/Build表示）
+    # ビルド情報をサイドバーに表示
+    sha = get_git_sha()
+    current_time = datetime.now().isoformat(timespec="seconds")
     with st.sidebar:
-        st.markdown("---")
-        st.caption(f"**Version:** {APP_VERSION}")
-        st.caption(f"**Build:** {BUILD_TIME_UTC}")
+        st.caption(f"build: {sha}")
+        st.caption(f"time: {current_time}")
+        
+        # デバッグ情報（一時的）
+        with st.expander("🔧 Debug (temporary)", expanded=False):
+            base = Path("static/images/materials/アルミニウム")
+            st.write("cwd:", os.getcwd())
+            st.write("exists base:", base.exists(), str(base))
+            if base.exists():
+                st.write("base files:", [p.name for p in base.glob("*")])
+            uses = base / "uses"
+            st.write("exists uses:", uses.exists(), str(uses))
+            if uses.exists():
+                st.write("uses files:", [p.name for p in uses.glob("*")])
+            # 他の材料も確認
+            materials_dir = Path("static/images/materials")
+            if materials_dir.exists():
+                st.write("materials dir exists")
+                st.write("materials:", [p.name for p in materials_dir.iterdir() if p.is_dir()][:10])
         
         # Assets Mode診断
         try:
@@ -1101,7 +1130,7 @@ def main():
         st.warning("デバッグモード: CSSが無効化されています。表示が正常な場合、CSSが原因です。")
     
     # ヘッダー - WOTA風シンプル
-    st.markdown('<h1 class="main-header">マテリアルデータベース</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">Material Map</h1>', unsafe_allow_html=True)
     st.markdown('<p style="text-align: left; color: #666; font-size: 0.95rem; margin-bottom: 3rem; font-weight: 400; letter-spacing: 0.01em;">素材の可能性を探索するデータベース</p>', unsafe_allow_html=True)
     
     # ページ状態の初期化
@@ -1162,7 +1191,7 @@ def main():
         
         st.markdown("""
         <div style="text-align: center; padding: 20px 0; color: #666;">
-            <small>Material Database v1.0</small>
+            <small>Material Map v1.0</small>
         </div>
         """, unsafe_allow_html=True)
     
@@ -1297,51 +1326,36 @@ def show_home():
                 col_img, col_info = st.columns([1, 3])
                 
                 with col_img:
-                    # サムネ画像を表示（統一構成対応）
-                    from utils.image_display import find_material_image_paths, display_image_unified
-                    from PIL import Image as PILImage
+                    # サムネ画像を表示（キャッシュ対策: Base64エンコードで直接表示）
+                    from utils.image_display import get_display_image_source, display_image_unified
+                    import hashlib
+                    import time
                     
-                    # 材料名から画像パスを探索
-                    material_name = material.name_official or material.name
-                    image_paths = find_material_image_paths(material_name, Path.cwd())
+                    # 材料の主画像を取得（Imageテーブルから）
+                    image_source = None
+                    if material.images:
+                        image_source = get_display_image_source(material.images[0], Path.cwd())
                     
-                    # primary画像を優先、なければ既存のImageテーブルから取得
-                    if image_paths['primary']:
-                        try:
-                            img = PILImage.open(image_paths['primary'])
-                            if img.mode != 'RGB':
-                                if img.mode in ('RGBA', 'LA', 'P'):
-                                    rgb_img = PILImage.new('RGB', img.size, (255, 255, 255))
-                                    if img.mode == 'RGBA':
-                                        rgb_img.paste(img, mask=img.split()[3])
-                                    elif img.mode == 'LA':
-                                        rgb_img.paste(img.convert('RGB'), mask=img.split()[1])
-                                    else:
-                                        rgb_img = img.convert('RGB')
-                                    img = rgb_img
-                                else:
-                                    img = img.convert('RGB')
-                            thumb_size = (120, 120)
-                            img.thumbnail(thumb_size, PILImage.Resampling.LANCZOS)
-                            st.image(img, width=120, use_container_width=False)
-                        except Exception:
-                            display_image_unified(None, width=120, placeholder_size=(120, 120))
-                    else:
-                        # フォールバック: 既存のImageテーブルから取得
-                        from utils.image_display import get_display_image_source
-                        image_source = None
-                        if material.images:
-                            image_source = get_display_image_source(material.images[0], Path.cwd())
-                        
-                        if image_source:
-                            if isinstance(image_source, str):
-                                st.image(image_source, width=120, use_container_width=False)
-                            else:
-                                thumb_size = (120, 120)
-                                image_source.thumbnail(thumb_size, PILImage.Resampling.LANCZOS)
-                                st.image(image_source, width=120, use_container_width=False)
+                    # サムネサイズで表示（プレースホルダー付き）
+                    if image_source:
+                        # URLの場合はそのまま、PILImageの場合はBase64エンコード
+                        if isinstance(image_source, str):
+                            # URLの場合はキャッシュ回避のためタイムスタンプを追加
+                            separator = "&" if "?" in image_source else "?"
+                            st.image(f"{image_source}{separator}_t={int(time.time())}", width=120, use_container_width=False)
                         else:
-                            display_image_unified(None, width=120, placeholder_size=(120, 120))
+                            # PILImageの場合はBase64エンコードして直接表示（キャッシュ回避）
+                            thumb_size = (120, 120)
+                            image_source.thumbnail(thumb_size, PILImage.Resampling.LANCZOS)
+                            buffer = BytesIO()
+                            image_source.save(buffer, format='PNG')
+                            img_base64 = base64.b64encode(buffer.getvalue()).decode()
+                            # 画像のハッシュをキーとして使用（キャッシュ対策）
+                            img_hash = hashlib.md5(buffer.getvalue()).hexdigest()[:8]
+                            st.image(f"data:image/png;base64,{img_base64}", width=120, use_container_width=False)
+                    else:
+                        # プレースホルダーを表示
+                        display_image_unified(None, width=120, placeholder_size=(120, 120))
                 
                 with col_info:
                     # 材料名
@@ -1468,62 +1482,30 @@ def show_materials_list():
                 material_name = material.name_official or material.name or "名称不明"
                 material_desc = material.description or ""
                 
-                # 素材画像を取得（統一構成対応）
-                from utils.image_display import find_material_image_paths, get_display_image_source, display_image_unified
-                from PIL import Image as PILImage
-                import base64
-                from io import BytesIO
+                # 素材画像を取得（キャッシュ対策: Base64エンコードで直接表示）
+                from utils.image_display import get_display_image_source, display_image_unified
+                import hashlib
+                import time
                 
-                # 材料名から画像パスを探索
-                image_paths = find_material_image_paths(material_name, Path.cwd())
-                
-                # primary画像を優先、なければ既存のImageテーブルから取得
                 image_source = None
-                if image_paths['primary']:
-                    try:
-                        img = PILImage.open(image_paths['primary'])
-                        if img.mode != 'RGB':
-                            if img.mode in ('RGBA', 'LA', 'P'):
-                                rgb_img = PILImage.new('RGB', img.size, (255, 255, 255))
-                                if img.mode == 'RGBA':
-                                    rgb_img.paste(img, mask=img.split()[3])
-                                elif img.mode == 'LA':
-                                    rgb_img.paste(img.convert('RGB'), mask=img.split()[1])
-                                else:
-                                    rgb_img = img.convert('RGB')
-                                img = rgb_img
-                            else:
-                                img = img.convert('RGB')
-                        # Base64エンコード
-                        buffer = BytesIO()
-                        img.save(buffer, format='PNG')
-                        img_base64 = base64.b64encode(buffer.getvalue()).decode()
-                        image_source = f"data:image/png;base64,{img_base64}"
-                    except Exception:
-                        pass
-                
-                # フォールバック: 既存のImageテーブルから取得
-                if not image_source and material.images:
+                if material.images:
                     image_source = get_display_image_source(material.images[0], Path.cwd())
-                    if isinstance(image_source, PILImage.Image):
-                        # PILImageの場合はBase64に変換
-                        buffer = BytesIO()
-                        image_source.save(buffer, format='PNG')
-                        img_base64 = base64.b64encode(buffer.getvalue()).decode()
-                        image_source = f"data:image/png;base64,{img_base64}"
                 
-                # 画像HTML（プレースホルダー含む）
+                # 画像HTML（プレースホルダー含む、キャッシュ回避）
                 if image_source:
                     if isinstance(image_source, str):
-                        # URLの場合は直接使用
-                        img_html = f'<img src="{image_source}" class="material-hero-image" alt="{material_name}" />'
+                        # URLの場合はキャッシュ回避のためタイムスタンプを追加
+                        separator = "&" if "?" in image_source else "?"
+                        img_html = f'<img src="{image_source}{separator}_t={int(time.time())}" class="material-hero-image" alt="{material_name}" />'
                     else:
-                        # PILImageの場合はBase64エンコード
+                        # PILImageの場合はBase64エンコード（キャッシュ回避）
                         from io import BytesIO
                         import base64
                         buffer = BytesIO()
                         image_source.save(buffer, format='PNG')
                         img_base64 = base64.b64encode(buffer.getvalue()).decode()
+                        # 画像のハッシュをキーとして使用（キャッシュ対策）
+                        img_hash = hashlib.md5(buffer.getvalue()).hexdigest()[:8]
                         img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
                 else:
                     # プレースホルダー
