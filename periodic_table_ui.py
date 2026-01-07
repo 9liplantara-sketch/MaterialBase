@@ -501,9 +501,8 @@ def render_element_detail_panel(element: Dict):
     image_path = get_element_image_path(element)
     if image_path and Path(image_path).exists():
         try:
-            from PIL import Image as PILImage
-            img = PILImage.open(image_path)
-            st.image(img, caption=f"{display_name} ({element.get('symbol', '')})", width=200)
+            from utils.image_display import display_image_unified
+            display_image_unified(Path(image_path), caption=f"{display_name} ({element.get('symbol', '')})", width=200)
         except Exception as e:
             st.warning(f"画像の読み込みに失敗しました: {e}")
     

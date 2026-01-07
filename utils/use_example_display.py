@@ -46,7 +46,8 @@ def display_use_example_image(
             fill=(150, 150, 150),
             font=font
         )
-        st.image(placeholder, width=width)
+        from utils.image_display import display_image_unified
+        display_image_unified(placeholder, width=width)
         return
     
     # パスを正規化・解決
@@ -57,29 +58,9 @@ def display_use_example_image(
     health = check_image_health(use_example.image_path, project_root)
     
     if health["status"] == "ok":
-        # 正常な画像を読み込む
-        try:
-            pil_img = PILImage.open(resolved_path)
-            # RGBモードに変換
-            if pil_img.mode != 'RGB':
-                if pil_img.mode in ('RGBA', 'LA', 'P'):
-                    rgb_img = PILImage.new('RGB', pil_img.size, (255, 255, 255))
-                    if pil_img.mode == 'RGBA':
-                        rgb_img.paste(pil_img, mask=pil_img.split()[3])
-                    elif pil_img.mode == 'LA':
-                        rgb_img.paste(pil_img.convert('RGB'), mask=pil_img.split()[1])
-                    else:
-                        rgb_img = pil_img.convert('RGB')
-                    pil_img = rgb_img
-                else:
-                    pil_img = pil_img.convert('RGB')
-            
-            st.image(pil_img, width=width)
-        except Exception as e:
-            st.warning(f"画像の読み込みに失敗: {e}")
-            # プレースホルダーを表示
-            placeholder = PILImage.new('RGB', (280, 200), (240, 240, 240))
-            st.image(placeholder, width=width)
+        # 正常な画像を表示（display_image_unifiedを使用）
+        from utils.image_display import display_image_unified
+        display_image_unified(resolved_path, width=width)
     else:
         # エラー時はプレースホルダーを表示
         st.warning(f"画像が利用できません: {health['reason']}")
@@ -100,5 +81,6 @@ def display_use_example_image(
             fill=(150, 150, 150),
             font=font
         )
-        st.image(placeholder, width=width)
+        from utils.image_display import display_image_unified
+        display_image_unified(placeholder, width=width)
 

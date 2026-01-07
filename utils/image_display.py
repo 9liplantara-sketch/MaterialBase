@@ -1,7 +1,7 @@
 """
 画像表示の1本化モジュール
 すべての画像表示をこのモジュール経由で行う
-safe_slug基準で統一、IMAGE_BASE_URL対応
+safe_slug基準で統一、IMAGE_BASE_URL対応、差し替え運用対応
 """
 import os
 import streamlit as st
@@ -40,12 +40,13 @@ def get_material_image_ref(
     project_root: Optional[Path] = None
 ) -> Tuple[Optional[Union[str, Path]], Dict]:
     """
-    材料の画像参照を取得（safe_slug基準で統一）
+    材料の画像参照を取得（safe_slug基準で統一、差し替え運用対応）
     
     優先順位:
-    A. DBに明示URLがあるならそれ（texture_image_url / use_examples.image_url）
-    B. 環境変数 IMAGE_BASE_URL があれば、規約URLを組み立ててそれ
-    C. ローカル fallback: static/images/materials/{safe_slug}/primary.jpg 等
+    A. DBの明示URL（http/httpsのみ）
+    B. IMAGE_BASE_URL が設定されていれば規約URLを組み立てて採用
+    C. ローカルファイル fallback（リポジトリ内）
+    D. 旧互換 fallback（日本語ディレクトリ）※ただし C が無い場合のみ
     
     Args:
         material: Materialオブジェクト
@@ -65,19 +66,32 @@ def get_material_image_ref(
     # safe_slugを生成（唯一のキー）
     safe_slug = safe_slug_from_material(material)
     
+    # kindごとの相対パス
+    if kind == "primary":
+        relative_path = f"materials/{safe_slug}/primary.jpg"
+    elif kind == "space":
+        relative_path = f"materials/{safe_slug}/uses/space.jpg"
+    elif kind == "product":
+        relative_path = f"materials/{safe_slug}/uses/product.jpg"
+    else:
+        relative_path = None
+    
     debug_info = {
         "kind": kind,
         "material_id": getattr(material, 'id', None),
         "material_name": getattr(material, 'name_official', None) or getattr(material, 'name', None),
         "safe_slug": safe_slug,
-        "source": None,
         "chosen_branch": None,
+        "image_version_value": None,
         "candidate_urls": [],
         "candidate_paths": [],
+        "failed_paths": [],
         "final_src_type": None,
-        "final_path_exists": None,
         "final_url": None,
-        "base_dir_sample": [],
+        "final_path": None,
+        "final_path_exists": None,
+        "size": None,
+        "mtime": None,
     }
     
     # base_dirのディレクトリ一覧を取得（デバッグ用）
@@ -89,7 +103,7 @@ def get_material_image_ref(
         except Exception as e:
             debug_info["base_dir_error"] = str(e)
     
-    # A. DBに明示URLがあるならそれ
+    # A. DBの明示URL（http/httpsのみ）
     url = None
     
     if kind == "primary":
@@ -98,8 +112,10 @@ def get_material_image_ref(
         use_examples = getattr(material, 'use_examples', [])
         if use_examples:
             for use_ex in use_examples:
-                use_type = getattr(use_ex, 'domain', None) or ""
-                if (kind == "space" and "空間" in use_type) or (kind == "product" and "プロダクト" in use_type):
+                use_domain = getattr(use_ex, 'domain', None) or ""
+                # domainが"space"または"product"に一致するか、日本語で一致するか
+                if (kind == "space" and ("space" in use_domain.lower() or "空間" in use_domain)) or \
+                   (kind == "product" and ("product" in use_domain.lower() or "プロダクト" in use_domain)):
                     url = getattr(use_ex, 'image_url', None)
                     if url:
                         break
@@ -109,123 +125,121 @@ def get_material_image_ref(
         separator = "&" if "?" in url else "?"
         image_version = os.getenv("IMAGE_VERSION") or APP_VERSION or "dev"
         url_with_cache = f"{url}{separator}v={image_version}"
-        debug_info["source"] = "db_url"
         debug_info["chosen_branch"] = "db_url"
+        debug_info["image_version_value"] = image_version
         debug_info["final_src_type"] = "url"
         debug_info["final_url"] = url_with_cache
-        debug_info["cache_buster"] = image_version
         return url_with_cache, debug_info
     
-    # B. 環境変数 IMAGE_BASE_URL があれば、規約URLを組み立ててそれ
+    # B. IMAGE_BASE_URL が設定されていれば規約URLを組み立てて採用
     image_base_url = os.getenv("IMAGE_BASE_URL")
-    if image_base_url:
+    if image_base_url and relative_path:
         base_url_clean = image_base_url.rstrip('/')
-        if kind == "primary":
-            base_url = f"{base_url_clean}/materials/{safe_slug}/primary.jpg"
-        elif kind == "space":
-            base_url = f"{base_url_clean}/materials/{safe_slug}/uses/space.jpg"
-        elif kind == "product":
-            base_url = f"{base_url_clean}/materials/{safe_slug}/uses/product.jpg"
-        else:
-            base_url = None
+        base_url = f"{base_url_clean}/{relative_path}"
+        debug_info["candidate_urls"].append(base_url)
+        separator = "&" if "?" in base_url else "?"
+        image_version = os.getenv("IMAGE_VERSION") or APP_VERSION or "dev"
+        url_with_cache = f"{base_url}{separator}v={image_version}"
+        debug_info["chosen_branch"] = "base_url"
+        debug_info["image_version_value"] = image_version
+        debug_info["final_src_type"] = "url"
+        debug_info["final_url"] = url_with_cache
+        return url_with_cache, debug_info
+    
+    # C. ローカルファイル fallback（リポジトリ内）
+    if relative_path:
+        local_path = project_root / "static" / "images" / relative_path
         
-        if base_url:
-            debug_info["candidate_urls"].append(base_url)
-            separator = "&" if "?" in base_url else "?"
-            image_version = os.getenv("IMAGE_VERSION") or APP_VERSION or "dev"
-            url_with_cache = f"{base_url}{separator}v={image_version}"
-            debug_info["source"] = "base_url"
-            debug_info["chosen_branch"] = "base_url"
-            debug_info["base_url"] = image_base_url
-            debug_info["final_src_type"] = "url"
-            debug_info["final_url"] = url_with_cache
-            debug_info["cache_buster"] = image_version
-            return url_with_cache, debug_info
-    
-    # C. ローカル fallback: static/images/materials/{safe_slug}/primary.jpg 等
-    material_dir = base_dir / safe_slug
-    
-    # kindに応じた画像パスを取得
-    candidates = []
-    if kind == "primary":
-        candidates = [material_dir / "primary.jpg"]
-    elif kind == "space":
-        candidates = [material_dir / "uses" / "space.jpg"]
-    elif kind == "product":
-        candidates = [material_dir / "uses" / "product.jpg"]
-    
-    # 候補パスをdebug_infoに追加
-    for candidate in candidates:
-        abs_path = str(candidate.resolve())
+        abs_path = str(local_path.resolve())
         debug_info["candidate_paths"].append(abs_path)
-        exists = candidate.exists() and candidate.is_file()
-        if not exists:
-            debug_info.setdefault("failed_paths", []).append({
+        
+        if local_path.exists() and local_path.is_file():
+            debug_info["chosen_branch"] = "local"
+            debug_info["final_src_type"] = "path"
+            debug_info["final_path"] = abs_path
+            debug_info["final_path_exists"] = True
+            try:
+                stat = local_path.stat()
+                debug_info["size"] = stat.st_size
+                debug_info["mtime"] = stat.st_mtime
+            except Exception as e:
+                debug_info["stat_error"] = str(e)
+            return local_path, debug_info
+        else:
+            debug_info["failed_paths"].append({
                 "path": abs_path,
-                "exists": False,
-                "is_file": candidate.is_file() if candidate.exists() else False
+                "exists": local_path.exists(),
+                "is_file": local_path.is_file() if local_path.exists() else False
             })
     
-    # 存在する最初の候補を採用
-    image_path = None
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_file():
-            image_path = candidate
-            break
-    
-    # 旧日本語フォルダのフォールバック（safe_slugパスが無い場合のみ）
-    if image_path is None:
+    # D. 旧互換 fallback（日本語ディレクトリ）※ただし C が無い場合のみ
+    if base_dir.exists():
+        # material.name_official / material.name / aliases で一致するフォルダを探す
+        candidates_raw = []
         material_name = getattr(material, 'name_official', None) or getattr(material, 'name', None) or ""
         if material_name:
-            # 注釈を除去（例: "アルミニウム（Al）" -> "アルミニウム"）
+            candidates_raw.append(material_name)
+            # 注釈を除去
             name_without_annotation = re.sub(r'[（(].*?[）)]', '', material_name).strip()
-            old_safe_slug = name_without_annotation.strip()
+            if name_without_annotation != material_name:
+                candidates_raw.append(name_without_annotation)
+        
+        # name_aliases を分解
+        aliases = getattr(material, "name_aliases", None)
+        if aliases:
+            if isinstance(aliases, list):
+                candidates_raw.extend([str(x) for x in aliases if x])
+            else:
+                candidates_raw.extend([x.strip() for x in str(aliases).split(",") if x.strip()])
+        
+        # 実フォルダと照合
+        for candidate_name in candidates_raw:
+            if not candidate_name:
+                continue
+            old_safe_slug = candidate_name.strip()
             forbidden_chars = r'[/\\:*?"<>|]'
             old_safe_slug = re.sub(forbidden_chars, '_', old_safe_slug)
             
             old_material_dir = base_dir / old_safe_slug
-            old_candidates = []
-            if kind == "primary":
-                old_candidates = [old_material_dir / "primary.jpg"]
-            elif kind == "space":
-                old_candidates = [old_material_dir / "uses" / "space.jpg"]
-            elif kind == "product":
-                old_candidates = [old_material_dir / "uses" / "product.jpg"]
-            
-            for old_candidate in old_candidates:
-                abs_path = str(old_candidate.resolve())
-                debug_info["candidate_paths"].append(abs_path)
-                if old_candidate.exists() and old_candidate.is_file():
-                    image_path = old_candidate
-                    debug_info["chosen_branch"] = "local_old_slug"
-                    debug_info["old_safe_slug"] = old_safe_slug
-                    break
+            if old_material_dir.exists() and old_material_dir.is_dir():
+                # kindに応じた画像パス
+                if kind == "primary":
+                    old_candidate = old_material_dir / "primary.jpg"
+                elif kind == "space":
+                    old_candidate = old_material_dir / "uses" / "space.jpg"
+                elif kind == "product":
+                    old_candidate = old_material_dir / "uses" / "product.jpg"
                 else:
-                    debug_info.setdefault("failed_paths", []).append({
-                        "path": abs_path,
-                        "exists": False,
-                        "is_file": old_candidate.is_file() if old_candidate.exists() else False
-                    })
+                    old_candidate = None
+                
+                if old_candidate:
+                    abs_path = str(old_candidate.resolve())
+                    debug_info["candidate_paths"].append(abs_path)
+                    
+                    if old_candidate.exists() and old_candidate.is_file():
+                        debug_info["chosen_branch"] = "legacy_jp"
+                        debug_info["final_src_type"] = "path"
+                        debug_info["final_path"] = abs_path
+                        debug_info["final_path_exists"] = True
+                        debug_info["legacy_dir"] = old_safe_slug
+                        try:
+                            stat = old_candidate.stat()
+                            debug_info["size"] = stat.st_size
+                            debug_info["mtime"] = stat.st_mtime
+                        except Exception as e:
+                            debug_info["stat_error"] = str(e)
+                        return old_candidate, debug_info
+                    else:
+                        debug_info["failed_paths"].append({
+                            "path": abs_path,
+                            "exists": old_candidate.exists(),
+                            "is_file": old_candidate.is_file() if old_candidate.exists() else False
+                        })
     
-    if image_path:
-        debug_info["source"] = "local"
-        debug_info["chosen_branch"] = debug_info.get("chosen_branch", "local")
-        debug_info["resolved_path"] = str(image_path.resolve())
-        debug_info["final_src_type"] = "path"
-        debug_info["final_path_exists"] = True
-        try:
-            stat = image_path.stat()
-            debug_info["size"] = stat.st_size
-            debug_info["mtime"] = stat.st_mtime
-        except Exception as e:
-            debug_info["stat_error"] = str(e)
-        return image_path, debug_info
-    else:
-        debug_info["source"] = "not_found"
-        debug_info["chosen_branch"] = "not_found"
-        debug_info["final_src_type"] = None
-        debug_info["final_path_exists"] = False
-    
+    # 見つからない場合
+    debug_info["chosen_branch"] = "none"
+    debug_info["final_src_type"] = None
+    debug_info["final_path_exists"] = False
     return None, debug_info
 
 
@@ -267,8 +281,8 @@ def to_data_url(image_path: Path) -> Optional[str]:
 def display_image_unified(
     image_source: Optional[Union[str, Path, PILImage.Image]],
     caption: Optional[str] = None,
-    width: Optional[int] = None,
-    use_container_width: bool = False
+    width: Union[Literal["stretch", "content"], int, None] = "stretch",
+    debug: Optional[Dict] = None
 ):
     """
     画像を統一的な方法で表示（URL/Path/PILImage対応）
@@ -276,8 +290,8 @@ def display_image_unified(
     Args:
         image_source: URL文字列、Pathオブジェクト、またはPILImage
         caption: キャプション
-        width: 幅（ピクセル）
-        use_container_width: コンテナ幅を使用するか
+        width: 幅（"stretch", "content", またはピクセル数）
+        debug: デバッグ情報（DEBUG=1のときのみ表示）
     """
     if image_source is None:
         # プレースホルダーを表示
@@ -285,32 +299,70 @@ def display_image_unified(
             f'<div style="width: 100%; height: 200px; background: #f0f0f0; display: flex; align-items: center; justify-content: center; color: #666;">画像なし</div>',
             unsafe_allow_html=True
         )
+        # DEBUG=1のときのみdebug情報を表示
+        if debug and os.getenv("DEBUG", "0") == "1":
+            with st.expander("🔍 デバッグ情報", expanded=False):
+                st.json(debug)
         return
     
     try:
         if isinstance(image_source, str):
             # URLまたはdata URL
             if image_source.startswith(('http://', 'https://', 'data:')):
-                st.image(image_source, caption=caption, width=width, use_container_width=use_container_width)
+                # widthが"stretch"の場合はNoneに変換（Streamlitのデフォルト動作）
+                width_param = None if width == "stretch" else width
+                st.image(image_source, caption=caption, width=width_param)
             else:
-                # ローカルパス文字列
+                # ローカルパス文字列の場合はPathとして処理
                 path = Path(image_source)
-                if path.exists():
-                    st.image(str(path), caption=caption, width=width, use_container_width=use_container_width)
+                if path.exists() and path.is_file():
+                    img = PILImage.open(path)
+                    if img.mode != 'RGB':
+                        if img.mode in ('RGBA', 'LA', 'P'):
+                            rgb_img = PILImage.new('RGB', img.size, (255, 255, 255))
+                            if img.mode == 'RGBA':
+                                rgb_img.paste(img, mask=img.split()[3])
+                            elif img.mode == 'LA':
+                                rgb_img.paste(img.convert('RGB'), mask=img.split()[1])
+                            else:
+                                rgb_img = img.convert('RGB')
+                            img = rgb_img
+                        else:
+                            img = img.convert('RGB')
+                    width_param = None if width == "stretch" else width
+                    st.image(img, caption=caption, width=width_param)
                 else:
-                    display_image_unified(None, caption=caption)
+                    display_image_unified(None, caption=caption, debug=debug)
         elif isinstance(image_source, Path):
-            # Pathオブジェクト
-            if image_source.exists():
-                st.image(str(image_source), caption=caption, width=width, use_container_width=use_container_width)
+            # Pathオブジェクト: PILで開いてst.imageに渡す
+            if image_source.exists() and image_source.is_file():
+                img = PILImage.open(image_source)
+                if img.mode != 'RGB':
+                    if img.mode in ('RGBA', 'LA', 'P'):
+                        rgb_img = PILImage.new('RGB', img.size, (255, 255, 255))
+                        if img.mode == 'RGBA':
+                            rgb_img.paste(img, mask=img.split()[3])
+                        elif img.mode == 'LA':
+                            rgb_img.paste(img.convert('RGB'), mask=img.split()[1])
+                        else:
+                            rgb_img = img.convert('RGB')
+                        img = rgb_img
+                    else:
+                        img = img.convert('RGB')
+                width_param = None if width == "stretch" else width
+                st.image(img, caption=caption, width=width_param)
             else:
-                display_image_unified(None, caption=caption)
+                display_image_unified(None, caption=caption, debug=debug)
         elif isinstance(image_source, PILImage.Image):
             # PILImage
-            st.image(image_source, caption=caption, width=width, use_container_width=use_container_width)
+            width_param = None if width == "stretch" else width
+            st.image(image_source, caption=caption, width=width_param)
         else:
-            display_image_unified(None, caption=caption)
+            display_image_unified(None, caption=caption, debug=debug)
     except Exception as e:
-        if os.getenv("DEBUG_IMAGE", "false").lower() == "true":
+        if os.getenv("DEBUG_IMAGE", "false").lower() == "true" or os.getenv("DEBUG", "0") == "1":
             st.error(f"画像表示エラー: {e}")
-        display_image_unified(None, caption=caption)
+            if debug:
+                with st.expander("🔍 デバッグ情報", expanded=False):
+                    st.json(debug)
+        display_image_unified(None, caption=caption, debug=debug)

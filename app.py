@@ -1062,8 +1062,8 @@ def show_asset_diagnostics(asset_stats: dict):
                     for idx, filepath in enumerate(preview_files):
                         with cols[idx % 3]:
                             try:
-                                img = PILImage.open(filepath)
-                                st.image(img, caption=filepath.name, width=150)
+                                from utils.image_display import display_image_unified
+                                display_image_unified(filepath, caption=filepath.name, width=150)
                             except Exception as e:
                                 st.caption(f"{filepath.name} (読み込みエラー)")
     
@@ -1189,25 +1189,26 @@ def render_debug_sidebar_early():
             with st.sidebar.expander("詳細", expanded=False):
                 st.sidebar.exception(e)
         
-        # デバッグ情報（一時的）
-        with st.expander("🔧 Debug (temporary)", expanded=True):  # 初期は展開
-            # 環境情報（例外が起きても続行）
-            try:
-                st.write("**環境情報:**")
-                st.write(f"- **cwd:** {str(Path.cwd())}")
-                st.write(f"- **__file__:** {__file__}")
-            except Exception as e:
-                # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
-                st.sidebar.warning("Sidebar: env debug failed")
-                with st.sidebar.expander("詳細", expanded=False):
-                    st.sidebar.exception(e)
-            
-            st.write("---")
-            
-            # DB fingerprint（ここで落ちてもアプリは止めない）
-            try:
-                # 絶対パス固定（相対パス事故を潰す）
-                db_path = Path(__file__).parent / "materials.db"
+        # デバッグ情報（DEBUG=1のときのみ表示）
+        if os.getenv("DEBUG", "0") == "1":
+            with st.expander("🔧 Debug", expanded=False):
+                # 環境情報（例外が起きても続行）
+                try:
+                    st.write("**環境情報:**")
+                    st.write(f"- **cwd:** {str(Path.cwd())}")
+                    st.write(f"- **__file__:** {__file__}")
+                except Exception as e:
+                    # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
+                    st.sidebar.warning("Sidebar: env debug failed")
+                    with st.sidebar.expander("詳細", expanded=False):
+                        st.sidebar.exception(e)
+                
+                st.write("---")
+                
+                # DB fingerprint（ここで落ちてもアプリは止めない）
+                try:
+                    # 絶対パス固定（相対パス事故を潰す）
+                    db_path = Path(__file__).parent / "materials.db"
                 st.write("**materials.db fingerprint:**")
                 
                 if not db_path.exists():
@@ -1238,137 +1239,129 @@ def render_debug_sidebar_early():
                                 st.write(f"- **first material name:** {first_name}")
                     finally:
                         con.close()
-            except Exception as e:
-                # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
-                st.sidebar.warning("Sidebar: DB fingerprint failed")
-                with st.sidebar.expander("詳細", expanded=False):
-                    st.sidebar.exception(e)
-            
-            st.write("---")
-            
-            # card_generator/schemasのimportエラー情報
-            try:
-                if _card_generator_import_error:
-                    st.write("**card_generator/schemas import エラー:**")
-                    st.write(f"- **エラー:** {_card_generator_import_error}")
-                    with st.expander("詳細なトレースバック", expanded=False):
-                        st.code(_card_generator_import_traceback, language="python")
-                else:
-                    st.write("**card_generator/schemas import:** ✅ 成功")
-            except Exception as e:
-                # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
-                st.sidebar.warning("Sidebar: import error debug failed")
-                with st.sidebar.expander("詳細", expanded=False):
-                    st.sidebar.exception(e)
-            
-            st.write("---")
-            
-            # 画像探索の詳細情報（Cloud上で実際のフォルダ・画像を確認）
-            try:
-                from utils.image_display import resolve_material_dir_name
-                import re
+                except Exception as e:
+                    # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
+                    st.sidebar.warning("Sidebar: DB fingerprint failed")
+                    with st.sidebar.expander("詳細", expanded=False):
+                        st.sidebar.exception(e)
                 
-                base = Path(__file__).parent / "static" / "images" / "materials"
-                # Cloud Secretsの前提を明記
-                image_base_url = os.getenv("IMAGE_BASE_URL")
-                image_version = os.getenv("IMAGE_VERSION")
-                st.write("**Cloud Secrets:**")
-                st.write(f"- **IMAGE_BASE_URL:** {'設定済み' if image_base_url else '未設定'}")
-                if image_base_url:
-                    # 伏字で表示（最初の10文字のみ）
-                    masked = image_base_url[:10] + "..." if len(image_base_url) > 10 else image_base_url
-                    st.write(f"  - 値: {masked}")
-                st.write(f"- **IMAGE_VERSION:** {'設定済み' if image_version else '未設定'}")
-                if image_version:
-                    st.write(f"  - 値: {image_version[:10]}...")
+                st.write("---")
                 
-                st.write("**画像探索情報:**")
-                st.write(f"- **base dir:** {str(base)}")
-                
-                if base.exists():
-                    dirs = [p.name for p in base.iterdir() if p.is_dir()]
-                    primaries = list(base.glob("*/primary.jpg"))
-                    st.write(f"- **dir count:** {len(dirs)}")
-                    st.write(f"- **dirs (sample, 先頭30):** {dirs[:30]}")
-                    st.write(f"- **primary.jpg count:** {len(primaries)}")
-                else:
-                    st.warning(f"base dir not exists: {base}")
-                    dirs = []
-                
-                # materialsを取得できている前提（取れない時はDB debugだけ出す）
+                # card_generator/schemasのimportエラー情報
                 try:
-                    materials = get_all_materials()
-                    if materials:
-                        st.write(f"- **materials count:** {len(materials)}")
-                        st.write("**素材ごとの探索結果:**")
-                        
-                        for m in materials[:30]:  # 先頭30件のみ
-                            try:
-                                # safe_slug生成（既存ロジック）
-                                material_name = getattr(m, 'name_official', None) or getattr(m, 'name', None) or ""
-                                safe_slug = material_name.strip()
-                                forbidden_chars = r'[/\\:*?"<>|]'
-                                safe_slug = re.sub(forbidden_chars, '_', safe_slug)
-                                
-                                # get_material_image_refを使用して画像参照を取得
-                                from utils.image_display import get_material_image_ref
-                                
-                                # project_rootはbaseの親の親の親（static/images/materials -> static/images -> static -> プロジェクトルート）
-                                project_root = base.parent.parent.parent
-                                primary_src, primary_debug = get_material_image_ref(m, "primary", project_root)
-                                space_src, space_debug = get_material_image_ref(m, "space", project_root)
-                                product_src, product_debug = get_material_image_ref(m, "product", project_root)
-                                
-                                material_display_name = getattr(m, 'name_official', None) or getattr(m, 'name', None) or "N/A"
-                                
-                                with st.expander(f"📦 {material_display_name}", expanded=False):
-                                    # safe_slugとbase_dir_sampleを表示
-                                    safe_slug = primary_debug.get('safe_slug', 'N/A')
-                                    base_dir_sample = primary_debug.get('base_dir_sample', [])
-                                    chosen_branch = primary_debug.get('chosen_branch', 'unknown')
-                                    final_src_type = primary_debug.get('final_src_type', 'unknown')
-                                    final_path_exists = primary_debug.get('final_path_exists', False)
+                    if _card_generator_import_error:
+                        st.write("**card_generator/schemas import エラー:**")
+                        st.write(f"- **エラー:** {_card_generator_import_error}")
+                        with st.expander("詳細なトレースバック", expanded=False):
+                            st.code(_card_generator_import_traceback, language="python")
+                    else:
+                        st.write("**card_generator/schemas import:** ✅ 成功")
+                except Exception as e:
+                    # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
+                    st.sidebar.warning("Sidebar: import error debug failed")
+                    with st.sidebar.expander("詳細", expanded=False):
+                        st.sidebar.exception(e)
+                
+                st.write("---")
+                
+                # 画像探索の詳細情報（Cloud上で実際のフォルダ・画像を確認）
+                try:
+                    from utils.image_display import get_material_image_ref
+                    import re
+                    
+                    base = Path(__file__).parent / "static" / "images" / "materials"
+                    # Cloud Secretsの前提を明記
+                    image_base_url = os.getenv("IMAGE_BASE_URL")
+                    image_version = os.getenv("IMAGE_VERSION")
+                    st.write("**Cloud Secrets:**")
+                    st.write(f"- **IMAGE_BASE_URL:** {'設定済み' if image_base_url else '未設定'}")
+                    if image_base_url:
+                        # 伏字で表示（最初の10文字のみ）
+                        masked = image_base_url[:10] + "..." if len(image_base_url) > 10 else image_base_url
+                        st.write(f"  - 値: {masked}")
+                    st.write(f"- **IMAGE_VERSION:** {'設定済み' if image_version else '未設定'}")
+                    if image_version:
+                        st.write(f"  - 値: {image_version[:10]}...")
+                    
+                    st.write("**画像探索情報:**")
+                    st.write(f"- **base dir:** {str(base)}")
+                    
+                    if base.exists():
+                        dirs = [p.name for p in base.iterdir() if p.is_dir()]
+                        primaries = list(base.glob("*/primary.jpg"))
+                        st.write(f"- **dir count:** {len(dirs)}")
+                        st.write(f"- **dirs (sample, 先頭30):** {dirs[:30]}")
+                        st.write(f"- **primary.jpg count:** {len(primaries)}")
+                    else:
+                        st.warning(f"base dir not exists: {base}")
+                        dirs = []
+                    
+                    # materialsを取得できている前提（取れない時はDB debugだけ出す）
+                    try:
+                        materials = get_all_materials()
+                        if materials:
+                            st.write(f"- **materials count:** {len(materials)}")
+                            st.write("**素材ごとの探索結果:**")
+                            
+                            for m in materials[:30]:  # 先頭30件のみ
+                                try:
+                                    # get_material_image_refを使用して画像参照を取得
+                                    # project_rootはbaseの親の親の親（static/images/materials -> static/images -> static -> プロジェクトルート）
+                                    project_root = base.parent.parent.parent
+                                    primary_src, primary_debug = get_material_image_ref(m, "primary", project_root)
+                                    space_src, space_debug = get_material_image_ref(m, "space", project_root)
+                                    product_src, product_debug = get_material_image_ref(m, "product", project_root)
                                     
-                                    st.write(f"**safe_slug:** {safe_slug}")
-                                    st.write(f"**base_dir_sample:** {', '.join(base_dir_sample[:10])}..." if len(base_dir_sample) > 10 else f"**base_dir_sample:** {', '.join(base_dir_sample)}")
-                                    st.write(f"**chosen_branch:** {chosen_branch}")
-                                    st.write(f"**final_src_type:** {final_src_type}")
-                                    st.write(f"**final_path_exists:** {final_path_exists}")
+                                    material_display_name = getattr(m, 'name_official', None) or getattr(m, 'name', None) or "N/A"
                                     
-                                    if primary_src:
-                                        if isinstance(primary_src, str):
-                                            st.write(f"**final_url:** {primary_src[:80]}..." if len(primary_src) > 80 else f"**final_url:** {primary_src}")
-                                        elif isinstance(primary_src, Path):
-                                            st.write(f"**final_path:** {primary_src.resolve()}")
-                                    else:
-                                        st.warning("⚠️ primary.jpg not found")
-                                    
-                                    # candidate_pathsとfailed_pathsを表示
-                                    candidate_paths = primary_debug.get('candidate_paths', [])
-                                    failed_paths = primary_debug.get('failed_paths', [])
-                                    if candidate_paths:
-                                        st.write(f"**candidate_paths:** {len(candidate_paths)}件")
-                                    if failed_paths:
-                                        st.write(f"**failed_paths:** {len(failed_paths)}件")
-                                    
-                                    # 詳細情報はexpanderへ
-                                    with st.expander("🔍 詳細デバッグ情報", expanded=False):
-                                        st.json(primary_debug)
-                            except Exception as e:
-                                st.write(f"❌ {getattr(m, 'name_official', None) or 'N/A'}: {e}")
-                                with st.expander("詳細", expanded=False):
-                                    st.code(traceback.format_exc())
+                                    with st.expander(f"📦 {material_display_name}", expanded=False):
+                                        # safe_slugとbase_dir_sampleを表示
+                                        safe_slug = primary_debug.get('safe_slug', 'N/A')
+                                        base_dir_sample = primary_debug.get('base_dir_sample', [])
+                                        chosen_branch = primary_debug.get('chosen_branch', 'unknown')
+                                        final_src_type = primary_debug.get('final_src_type', 'unknown')
+                                        final_path_exists = primary_debug.get('final_path_exists', False)
+                                        
+                                        st.write(f"**safe_slug:** {safe_slug}")
+                                        st.write(f"**base_dir_sample:** {', '.join(base_dir_sample[:10])}..." if len(base_dir_sample) > 10 else f"**base_dir_sample:** {', '.join(base_dir_sample)}")
+                                        st.write(f"**chosen_branch:** {chosen_branch}")
+                                        st.write(f"**final_src_type:** {final_src_type}")
+                                        st.write(f"**final_path_exists:** {final_path_exists}")
+                                        
+                                        if primary_src:
+                                            if isinstance(primary_src, str):
+                                                st.write(f"**final_url:** {primary_src[:80]}..." if len(primary_src) > 80 else f"**final_url:** {primary_src}")
+                                            elif isinstance(primary_src, Path):
+                                                st.write(f"**final_path:** {primary_src.resolve()}")
+                                        else:
+                                            st.warning("⚠️ primary.jpg not found")
+                                        
+                                        # candidate_pathsとfailed_pathsを表示
+                                        candidate_paths = primary_debug.get('candidate_paths', [])
+                                        failed_paths = primary_debug.get('failed_paths', [])
+                                        if candidate_paths:
+                                            st.write(f"**candidate_paths:** {len(candidate_paths)}件")
+                                        if failed_paths:
+                                            st.write(f"**failed_paths:** {len(failed_paths)}件")
+                                        
+                                        # 詳細情報はexpanderへ
+                                        with st.expander("🔍 詳細デバッグ情報", expanded=False):
+                                            st.json(primary_debug)
+                                except Exception as e:
+                                    st.write(f"❌ {getattr(m, 'name_official', None) or 'N/A'}: {e}")
+                                    with st.expander("詳細", expanded=False):
+                                        st.code(traceback.format_exc())
                     else:
                         st.write("- **materials:** 0件（DBが空）")
+                    except Exception as e:
+                        st.warning("materials取得失敗（DB debugだけ表示）")
+                        with st.expander("詳細", expanded=False):
+                            st.code(traceback.format_exc())
                 except Exception as e:
-                    st.warning("materials取得失敗（DB debugだけ表示）")
-                    with st.expander("詳細", expanded=False):
-                        st.code(traceback.format_exc())
-            except Exception as e:
-                # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
-                st.sidebar.warning("Sidebar: 画像探索情報の取得に失敗")
-                with st.sidebar.expander("詳細", expanded=False):
-                    st.sidebar.exception(e)
+                    # sidebarで例外が起きたら警告を出して続行（本体描画を止めない）
+                    st.sidebar.warning("Sidebar: 画像探索情報の取得に失敗")
+                    with st.sidebar.expander("詳細", expanded=False):
+                        st.sidebar.exception(e)
 
 
 def main():

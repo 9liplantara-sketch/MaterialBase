@@ -31,6 +31,39 @@ Streamlit Cloudは無料でStreamlitアプリをホスティングできます�
    - 数分でアプリがオンラインで利用可能になります
    - URLは `https://your-app-name.streamlit.app` の形式
 
+### 画像の外部参照で差し替える手順
+
+画像を外部ホストで管理し、差し替え運用を行う場合：
+
+1. **画像ホストに画像をアップロード**
+   - 画像ホスト（例: AWS S3, Cloudflare R2, GitHub Pages等）に以下の構造でアップロード：
+     ```
+     materials/{safe_slug}/primary.jpg
+     materials/{safe_slug}/uses/space.jpg
+     materials/{safe_slug}/uses/product.jpg
+     ```
+   - `safe_slug`は材料名から自動生成されるパス安全な文字列（例: "アルミニウム" → "アルミニウム"）
+
+2. **Streamlit Cloud の Secrets に IMAGE_BASE_URL を設定**
+   - Streamlit Cloud の "Manage app" → "Secrets" を開く
+   - 以下を追加：
+     ```
+     IMAGE_BASE_URL=https://your-image-host.com
+     ```
+   - 末尾のスラッシュは不要（自動で処理されます）
+
+3. **画像差し替え時は IMAGE_VERSION を更新（デプロイ不要で反映）**
+   - Streamlit Cloud の "Secrets" で `IMAGE_VERSION` を更新：
+     ```
+     IMAGE_VERSION=v2.0.0
+     ```
+   - アプリを再起動（"Manage app" → "Reboot"）すると、画像URLに `?v=v2.0.0` が付与され、キャッシュが無効化されます
+   - デプロイ不要で画像の差し替えが反映されます
+
+### ローカルのみで回す場合
+
+`IMAGE_BASE_URL` を未設定にすると、`static/images/materials/` 内のローカルファイルを使用します。
+
 ### 必要なファイル
 
 プロジェクトルートに以下のファイルが必要です：
@@ -38,7 +71,6 @@ Streamlit Cloudは無料でStreamlitアプリをホスティングできます�
 - `app.py` - Streamlitアプリのメインファイル
 - `requirements.txt` - 依存パッケージ
 - `database.py` - データベースモデル
-- `models.py` - Pydanticモデル
 - `card_generator.py` - カード生成モジュール
 
 ## 方法2: Render
@@ -139,6 +171,13 @@ streamlit run app.py
 ```bash
 # 例: データベースURL
 DATABASE_URL=postgresql://user:password@host:port/dbname
+
+# 画像の外部参照（オプション）
+IMAGE_BASE_URL=https://your-image-host.com
+IMAGE_VERSION=v1.0.0
+
+# デバッグモード（DEBUG=1のときのみDebug欄を表示）
+DEBUG=0
 ```
 
 ## トラブルシューティング
@@ -174,4 +213,3 @@ SQLALCHEMY_DATABASE_URL = f"sqlite:///{db_path}"
 
 **小規模プロトタイプ**: Streamlit Cloud（最も簡単）
 **本格運用**: Render または Railway（PostgreSQL対応）
-

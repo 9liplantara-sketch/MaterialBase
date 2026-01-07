@@ -83,7 +83,7 @@ def show_properties_tab(material):
     # テクスチャ画像を表示（get_material_image_refを使用）
     from utils.image_display import get_material_image_ref, display_image_unified
     primary_src, primary_debug = get_material_image_ref(material, "primary", Path.cwd())
-    display_image_unified(primary_src, caption="メイン画像", use_container_width=True)
+    display_image_unified(primary_src, caption="メイン画像", width="stretch", debug=primary_debug)
     
     st.markdown("### 基本特性")
     
@@ -228,17 +228,9 @@ def show_properties_tab(material):
                             resolved_path = resolve_path(image_path) if not Path(image_path).is_absolute() else Path(image_path)
                             
                             if resolved_path.exists():
-                                # 統一関数を使用（URL優先）
-                                from utils.image_display import get_display_image_source, display_image_unified
-                                # ProcessExampleImageオブジェクトを作成（一時的）
-                                from database import ProcessExampleImage
-                                temp_process_image = ProcessExampleImage(
-                                    material_id=material.id,
-                                    process_method=method,
-                                    image_path=str(resolved_path)
-                                )
-                                image_source = get_display_image_source(temp_process_image, Path.cwd())
-                                display_image_unified(image_source, caption=method, width=280, placeholder_size=(280, 200))
+                                # Pathを直接display_image_unifiedに渡す
+                                from utils.image_display import display_image_unified
+                                display_image_unified(resolved_path, caption=method, width=280)
                             else:
                                 st.caption(f"{method} (画像ファイルが見つかりません)")
                         else:
@@ -343,9 +335,9 @@ def show_procurement_uses_tab(material):
     if space_src or product_src:
         cols = st.columns(2)
         with cols[0]:
-            display_image_unified(space_src, caption="空間の使用例", use_container_width=True)
+            display_image_unified(space_src, caption="空間の使用例", width="stretch", debug=space_debug)
         with cols[1]:
-            display_image_unified(product_src, caption="プロダクトの使用例", use_container_width=True)
+            display_image_unified(product_src, caption="プロダクトの使用例", width="stretch", debug=product_debug)
     
     # DBから取得したUseExampleも表示（フォールバック）
     try:
@@ -386,23 +378,17 @@ def show_procurement_uses_tab(material):
                         from utils.paths import resolve_path
                         image_displayed = False
                         
+                        # 画像を表示（get_material_image_refを使用しない、UseExampleは別処理）
+                        from utils.image_display import display_image_unified
                         if use_ex.image_path:
                             try:
                                 img_path = resolve_path(use_ex.image_path)
                                 if img_path.exists():
-                                    from PIL import Image as PILImage
-                                    img = PILImage.open(img_path)
-                                    if img.mode != 'RGB':
-                                        rgb_img = PILImage.new('RGB', img.size, (255, 255, 255))
-                                        if img.mode == 'RGBA':
-                                            rgb_img.paste(img, mask=img.split()[3])
-                                        else:
-                                            rgb_img = img.convert('RGB')
-                                        img = rgb_img
-                                    st.image(img, caption=use_ex.example_name, width=280)
+                                    display_image_unified(img_path, caption=use_ex.example_name, width=280)
                                     image_displayed = True
                             except Exception as e:
-                                print(f"用途写真読み込みエラー: {e}")
+                                if os.getenv("DEBUG", "0") == "1":
+                                    st.caption(f"用途写真読み込みエラー: {e}")
                         
                         # 画像がない場合は既存の表示関数を使用
                         if not image_displayed:
@@ -449,52 +435,30 @@ def show_procurement_uses_tab(material):
     st.markdown("---")
     st.markdown("### 用途イメージ画像")
     
-    # 材料の画像を表示（健康状態チェック付き）
-    from utils.image_display import display_material_image
+    # 材料の画像を表示（get_material_image_refを使用）
+    from utils.image_display import get_material_image_ref, display_image_unified
     
     if material.images:
         cols = st.columns(min(3, len(material.images)))
         for idx, img in enumerate(material.images):
             with cols[idx % 3]:
-                # 各画像レコードに対して表示（簡易版：最初の画像のみ詳細チェック）
-                if idx == 0:
-                    # 最初の画像は詳細チェック付きで表示
-                    display_material_image(
-                        material,
-                        caption=img.description or f"画像 {idx+1}",
-                        width='stretch'
-                    )
-                else:
-                    # 2枚目以降は従来の方法（後で改善可能）
-                    img_path = get_image_path(img.file_path)
-                    if img_path:
-                        try:
-                            pil_img = PILImage.open(img_path)
-                            # RGBモードに変換
-                            if pil_img.mode != 'RGB':
-                                if pil_img.mode in ('RGBA', 'LA', 'P'):
-                                    rgb_img = PILImage.new('RGB', pil_img.size, (255, 255, 255))
-                                    if pil_img.mode == 'RGBA':
-                                        rgb_img.paste(pil_img, mask=pil_img.split()[3])
-                                    elif pil_img.mode == 'LA':
-                                        rgb_img.paste(pil_img.convert('RGB'), mask=pil_img.split()[1])
-                                    else:
-                                        rgb_img = pil_img.convert('RGB')
-                                    pil_img = rgb_img
-                                else:
-                                    pil_img = pil_img.convert('RGB')
-                            st.image(pil_img, caption=img.description or f"画像 {idx+1}", width='stretch')
-                        except Exception as e:
-                            st.warning(f"画像の読み込みに失敗: {e}")
+                # 各画像レコードに対して表示
+                # DBのimage_pathがある場合はそれを使用、なければprimary画像を表示
+                if img.file_path:
+                    from utils.paths import resolve_path
+                    img_path = resolve_path(img.file_path)
+                    if img_path.exists():
+                        display_image_unified(img_path, caption=img.description or f"画像 {idx+1}", width="stretch")
                     else:
                         st.info(f"画像が見つかりません: {img.file_path}")
+                else:
+                    # file_pathがない場合はprimary画像を表示
+                    primary_src, primary_debug = get_material_image_ref(material, "primary", Path.cwd())
+                    display_image_unified(primary_src, caption=img.description or f"画像 {idx+1}", width="stretch", debug=primary_debug)
     else:
-        # 画像がない場合は自動生成を試みる
-        display_material_image(
-            material,
-            caption="自動生成画像",
-            width='stretch'
-        )
+        # 画像がない場合はprimary画像を表示
+        primary_src, primary_debug = get_material_image_ref(material, "primary", Path.cwd())
+        display_image_unified(primary_src, caption="メイン画像", width="stretch", debug=primary_debug)
 
 
 def show_history_story_tab(material):
