@@ -1355,8 +1355,20 @@ def main():
         st.warning("デバッグモード: CSSが無効化されています。表示が正常な場合、CSSが原因です。")
     
     # ヘッダー - WOTA風シンプル
+    # 本文UIの開始（Debug sidebarはrun_app_entrypointで先に描画済み）
     st.markdown('<h1 class="main-header">Material Map</h1>', unsafe_allow_html=True)
     st.markdown('<p style="text-align: left; color: #666; font-size: 0.95rem; margin-bottom: 3rem; font-weight: 400; letter-spacing: 0.01em;">素材の可能性を探索するデータベース</p>', unsafe_allow_html=True)
+    
+    # 素材件数の表示（エラーハンドリング付き）
+    try:
+        materials = get_all_materials()
+        st.write(f"素材件数: {len(materials)} 件")
+    except Exception as e:
+        st.error("❌ main() 内でエラーが発生しました")
+        import traceback
+        st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
+        # エラー時も続行（materialsを空リストとして扱う）
+        materials = []
     
     # ページ状態の初期化
     if 'page' not in st.session_state:
