@@ -58,6 +58,56 @@ except Exception as e:
     class MaterialCard(BaseModel):
         payload: MaterialCardPayload
 
+# エントリーポイント関数（本文の最初に必ず出るマーカー、main呼び出しの強制、例外の可視化）
+import traceback
+
+def _panic_screen(where: str, e: Exception):
+    """例外を可視化するパニック画面"""
+    st.error(f"💥 PANIC at: {where}")
+    st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+
+def run_app_entrypoint():
+    """
+    アプリのエントリーポイント
+    - 本文の最初に必ず出るマーカー
+    - main呼び出しの強制
+    - 例外の可視化
+    """
+    # 1) まず本文に「動いてる」印を必ず出す（ここが出なければ main が呼ばれてない等）
+    st.write("✅ app.py is running (entrypoint reached)")
+
+    # 2) 先にサイドバーDebugを描画（既存関数がある想定）
+    # 例外が起きても最後まで描く（st.stop()は呼ばない）
+    try:
+        if "render_debug_sidebar_early" in globals():
+            render_debug_sidebar_early()
+        else:
+            st.sidebar.info("render_debug_sidebar_early() not found")
+    except Exception as e:
+        _panic_screen("render_debug_sidebar_early", e)
+        # st.stop()は呼ばない（本文を表示するため）
+
+    # 3) DB初期化（落ちても本文に出す）
+    try:
+        from database import init_db
+        init_db()
+        st.write("✅ init_db() done")
+    except Exception as e:
+        _panic_screen("init_db", e)
+        # st.stop()は呼ばない（本文を表示するため）
+
+    # 4) ここから本来のUI（main）を"必ず"呼ぶ
+    try:
+        if "main" not in globals():
+            raise RuntimeError("main() function is not defined in app.py")
+        main()
+    except Exception as e:
+        _panic_screen("main()", e)
+        # st.stop()は呼ばない（本文を表示するため）
+
+# 5) Streamlit 実行では __name__ ガードで事故ることがあるので、ガード無しで呼ぶ
+run_app_entrypoint()
+
 from material_form_detailed import show_detailed_material_form
 from periodic_table_ui import show_periodic_table
 from material_detail_tabs import show_material_detail_tabs
@@ -747,10 +797,15 @@ def get_all_materials():
         materials = result.unique().scalars().all()
         return materials
     except Exception as e:
+        from sqlalchemy.exc import OperationalError
         import sqlite3
-        if isinstance(e, sqlite3.OperationalError) or "no such column" in str(e).lower():
-            # DB schema mismatchエラー
-            st.error("DB schema mismatch detected. Please check Debug (temporary) for details.")
+        
+        # OperationalErrorをキャッチ（DB query failed）
+        if isinstance(e, (OperationalError, sqlite3.OperationalError)) or "no such column" in str(e).lower():
+            # DB query failed (OperationalError) - 本文に表示してst.stop()
+            st.error("DB query failed (OperationalError)")
+            st.code(str(e))
+            st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
             # PRAGMA table_info(materials) を全部出す
             db_path = Path("materials.db")
             if db_path.exists():
@@ -763,8 +818,8 @@ def get_all_materials():
                     for col in columns:
                         st.write(f"- {col[1]} ({col[2]})")
                     conn.close()
-                except:
-                    pass
+                except Exception as inner_e:
+                    st.exception(inner_e)
             st.stop()  # 以降のUIを止める（崩壊させない）
         raise  # その他のエラーは再発生
     finally:
@@ -1118,105 +1173,114 @@ def render_debug_sidebar_early():
     """
     Debugを先に描画（UIが出る前に死ぬ問題を回避）
     DBのpath/sha/columns/件数を表示
+    例外が起きても最後まで描く（st.stop()は絶対に呼ばない）
     """
-    db_path = Path("materials.db")
+    import traceback
+    import hashlib
+    from pathlib import Path
+    import sqlite3
     
     with st.sidebar:
-        st.caption(f"build: {get_git_sha()}")
-        st.caption(f"time: {datetime.now().isoformat(timespec='seconds')}")
+        try:
+            st.caption(f"build: {get_git_sha()}")
+            st.caption(f"time: {datetime.now().isoformat(timespec='seconds')}")
+        except Exception:
+            st.write("build/time debug failed")
+            st.code(traceback.format_exc())
         
         # デバッグ情報（一時的）
         with st.expander("🔧 Debug (temporary)", expanded=True):  # 初期は展開
-            # cwd, __file__を表示
-            st.write("**環境情報:**")
-            st.write(f"- **cwd:** {Path.cwd()}")
-            st.write(f"- **__file__:** {__file__}")
+            # 環境情報（例外が起きても続行）
+            try:
+                st.write("**環境情報:**")
+                st.write(f"- **cwd:** {str(Path.cwd())}")
+                st.write(f"- **__file__:** {__file__}")
+            except Exception:
+                st.write("env debug failed")
+                st.code(traceback.format_exc())
             
             st.write("---")
             
-            # materials.db の情報
-            if db_path.exists():
-                stat = db_path.stat()
-                st.write("**materials.db 情報:**")
-                st.write(f"- **path:** {db_path.absolute()}")
-                st.write(f"- **mtime:** {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
-                st.write(f"- **size:** {stat.st_size:,} bytes ({stat.st_size / 1024:.2f} KB)")
+            # DB fingerprint（ここで落ちてもアプリは止めない）
+            try:
+                # 絶対パス固定（相対パス事故を潰す）
+                db_path = Path(__file__).parent / "materials.db"
+                st.write("**materials.db fingerprint:**")
                 
-                # DBのmaterials件数とsha256（sqlite3で直接取得）
-                try:
-                    import sqlite3
-                    import hashlib
-                    conn = sqlite3.connect(str(db_path.absolute()))
+                if not db_path.exists():
+                    st.error(f"missing: {db_path}")
+                else:
+                    b = db_path.read_bytes()
+                    st.write(f"- **abs path:** {str(db_path.resolve())}")
+                    st.write(f"- **size:** {db_path.stat().st_size:,} bytes")
+                    st.write(f"- **mtime:** {datetime.fromtimestamp(db_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+                    st.write(f"- **sha256:** {hashlib.sha256(b).hexdigest()[:16]}")
+                    
+                    con = sqlite3.connect(str(db_path))
                     try:
-                        cursor = conn.cursor()
-                        # 件数取得
-                        cursor.execute("SELECT COUNT(*) FROM materials")
-                        material_count = cursor.fetchone()[0]
-                        st.write(f"- **materials件数:** {material_count} 件 (sqlite3)")
+                        cnt = con.execute("SELECT COUNT(*) FROM materials").fetchone()[0]
+                        st.write(f"- **count(materials):** {cnt} 件")
                         
-                        # sha256取得（先頭16桁）
-                        with open(db_path, 'rb') as f:
-                            db_content = f.read()
-                            sha256_hash = hashlib.sha256(db_content).hexdigest()
-                            sha256_prefix = sha256_hash[:16]
-                            st.write(f"- **sha256 (先頭16桁):** {sha256_prefix}")
-                        
-                        # PRAGMA table_info(materials) の列名一覧（全件 or 最初の50件）
-                        cursor.execute("PRAGMA table_info(materials)")
-                        columns = cursor.fetchall()
-                        column_names = [row[1] for row in columns]  # row[1] = column name
-                        if len(column_names) > 50:
-                            st.write(f"- **列名（先頭50件）:** {', '.join(column_names[:50])}")
-                            st.write(f"  (他 {len(column_names) - 50} 列)")
+                        cols = [r[1] for r in con.execute("PRAGMA table_info(materials)")]
+                        if len(cols) > 50:
+                            st.write(f"- **cols (先頭50件):** {', '.join(cols[:50])} ...")
+                            st.write(f"  (他 {len(cols) - 50} 列)")
                         else:
-                            st.write(f"- **列名（全{len(column_names)}件）:** {', '.join(column_names)}")
+                            st.write(f"- **cols (全{len(cols)}件):** {', '.join(cols)}")
                         
-                        # count>0なら SELECT name FROM materials LIMIT 1
-                        if material_count > 0:
-                            cursor.execute("SELECT name_official, name FROM materials LIMIT 1")
-                            row = cursor.fetchone()
-                            if row:
-                                first_name = row[0] or row[1] or "N/A"
+                        if cnt > 0:
+                            first = con.execute("SELECT name_official, name FROM materials LIMIT 1").fetchone()
+                            if first:
+                                first_name = first[0] or first[1] or "N/A"
                                 st.write(f"- **first material name:** {first_name}")
-                            else:
-                                st.write(f"- **first material name:** (取得失敗)")
-                        else:
-                            st.write(f"- **first material name:** (DBが空)")
                     finally:
-                        conn.close()
-                except Exception as e:
-                    import traceback
-                    st.write(f"- **materials件数:** エラー ({str(e)})")
-                    st.write(f"- **詳細:** {traceback.format_exc()}")
-            else:
-                st.write("**materials.db:** 見つかりませんでした ❌")
+                        con.close()
+            except Exception:
+                st.error("DB fingerprint failed")
+                st.code(traceback.format_exc())
             
             st.write("---")
             
             # card_generator/schemasのimportエラー情報
-            if _card_generator_import_error:
-                st.write("**card_generator/schemas import エラー:**")
-                st.write(f"- **エラー:** {_card_generator_import_error}")
-                with st.expander("詳細なトレースバック", expanded=False):
-                    st.code(_card_generator_import_traceback, language="python")
-            else:
-                st.write("**card_generator/schemas import:** ✅ 成功")
+            try:
+                if _card_generator_import_error:
+                    st.write("**card_generator/schemas import エラー:**")
+                    st.write(f"- **エラー:** {_card_generator_import_error}")
+                    with st.expander("詳細なトレースバック", expanded=False):
+                        st.code(_card_generator_import_traceback, language="python")
+                else:
+                    st.write("**card_generator/schemas import:** ✅ 成功")
+            except Exception:
+                st.write("import error debug failed")
+                st.code(traceback.format_exc())
 
 
 def main():
     # 起動順序を固定：Debug表示 → init_db() → その後に通常処理
     
+    # 本文到達マーカー（DBやoption_menuより前に必ず出す）
+    st.markdown("### ✅ App booted (body reached)")
+    print("[BOOT] body reached")  # runtime logsで見える
+    
     # 1. Debugを先に描画（UIが出る前に死ぬ問題を回避）
-    render_debug_sidebar_early()
+    # 例外が起きても最後まで描く（st.stop()は呼ばない）
+    try:
+        render_debug_sidebar_early()
+    except Exception as e:
+        _panic_screen("render_debug_sidebar_early in main()", e)
+        # st.stop()は呼ばない（本文を表示するため）
     
     # 2. init_db()を呼ぶ（常に）
+    # 例外が起きても本文を表示する（st.stop()は呼ばない）
     try:
         init_db()
+        print("[BOOT] init_db() done")
     except Exception as e:
-        import traceback
-        st.error(f"DB初期化エラー: {e}")
-        st.code(traceback.format_exc(), language="python")
-        st.stop()  # 以降のUIを止める
+        # 例外を可視化（本文に出す）
+        st.error("DB初期化エラー")
+        st.exception(e)
+        st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
+        # st.stop()は呼ばない（本文を表示するため）
     
     # 3. その後に通常処理（Debugは既にrender_debug_sidebar_early()で表示済み）
     
@@ -1225,9 +1289,9 @@ def main():
         from utils.ensure_assets import ensure_all_assets
         asset_stats = ensure_all_assets()
     except Exception as e:
-        print(f"アセット確保エラー: {e}")
-        import traceback
-        traceback.print_exc()
+        # 例外を可視化（本文に出す）
+        st.warning(f"アセット確保エラー: {e}")
+        st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
         asset_stats = {}
     
     # サンプルデータの自動投入（INIT_SAMPLE_DATA=1 かつ DBが空の時だけ実行）
@@ -1236,8 +1300,9 @@ def main():
     try:
         ensure_sample_data()
     except Exception as e:
-        import traceback
-        print(f"ERROR: ensure_sample_data() failed: {e}\n{traceback.format_exc()}")
+        # 例外を可視化（本文に出す）
+        st.warning(f"ensure_sample_data() failed: {e}")
+        st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
         # アプリ起動は続行
     
     # 画像の自動修復（環境変数フラグがある場合のみ、かつDBが空の時だけ）
@@ -1247,8 +1312,9 @@ def main():
             from utils.ensure_images import ensure_images
             ensure_images(Path.cwd())
         except Exception as e:
-            import traceback
-            print(f"ERROR: 画像自動修復エラー: {e}\n{traceback.format_exc()}")
+            # 例外を可視化（本文に出す）
+            st.warning(f"画像自動修復エラー: {e}")
+            st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
             # アプリ起動は続行
     
     # デバッグスイッチ（サイドバーでCSSを無効化可能）
