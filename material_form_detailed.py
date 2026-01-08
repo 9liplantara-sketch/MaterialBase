@@ -136,37 +136,127 @@ def _normalize_required(form_data: dict, existing=None) -> dict:
     return d
 
 
-def show_detailed_material_form():
-    """詳細仕様対応の材料登録フォーム"""
-    st.markdown('<h2 class="gradient-text">➕ 材料登録（詳細版）</h2>', unsafe_allow_html=True)
+def show_detailed_material_form(material_id: int = None):
+    """
+    詳細仕様対応の材料登録フォーム（新規登録・編集対応）
     
-    st.info("📝 **レイヤー①（必須）**: 約10分で入力可能な基本情報\n\n**レイヤー②（任意）**: 後から追記できる詳細情報")
+    Args:
+        material_id: 編集モードの場合、既存材料のID
+    """
+    # 編集モードかどうか判定
+    is_edit_mode = material_id is not None
+    existing_material = None
+    
+    if is_edit_mode:
+        # 編集モード：既存材料を取得
+        db = SessionLocal()
+        try:
+            existing_material = db.query(Material).filter(Material.id == material_id).first()
+            if not existing_material:
+                st.error(f"❌ 材料ID {material_id} が見つかりません")
+                return
+            st.markdown('<h2 class="gradient-text">✏️ 材料編集</h2>', unsafe_allow_html=True)
+            st.info(f"📝 **編集対象**: {existing_material.name_official}")
+        finally:
+            db.close()
+    else:
+        st.markdown('<h2 class="gradient-text">➕ 材料登録（詳細版）</h2>', unsafe_allow_html=True)
+        st.info("📝 **レイヤー①（必須）**: 約10分で入力可能な基本情報\n\n**レイヤー②（任意）**: 後から追記できる詳細情報")
+    
+    # 編集モードの場合は既存値をform_dataに初期化
+    if existing_material:
+        # 既存値からform_dataを初期化（主要フィールドのみ）
+        form_data = {
+            'name_official': getattr(existing_material, 'name_official', ''),
+            'name_aliases': json.loads(getattr(existing_material, 'name_aliases', '[]')) if getattr(existing_material, 'name_aliases', None) else [],
+            'supplier_org': getattr(existing_material, 'supplier_org', ''),
+            'supplier_type': getattr(existing_material, 'supplier_type', ''),
+            'supplier_other': getattr(existing_material, 'supplier_other', ''),
+            'category_main': getattr(existing_material, 'category_main', ''),
+            'category_other': getattr(existing_material, 'category_other', ''),
+            'material_forms': json.loads(getattr(existing_material, 'material_forms', '[]')) if getattr(existing_material, 'material_forms', None) else [],
+            'material_forms_other': getattr(existing_material, 'material_forms_other', ''),
+            'origin_type': getattr(existing_material, 'origin_type', ''),
+            'origin_other': getattr(existing_material, 'origin_other', ''),
+            'origin_detail': getattr(existing_material, 'origin_detail', ''),
+            'recycle_bio_rate': getattr(existing_material, 'recycle_bio_rate', None),
+            'recycle_bio_basis': getattr(existing_material, 'recycle_bio_basis', ''),
+            'color_tags': json.loads(getattr(existing_material, 'color_tags', '[]')) if getattr(existing_material, 'color_tags', None) else [],
+            'transparency': getattr(existing_material, 'transparency', ''),
+            'hardness_qualitative': getattr(existing_material, 'hardness_qualitative', ''),
+            'hardness_value': getattr(existing_material, 'hardness_value', ''),
+            'weight_qualitative': getattr(existing_material, 'weight_qualitative', ''),
+            'specific_gravity': getattr(existing_material, 'specific_gravity', None),
+            'water_resistance': getattr(existing_material, 'water_resistance', ''),
+            'heat_resistance_temp': getattr(existing_material, 'heat_resistance_temp', None),
+            'heat_resistance_range': getattr(existing_material, 'heat_resistance_range', ''),
+            'weather_resistance': getattr(existing_material, 'weather_resistance', ''),
+            'processing_methods': json.loads(getattr(existing_material, 'processing_methods', '[]')) if getattr(existing_material, 'processing_methods', None) else [],
+            'processing_other': getattr(existing_material, 'processing_other', ''),
+            'equipment_level': getattr(existing_material, 'equipment_level', ''),
+            'prototyping_difficulty': getattr(existing_material, 'prototyping_difficulty', ''),
+            'use_categories': json.loads(getattr(existing_material, 'use_categories', '[]')) if getattr(existing_material, 'use_categories', None) else [],
+            'use_other': getattr(existing_material, 'use_other', ''),
+            'procurement_status': getattr(existing_material, 'procurement_status', ''),
+            'cost_level': getattr(existing_material, 'cost_level', ''),
+            'cost_value': getattr(existing_material, 'cost_value', None),
+            'cost_unit': getattr(existing_material, 'cost_unit', ''),
+            'safety_tags': json.loads(getattr(existing_material, 'safety_tags', '[]')) if getattr(existing_material, 'safety_tags', None) else [],
+            'safety_other': getattr(existing_material, 'safety_other', ''),
+            'restrictions': getattr(existing_material, 'restrictions', ''),
+            'visibility': getattr(existing_material, 'visibility', ''),
+            'is_published': getattr(existing_material, 'is_published', 1),
+        }
+        # 参照URLと使用例も取得
+        if existing_material.reference_urls:
+            form_data['reference_urls'] = [
+                {'url': ref.url, 'type': ref.url_type, 'desc': ref.description}
+                for ref in existing_material.reference_urls
+            ]
+        else:
+            form_data['reference_urls'] = []
+        if existing_material.use_examples:
+            form_data['use_examples'] = [
+                {'name': ex.example_name, 'url': ex.example_url, 'desc': ex.description}
+                for ex in existing_material.use_examples
+            ]
+        else:
+            form_data['use_examples'] = []
+    else:
+        form_data = {}
     
     # タブでレイヤー①とレイヤー②を分ける
     tab1, tab2 = st.tabs(["📋 レイヤー①：必須情報", "✨ レイヤー②：任意情報"])
     
     with tab1:
-        form_data = show_layer1_form()
+        layer1_data = show_layer1_form(existing_material=existing_material)
+        if layer1_data:
+            form_data.update(layer1_data)
     
     with tab2:
-        layer2_data = show_layer2_form()
-        if form_data:
+        layer2_data = show_layer2_form(existing_material=existing_material)
+        if layer2_data:
             form_data.update(layer2_data)
     
     # 掲載可否の設定
     st.markdown("---")
     st.markdown("### 📢 掲載設定")
+    # 編集モードの場合は既存値を初期値に
+    default_published_index = 0
+    if existing_material:
+        default_published_index = 0 if getattr(existing_material, 'is_published', 1) == 1 else 1
     is_published = st.radio(
         "掲載:",
         ["公開", "非公開"],
-        index=0,  # デフォルトは公開
+        index=default_published_index,  # デフォルトは公開（編集時は既存値）
         horizontal=True,
-        key="is_published"
+        key=f"is_published_{material_id if material_id else 'new'}"
     )
     form_data['is_published'] = 1 if is_published == "公開" else 0
     
     # フォーム送信
-    if form_data and st.button("✅ 材料を登録", type="primary", width='stretch'):
+    button_text = "✅ 材料を更新" if is_edit_mode else "✅ 材料を登録"
+    if form_data and st.button(button_text, type="primary", width='stretch'):
         result = save_material(form_data)
         
         # 防御的にresult.get("ok")で分岐
@@ -184,17 +274,25 @@ def show_detailed_material_form():
                     st.code(result["traceback"], language="python")
 
 
-def show_layer1_form():
-    """レイヤー①：必須情報フォーム"""
+def show_layer1_form(existing_material=None):
+    """
+    レイヤー①：必須情報フォーム
+    
+    Args:
+        existing_material: 編集モードの場合、既存のMaterialオブジェクト
+    """
     form_data = {}
     
     st.markdown("### 1. 基本識別情報")
     
     col1, col2 = st.columns(2)
     with col1:
+        # 編集モードの場合は既存値を初期値に
+        default_name = getattr(existing_material, 'name_official', '') if existing_material else ''
         form_data['name_official'] = st.text_input(
             "1-1 材料名（正式）*",
-            key="name_official",
+            value=default_name,
+            key=f"name_official_{existing_material.id if existing_material else 'new'}",
             help="材料の正式名称を入力してください"
         )
     
@@ -229,11 +327,17 @@ def show_layer1_form():
     st.markdown("**1-3 供給元・開発主体***")
     col1, col2 = st.columns([2, 1])
     with col1:
-        form_data['supplier_org'] = st.text_input("組織名*", key="supplier_org")
+        # 編集モードの場合は既存値を初期値に
+        default_supplier_org = getattr(existing_material, 'supplier_org', '') if existing_material else ''
+        form_data['supplier_org'] = st.text_input("組織名*", value=default_supplier_org, key=f"supplier_org_{existing_material.id if existing_material else 'new'}")
     with col2:
-        form_data['supplier_type'] = st.selectbox("種別*", SUPPLIER_TYPES, key="supplier_type")
+        # 編集モードの場合は既存値を初期値に
+        default_supplier_type = getattr(existing_material, 'supplier_type', SUPPLIER_TYPES[0]) if existing_material else SUPPLIER_TYPES[0]
+        supplier_type_index = SUPPLIER_TYPES.index(default_supplier_type) if default_supplier_type in SUPPLIER_TYPES else 0
+        form_data['supplier_type'] = st.selectbox("種別*", SUPPLIER_TYPES, index=supplier_type_index, key=f"supplier_type_{existing_material.id if existing_material else 'new'}")
         if form_data['supplier_type'] == "その他（自由記述）":
-            form_data['supplier_other'] = st.text_input("その他（詳細）", key="supplier_other")
+            default_supplier_other = getattr(existing_material, 'supplier_other', '') if existing_material else ''
+            form_data['supplier_other'] = st.text_input("その他（詳細）", value=default_supplier_other, key=f"supplier_other_{existing_material.id if existing_material else 'new'}")
     
     # 参照URL（複数）
     st.markdown("**1-4 参照URL（公式/製品/論文/プレス等）**")
@@ -293,18 +397,25 @@ def show_layer1_form():
     st.markdown("---")
     st.markdown("### 3. 由来・原料")
     
+    # 編集モードの場合は既存値を初期値に
+    default_origin_type = getattr(existing_material, 'origin_type', ORIGIN_TYPES[0]) if existing_material else ORIGIN_TYPES[0]
+    origin_type_index = ORIGIN_TYPES.index(default_origin_type) if default_origin_type in ORIGIN_TYPES else 0
     form_data['origin_type'] = st.selectbox(
         "3-1 原料由来（一次分類）*",
         ORIGIN_TYPES,
-        key="origin_type"
+        index=origin_type_index,
+        key=f"origin_type_{existing_material.id if existing_material else 'new'}"
     )
     if form_data['origin_type'] == "その他（自由記述）":
-        form_data['origin_other'] = st.text_input("その他（詳細）", key="origin_other")
+        default_origin_other = getattr(existing_material, 'origin_other', '') if existing_material else ''
+        form_data['origin_other'] = st.text_input("その他（詳細）", value=default_origin_other, key=f"origin_other_{existing_material.id if existing_material else 'new'}")
     
+    default_origin_detail = getattr(existing_material, 'origin_detail', '') if existing_material else ''
     form_data['origin_detail'] = st.text_input(
         "3-2 原料詳細（具体名）*",
+        value=default_origin_detail,
         placeholder="例：トウモロコシ由来PLA、木粉、ガラスカレット、菌糸体",
-        key="origin_detail"
+        key=f"origin_detail_{existing_material.id if existing_material else 'new'}"
     )
     
     col1, col2 = st.columns(2)
@@ -502,6 +613,7 @@ def show_layer1_form():
     form_data['visibility'] = st.selectbox(
         "8-1 公開設定*",
         VISIBILITY_OPTIONS,
+        index=0,  # デフォルトを "公開（誰でも閲覧可）"
         key="visibility"
     )
     

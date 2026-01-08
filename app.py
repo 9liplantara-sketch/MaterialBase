@@ -799,6 +799,13 @@ def get_all_materials(include_unpublished: bool = False):
             if hasattr(Material, 'is_published'):
                 stmt = stmt.filter(Material.is_published == 1)
         
+        # is_deletedフィルタ（削除済みは除外、管理者表示ONなら含めても良い）
+        if hasattr(Material, 'is_deleted'):
+            if not include_unpublished:
+                # 通常表示：削除済みは除外
+                stmt = stmt.filter(Material.is_deleted == 0)
+            # 管理者表示ONの場合は削除済みも含める（フィルタしない）
+        
         stmt = stmt.order_by(Material.created_at.desc() if hasattr(Material, 'created_at') else Material.id.desc())
         
         # SQLAlchemy 2.0のunique()で重複を除去
@@ -1587,7 +1594,16 @@ def main():
     elif page == "材料一覧":
         show_materials_list(include_unpublished=include_unpublished)
     elif page == "材料登録":
-        show_detailed_material_form()
+        # 編集モードの場合はmaterial_idを渡す
+        edit_material_id = st.session_state.get("edit_material_id")
+        if edit_material_id:
+            show_detailed_material_form(material_id=edit_material_id)
+            # 編集完了後はedit_material_idをクリア
+            if st.session_state.get("edit_completed"):
+                st.session_state.edit_material_id = None
+                st.session_state.edit_completed = False
+        else:
+            show_detailed_material_form()
     elif page == "ダッシュボード":
         show_dashboard()
     elif page == "検索":
@@ -1599,7 +1615,9 @@ def main():
 
 def show_home():
     """ホームページ"""
-    materials = get_all_materials()
+    # 管理者表示フラグを取得
+    include_unpublished = st.session_state.get("include_unpublished", False)
+    materials = get_all_materials(include_unpublished=include_unpublished)
     
     # サブ画像を装飾として表示
     sub_img_path = get_image_path("サブ.webp")
@@ -1863,6 +1881,49 @@ def show_materials_list(include_unpublished: bool = False):
             st.markdown("---")
             st.markdown(f"# {material.name_official or material.name}")
             
+            # 管理者モードの場合は編集・削除ボタンを表示
+            is_admin = os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1"
+            if is_admin:
+                col1, col2, col3 = st.columns([1, 1, 8])
+                with col1:
+                    if st.button("✏️ 編集", key=f"edit_{material.id}"):
+                        st.session_state.edit_material_id = material.id
+                        st.session_state.page = "材料登録"
+                        st.rerun()
+                with col2:
+                    if st.button("🗑️ 削除", key=f"delete_{material.id}"):
+                        st.session_state.delete_material_id = material.id
+                        st.rerun()
+            
+            # 削除確認（2段階確認）
+            if st.session_state.get("delete_material_id") == material.id:
+                st.warning("⚠️ この材料を削除しますか？")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ 削除を実行", key=f"confirm_delete_{material.id}", type="primary"):
+                        # 論理削除を実行
+                        db = SessionLocal()
+                        try:
+                            db_material = db.query(Material).filter(Material.id == material.id).first()
+                            if db_material:
+                                db_material.is_deleted = 1
+                                db_material.deleted_at = datetime.utcnow()
+                                db.commit()
+                                st.success("✅ 材料を削除しました")
+                                st.session_state.delete_material_id = None
+                                st.session_state.selected_material_id = None
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 削除エラー: {e}")
+                            db.rollback()
+                        finally:
+                            db.close()
+                with col2:
+                    if st.button("❌ キャンセル", key=f"cancel_delete_{material.id}"):
+                        st.session_state.delete_material_id = None
+                        st.rerun()
+                return
+            
             # 3タブ構造で詳細表示（eager load済みのmaterialを渡す）
             # 念のため、再度取得してeager loadを保証
             material = get_material_by_id(material.id)
@@ -2049,27 +2110,82 @@ def show_materials_list(include_unpublished: bool = False):
                             finally:
                                 db.close()
                 
+                # 管理者モードの場合は編集・削除ボタンを表示
+                is_admin = os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1"
+                admin_buttons_html = ""
+                if is_admin:
+                    admin_buttons_html = f"""
+                    <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                        <button onclick="window.streamlitEdit_{material.id}()" style="background: #4a90e2; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">✏️ 編集</button>
+                        <button onclick="window.streamlitDelete_{material.id}()" style="background: #e74c3c; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">🗑️ 削除</button>
+                    </div>
+                    """
+                
+                # 管理者モードの場合は編集・削除ボタンを表示
+                if is_admin:
+                    col1, col2, col3 = st.columns([1, 1, 8])
+                    with col1:
+                        if st.button("✏️ 編集", key=f"edit_list_{material.id}"):
+                            st.session_state.edit_material_id = material.id
+                            st.session_state.page = "材料登録"
+                            st.rerun()
+                    with col2:
+                        if st.button("🗑️ 削除", key=f"delete_list_{material.id}"):
+                            st.session_state.delete_material_id = material.id
+                            st.rerun()
+                    with col3:
+                        pass
+                
+                # 削除確認（2段階確認）
+                if st.session_state.get("delete_material_id") == material.id:
+                    st.warning("⚠️ この材料を削除しますか？")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✅ 削除を実行", key=f"confirm_delete_list_{material.id}", type="primary"):
+                            # 論理削除を実行
+                            from database import SessionLocal, Material
+                            db = SessionLocal()
+                            try:
+                                db_material = db.query(Material).filter(Material.id == material.id).first()
+                                if db_material:
+                                    db_material.is_deleted = 1
+                                    db_material.deleted_at = datetime.utcnow()
+                                    db.commit()
+                                    st.success("✅ 材料を削除しました")
+                                    st.session_state.delete_material_id = None
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ 削除エラー: {e}")
+                                db.rollback()
+                            finally:
+                                db.close()
+                    with col2:
+                        if st.button("❌ キャンセル", key=f"cancel_delete_list_{material.id}"):
+                            st.session_state.delete_material_id = None
+                            st.rerun()
+                
                 # ボタンのスタイルを明示的に設定（白文字を確実に表示、上に15px移動）
                 button_key = f"detail_{material.id}"
                 st.markdown(f"""
-                <style>
-                    button[key="{button_key}"],
-                    button[data-testid*="{button_key}"] {{
-                        background-color: #1a1a1a !important;
-                        color: #ffffff !important;
-                        border: 1px solid #1a1a1a !important;
-                        margin-top: -15pt !important;
-                    }}
-                    button[key="{button_key}"]:hover,
-                    button[data-testid*="{button_key}"]:hover {{
-                        background-color: #333333 !important;
-                        color: #ffffff !important;
-                    }}
-                    button[key="{button_key}"] *,
-                    button[data-testid*="{button_key}"] * {{
-                        color: #ffffff !important;
-                    }}
-                </style>
+                <div class="material-card-actions" style="margin-top: -15px;">
+                    <style>
+                        .material-card-actions button[key="{button_key}"],
+                        .material-card-actions button[data-testid*="{button_key}"] {{
+                            background-color: #1a1a1a !important;
+                            color: #ffffff !important;
+                            border: 1px solid #1a1a1a !important;
+                        }}
+                        .material-card-actions button[key="{button_key}"]:hover,
+                        .material-card-actions button[data-testid*="{button_key}"]:hover {{
+                            background-color: #333333 !important;
+                            color: #ffffff !important;
+                        }}
+                        .material-card-actions button[key="{button_key}"] *,
+                        .material-card-actions button[data-testid*="{button_key}"] * {{
+                            color: #ffffff !important;
+                        }}
+                    </style>
+                </div>
                 """, unsafe_allow_html=True)
                 
                 if st.button(f"詳細を見る", key=button_key, width='stretch'):

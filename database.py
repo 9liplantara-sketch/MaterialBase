@@ -80,6 +80,10 @@ class Material(Base):
     visibility = Column(String(50), nullable=False, default="公開")  # 公開設定
     is_published = Column(Integer, nullable=False, default=1)  # 掲載可否（0: 非公開, 1: 公開）
     
+    # 論理削除フラグ
+    is_deleted = Column(Integer, nullable=False, default=0)  # 論理削除（0: 有効, 1: 削除済み）
+    deleted_at = Column(DateTime, nullable=True)  # 削除日時
+    
     # レイヤー②：あったら良い情報
     # A. ストーリー・背景
     development_motives = Column(Text)  # 開発動機タイプ（複数選択）（JSON文字列）
@@ -139,6 +143,29 @@ class Material(Base):
     reference_urls = relationship("ReferenceURL", back_populates="material", cascade="all, delete-orphan")
     use_examples = relationship("UseExample", back_populates="material", cascade="all, delete-orphan")
     process_example_images = relationship("ProcessExampleImage", back_populates="material", cascade="all, delete-orphan")
+
+
+class MaterialSubmission(Base):
+    """材料投稿テーブル（承認フロー用）"""
+    __tablename__ = "material_submissions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(String(36), unique=True, index=True)  # UUID
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # ステータス: pending/approved/rejected
+    status = Column(String(20), nullable=False, default="pending")  # pending, approved, rejected
+    
+    # 投稿内容（JSON形式でmaterial入力内容を丸ごと保存）
+    payload_json = Column(Text, nullable=False)  # JSON文字列
+    
+    # 編集者メモ・却下理由
+    editor_note = Column(Text)  # 編集者メモ
+    reject_reason = Column(Text)  # 却下理由
+    
+    # 投稿者情報（任意）
+    submitted_by = Column(String(255))  # 投稿者名/ID
 
 
 class Property(Base):
@@ -415,18 +442,41 @@ def init_db():
                 with engine.begin() as conn:
                     from sqlalchemy import text
                     # prototyping_difficulty が NULL または空文字列の場合、"中" に補完
-                    conn.execute(text("""
+                    result1 = conn.execute(text("""
                         UPDATE materials
                         SET prototyping_difficulty = '中'
                         WHERE prototyping_difficulty IS NULL OR TRIM(prototyping_difficulty) = ''
                     """))
                     # equipment_level が NULL または空文字列の場合、"家庭/工房レベル" に補完
-                    conn.execute(text("""
+                    result2 = conn.execute(text("""
                         UPDATE materials
                         SET equipment_level = '家庭/工房レベル'
                         WHERE equipment_level IS NULL OR TRIM(equipment_level) = ''
                     """))
-                    print("[DB MIGRATION] Fixed empty prototyping_difficulty and equipment_level")
+                    # visibility が NULL または空文字列の場合、"公開（誰でも閲覧可）" に補完
+                    result3 = conn.execute(text("""
+                        UPDATE materials
+                        SET visibility = '公開（誰でも閲覧可）'
+                        WHERE visibility IS NULL OR TRIM(visibility) = ''
+                    """))
+                    print(f"[DB MIGRATION] Fixed empty required fields: prototyping_difficulty={result1.rowcount}, equipment_level={result2.rowcount}, visibility={result3.rowcount}")
+                    
+                    # is_deleted/deleted_atカラムの追加と既存行の初期化
+                    try:
+                        from sqlalchemy import inspect
+                        inspector = inspect(engine)
+                        columns = [col['name'] for col in inspector.get_columns('materials')]
+                        if 'is_deleted' not in columns:
+                            conn.execute(text("ALTER TABLE materials ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0"))
+                            print("[DB MIGRATION] Added is_deleted column to materials")
+                        if 'deleted_at' not in columns:
+                            conn.execute(text("ALTER TABLE materials ADD COLUMN deleted_at DATETIME"))
+                            print("[DB MIGRATION] Added deleted_at column to materials")
+                        # 既存行をis_deleted=0で埋める
+                        result4 = conn.execute(text("UPDATE materials SET is_deleted = 0 WHERE is_deleted IS NULL"))
+                        print(f"[DB MIGRATION] Initialized is_deleted: {result4.rowcount} rows")
+                    except Exception as e:
+                        print(f"[DB MIGRATION] Failed to add is_deleted/deleted_at: {e}")
             except Exception as e:
                 print(f"[DB MIGRATION] Failed to fix empty required fields: {e}")
         except Exception as e:
