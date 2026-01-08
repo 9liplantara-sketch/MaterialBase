@@ -95,7 +95,8 @@ def verify_assets(project_root: Path) -> tuple[bool, list[str]]:
             safe_slug = safe_slug_from_material(material)
             
             # primary画像の検査（必須）
-            primary_src, primary_debug = get_material_image_ref(material, "primary", project_root)
+            # project_rootを明示的に指定（Path.cwd()ではなく、引数で受け取ったパスを使用）
+            primary_src, primary_debug = get_material_image_ref(material, "primary", project_root=project_root)
             chosen_branch = primary_debug.get("chosen_branch", "none")
             final_src_type = primary_debug.get("final_src_type")
             
@@ -191,7 +192,7 @@ def verify_assets(project_root: Path) -> tuple[bool, list[str]]:
             
             # space/product画像の検査（存在すればチェック、必須ではない）
             for kind in ["space", "product"]:
-                use_src, use_debug = get_material_image_ref(material, kind, project_root)
+                use_src, use_debug = get_material_image_ref(material, kind, project_root=project_root)
                 use_chosen_branch = use_debug.get("chosen_branch", "none")
                 use_final_src_type = use_debug.get("final_src_type")
                 
@@ -281,9 +282,22 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    project_root_path = Path(args.project_root) if args.project_root else Path.cwd()
+    # プロジェクトルートの決定（スクリプトの親ディレクトリをデフォルトにする）
+    if args.project_root:
+        project_root_path = Path(args.project_root).resolve()
+    else:
+        # スクリプトの親ディレクトリ（プロジェクトルート）を使用
+        project_root_path = Path(__file__).parent.parent.resolve()
     
-    success, errors = verify_assets(project_root_path)
+    # 作業ディレクトリをプロジェクトルートに変更（相対パス解決のため）
+    original_cwd = Path.cwd()
+    try:
+        import os
+        os.chdir(project_root_path)
+        
+        success, errors = verify_assets(project_root_path)
+    finally:
+        os.chdir(original_cwd)
     
     if not success:
         print("\n" + "=" * 80)

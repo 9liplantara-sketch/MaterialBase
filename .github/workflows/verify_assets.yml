@@ -31,6 +31,7 @@ jobs:
         INIT_SAMPLE_DATA: "0"
     
     - name: Verify assets
+      working-directory: ${{ github.workspace }}
       run: |
         python scripts/verify_assets.py
       env:
