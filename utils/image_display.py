@@ -180,62 +180,128 @@ def get_material_image_ref(
         material_name = getattr(material, 'name_official', None) or getattr(material, 'name', None) or ""
         if material_name:
             candidates_raw.append(material_name)
-            # 注釈を除去
+            # 注釈を除去（例: "ステンレス鋼 SUS304" → "ステンレス鋼"）
             name_without_annotation = re.sub(r'[（(].*?[）)]', '', material_name).strip()
+            # 数字付き型番を除去（例: "ステンレス鋼 SUS304" → "ステンレス鋼"）
+            # SUS304, SUS430, JIS規格番号などを除去
+            name_without_type = re.sub(r'\s*(SUS|AISI|JIS)?\s*\d+[A-Za-z]*(\(.*?\))?', '', material_name).strip()
+            # スペースを除去した基本名（例: "ステンレス鋼 SUS304" → "ステンレス鋼"）
+            name_base = material_name.split()[0] if material_name.split() else material_name
             if name_without_annotation != material_name:
                 candidates_raw.append(name_without_annotation)
+            if name_without_type != material_name and name_without_type not in candidates_raw:
+                candidates_raw.append(name_without_type)
+            if name_base != material_name and name_base not in candidates_raw:
+                candidates_raw.append(name_base)
         
         # name_aliases を分解
         aliases = getattr(material, "name_aliases", None)
         if aliases:
-            if isinstance(aliases, list):
-                candidates_raw.extend([str(x) for x in aliases if x])
-            else:
-                candidates_raw.extend([x.strip() for x in str(aliases).split(",") if x.strip()])
+            try:
+                if isinstance(aliases, str):
+                    # JSON文字列としてパースを試みる
+                    import json
+                    try:
+                        aliases_list = json.loads(aliases)
+                        if isinstance(aliases_list, list):
+                            candidates_raw.extend([str(x) for x in aliases_list if x])
+                        else:
+                            candidates_raw.append(str(aliases_list))
+                    except (json.JSONDecodeError, TypeError):
+                        # JSONでない場合はカンマ区切りとして扱う
+                        candidates_raw.extend([x.strip() for x in str(aliases).split(",") if x.strip()])
+                elif isinstance(aliases, list):
+                    candidates_raw.extend([str(x) for x in aliases if x])
+            except Exception:
+                pass
         
-        # 実フォルダと照合
+        # 実フォルダと照合（既存のディレクトリ名を優先）
+        existing_dirs = set(d.name for d in base_dir.iterdir() if d.is_dir())
+        debug_info["legacy_search_candidates"] = candidates_raw[:10]  # 最初の10件を記録
+        
         for candidate_name in candidates_raw:
             if not candidate_name:
                 continue
-            old_safe_slug = candidate_name.strip()
+            candidate_clean = candidate_name.strip()
+            # 直接マッチを試す（既存のディレクトリ名と完全一致）
+            if candidate_clean in existing_dirs:
+                old_material_dir = base_dir / candidate_clean
+                if old_material_dir.exists() and old_material_dir.is_dir():
+                    # kindに応じた画像パス
+                    if kind == "primary":
+                        old_candidate = old_material_dir / "primary.jpg"
+                    elif kind == "space":
+                        old_candidate = old_material_dir / "uses" / "space.jpg"
+                    elif kind == "product":
+                        old_candidate = old_material_dir / "uses" / "product.jpg"
+                    else:
+                        old_candidate = None
+                    
+                    if old_candidate:
+                        abs_path = str(old_candidate.resolve())
+                        debug_info["candidate_paths"].append(abs_path)
+                        
+                        if old_candidate.exists() and old_candidate.is_file():
+                            debug_info["chosen_branch"] = "legacy_jp"
+                            debug_info["final_src_type"] = "path"
+                            debug_info["final_path"] = abs_path
+                            debug_info["final_path_exists"] = True
+                            debug_info["legacy_dir"] = candidate_clean
+                            try:
+                                stat = old_candidate.stat()
+                                debug_info["size"] = stat.st_size
+                                debug_info["mtime"] = stat.st_mtime
+                            except Exception as e:
+                                debug_info["stat_error"] = str(e)
+                            return old_candidate, debug_info
+                        else:
+                            debug_info["failed_paths"].append({
+                                "path": abs_path,
+                                "exists": old_candidate.exists(),
+                                "is_file": old_candidate.is_file() if old_candidate.exists() else False
+                            })
+            
+            # フォールバック: 禁止文字を置換してマッチを試す
+            old_safe_slug = candidate_clean
             forbidden_chars = r'[/\\:*?"<>|]'
             old_safe_slug = re.sub(forbidden_chars, '_', old_safe_slug)
             
-            old_material_dir = base_dir / old_safe_slug
-            if old_material_dir.exists() and old_material_dir.is_dir():
-                # kindに応じた画像パス
-                if kind == "primary":
-                    old_candidate = old_material_dir / "primary.jpg"
-                elif kind == "space":
-                    old_candidate = old_material_dir / "uses" / "space.jpg"
-                elif kind == "product":
-                    old_candidate = old_material_dir / "uses" / "product.jpg"
-                else:
-                    old_candidate = None
-                
-                if old_candidate:
-                    abs_path = str(old_candidate.resolve())
-                    debug_info["candidate_paths"].append(abs_path)
-                    
-                    if old_candidate.exists() and old_candidate.is_file():
-                        debug_info["chosen_branch"] = "legacy_jp"
-                        debug_info["final_src_type"] = "path"
-                        debug_info["final_path"] = abs_path
-                        debug_info["final_path_exists"] = True
-                        debug_info["legacy_dir"] = old_safe_slug
-                        try:
-                            stat = old_candidate.stat()
-                            debug_info["size"] = stat.st_size
-                            debug_info["mtime"] = stat.st_mtime
-                        except Exception as e:
-                            debug_info["stat_error"] = str(e)
-                        return old_candidate, debug_info
+            if old_safe_slug != candidate_clean and old_safe_slug in existing_dirs:
+                old_material_dir = base_dir / old_safe_slug
+                if old_material_dir.exists() and old_material_dir.is_dir():
+                    # kindに応じた画像パス
+                    if kind == "primary":
+                        old_candidate = old_material_dir / "primary.jpg"
+                    elif kind == "space":
+                        old_candidate = old_material_dir / "uses" / "space.jpg"
+                    elif kind == "product":
+                        old_candidate = old_material_dir / "uses" / "product.jpg"
                     else:
-                        debug_info["failed_paths"].append({
-                            "path": abs_path,
-                            "exists": old_candidate.exists(),
-                            "is_file": old_candidate.is_file() if old_candidate.exists() else False
-                        })
+                        old_candidate = None
+                    
+                    if old_candidate:
+                        abs_path = str(old_candidate.resolve())
+                        debug_info["candidate_paths"].append(abs_path)
+                        
+                        if old_candidate.exists() and old_candidate.is_file():
+                            debug_info["chosen_branch"] = "legacy_jp"
+                            debug_info["final_src_type"] = "path"
+                            debug_info["final_path"] = abs_path
+                            debug_info["final_path_exists"] = True
+                            debug_info["legacy_dir"] = old_safe_slug
+                            try:
+                                stat = old_candidate.stat()
+                                debug_info["size"] = stat.st_size
+                                debug_info["mtime"] = stat.st_mtime
+                            except Exception as e:
+                                debug_info["stat_error"] = str(e)
+                            return old_candidate, debug_info
+                        else:
+                            debug_info["failed_paths"].append({
+                                "path": abs_path,
+                                "exists": old_candidate.exists(),
+                                "is_file": old_candidate.is_file() if old_candidate.exists() else False
+                            })
     
     # 見つからない場合
     debug_info["chosen_branch"] = "none"
