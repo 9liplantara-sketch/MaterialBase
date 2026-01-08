@@ -123,10 +123,17 @@ def _normalize_required(form_data: dict, existing=None) -> dict:
             # 既存レコードがある更新時は「既存値を優先」
             if existing is not None:
                 cur = getattr(existing, key, None)
-                if cur is not None and (not isinstance(cur, str) or cur.strip() != ""):
-                    # 既存が埋まってるならそれを維持（Noneで上書きしない）
-                    d.pop(key, None)  # ← 重要：Noneで上書きしない
-                    continue
+                # 既存が埋まってるならそれを維持（Noneで上書きしない）
+                # 文字列の場合は空文字列でないことを確認、整数の場合はNoneでないことを確認
+                if cur is not None:
+                    if isinstance(cur, str):
+                        if cur.strip() != "":
+                            d.pop(key, None)  # ← 重要：Noneで上書きしない
+                            continue
+                    else:
+                        # 整数などの場合はNoneでないことを確認
+                        d.pop(key, None)  # ← 重要：Noneで上書きしない
+                        continue
             # 新規 or 既存も空ならデフォルトを入れる
             d[key] = default
     
