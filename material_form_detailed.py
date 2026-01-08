@@ -108,15 +108,32 @@ def show_detailed_material_form():
         if form_data:
             form_data.update(layer2_data)
     
+    # 掲載可否の設定
+    st.markdown("---")
+    st.markdown("### 📢 掲載設定")
+    is_published = st.radio(
+        "掲載:",
+        ["公開", "非公開"],
+        index=0,  # デフォルトは公開
+        horizontal=True,
+        key="is_published"
+    )
+    form_data['is_published'] = 1 if is_published == "公開" else 0
+    
     # フォーム送信
     if form_data and st.button("✅ 材料を登録", type="primary", width='stretch'):
         try:
-            save_material(form_data)
-            st.success("✅ 材料を登録しました！")
+            result = save_material(form_data)
+            if result['action'] == 'created':
+                st.success("✅ 材料を新規登録しました！")
+            else:
+                st.success("✅ 材料を更新しました！")
             st.balloons()
             st.rerun()
         except Exception as e:
             st.error(f"❌ エラーが発生しました: {str(e)}")
+            import traceback
+            st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
 
 
 def show_layer1_form():
@@ -571,12 +588,9 @@ def show_layer2_form():
 
 
 def save_material(form_data):
-    """材料データを保存"""
+    """材料データを保存（upsert対応）"""
     db = SessionLocal()
     try:
-        # UUID生成
-        material_uuid = str(uuid.uuid4())
-        
         # 必須フィールドのバリデーション
         required_fields = [
             'name_official', 'supplier_org', 'supplier_type',
@@ -592,8 +606,107 @@ def save_material(form_data):
             if field not in form_data or not form_data[field]:
                 raise ValueError(f"必須フィールド '{field}' が入力されていません")
         
-        # Material作成
-        material = Material(
+        # name_officialで既存レコードを検索（upsert）
+        existing_material = db.query(Material).filter(
+            Material.name_official == form_data['name_official']
+        ).first()
+        
+        action = 'updated' if existing_material else 'created'
+        
+        if existing_material:
+            # UPDATE（既存レコードを更新）
+            material = existing_material
+            material_uuid = material.uuid  # UUIDは保持
+        else:
+            # INSERT（新規レコード）
+            material_uuid = str(uuid.uuid4())
+            material = Material(
+                uuid=material_uuid,
+                id=None  # 新規作成
+            )
+        
+        # Materialデータを設定（新規/更新共通）
+        material.name_official = form_data['name_official']
+        material.name_aliases = json.dumps(form_data.get('name_aliases', []), ensure_ascii=False)
+        material.supplier_org = form_data['supplier_org']
+        material.supplier_type = form_data['supplier_type']
+        material.supplier_other = form_data.get('supplier_other')
+        material.category_main = form_data['category_main']
+        material.category_other = form_data.get('category_other')
+        material.material_forms = json.dumps(form_data['material_forms'], ensure_ascii=False)
+        material.material_forms_other = form_data.get('material_forms_other')
+        material.origin_type = form_data['origin_type']
+        material.origin_other = form_data.get('origin_other')
+        material.origin_detail = form_data['origin_detail']
+        material.recycle_bio_rate = form_data.get('recycle_bio_rate')
+        material.recycle_bio_basis = form_data.get('recycle_bio_basis')
+        material.color_tags = json.dumps(form_data.get('color_tags', []), ensure_ascii=False)
+        material.transparency = form_data['transparency']
+        material.hardness_qualitative = form_data['hardness_qualitative']
+        material.hardness_value = form_data.get('hardness_value')
+        material.weight_qualitative = form_data['weight_qualitative']
+        material.specific_gravity = form_data.get('specific_gravity')
+        material.water_resistance = form_data['water_resistance']
+        material.heat_resistance_temp = form_data.get('heat_resistance_temp')
+        material.heat_resistance_range = form_data['heat_resistance_range']
+        material.weather_resistance = form_data['weather_resistance']
+        material.processing_methods = json.dumps(form_data['processing_methods'], ensure_ascii=False)
+        material.processing_other = form_data.get('processing_other')
+        material.equipment_level = form_data['equipment_level']
+        material.prototype_difficulty = form_data['prototyping_difficulty']
+        material.use_categories = json.dumps(form_data['use_categories'], ensure_ascii=False)
+        material.use_other = form_data.get('use_other')
+        material.procurement_status = form_data['procurement_status']
+        material.cost_level = form_data['cost_level']
+        material.cost_value = form_data.get('cost_value')
+        material.cost_unit = form_data.get('cost_unit')
+        material.safety_tags = json.dumps(form_data['safety_tags'], ensure_ascii=False)
+        material.safety_other = form_data.get('safety_other')
+        material.restrictions = form_data.get('restrictions')
+        material.visibility = form_data['visibility']
+        material.is_published = form_data.get('is_published', 1)  # デフォルトは公開
+        # レイヤー②
+        material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
+        material.development_motive_other = form_data.get('development_motive_other')
+        material.development_background_short = form_data.get('development_background_short')
+        material.development_story = form_data.get('development_story')
+        material.tactile_tags = json.dumps(form_data.get('tactile_tags', []), ensure_ascii=False)
+        material.tactile_other = form_data.get('tactile_other')
+        material.visual_tags = json.dumps(form_data.get('visual_tags', []), ensure_ascii=False)
+        material.visual_other = form_data.get('visual_other')
+        material.sound_smell = form_data.get('sound_smell')
+        material.circularity = form_data.get('circularity')
+        material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
+        material.certifications_other = form_data.get('certifications_other')
+        # STEP 6: 材料×元素マッピング
+        material.main_elements = form_data.get('main_elements')
+        # 後方互換性
+        material.name = form_data['name_official']
+        material.category = form_data['category_main']
+        
+        if not existing_material:
+            db.add(material)
+        db.flush()
+        
+        # 参照URL保存（既存のものは削除してから再作成）
+        if existing_material:
+            db.query(ReferenceURL).filter(ReferenceURL.material_id == material.id).delete()
+        for ref in form_data.get('reference_urls', []):
+            if ref.get('url'):
+                ref_url = ReferenceURL(
+                    material_id=material.id,
+                    url=ref['url'],
+                    url_type=ref.get('type'),
+                    description=ref.get('desc')
+                )
+                db.add(ref_url)
+        
+        # 使用例保存（既存のものは削除してから再作成）
+        if existing_material:
+            db.query(UseExample).filter(UseExample.material_id == material.id).delete()
+        for ex in form_data.get('use_examples', []):
+            if ex.get('name'):
+                use_ex = UseExample(
             uuid=material_uuid,
             name_official=form_data['name_official'],
             name_aliases=json.dumps(form_data.get('name_aliases', []), ensure_ascii=False),

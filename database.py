@@ -78,6 +78,7 @@ class Material(Base):
     
     # 8. 公開範囲
     visibility = Column(String(50), nullable=False, default="公開")  # 公開設定
+    is_published = Column(Integer, nullable=False, default=1)  # 掲載可否（0: 非公開, 1: 公開）
     
     # レイヤー②：あったら良い情報
     # A. ストーリー・背景
@@ -399,6 +400,16 @@ def init_db():
     if engine.url.get_backend_name() == "sqlite":
         try:
             migrate_sqlite_schema_if_needed(engine)
+            
+            # 既存データにis_published=1を設定（後方互換）
+            try:
+                with engine.connect() as conn:
+                    from sqlalchemy import text
+                    # is_publishedカラムが存在する場合、NULLのレコードに1を設定
+                    conn.execute(text("UPDATE materials SET is_published = 1 WHERE is_published IS NULL"))
+                    conn.commit()
+            except Exception as e:
+                print(f"[DB MIGRATION] Failed to set default is_published: {e}")
         except Exception as e:
             # 例外は握りつぶさずログ出して継続
             print(f"[DB MIGRATION] Error in migrate_sqlite_schema_if_needed: {e}")

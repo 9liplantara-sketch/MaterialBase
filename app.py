@@ -769,10 +769,13 @@ def get_db():
     """データベースセッションを取得"""
     return SessionLocal()
 
-def get_all_materials():
+def get_all_materials(include_unpublished: bool = False):
     """
     全材料を取得（Eager Loadでリレーションも先読み・全リレーション網羅）
     重複を除去して返す（DB由来のデータに一本化）
+    
+    Args:
+        include_unpublished: Trueの場合、非公開（is_published=0）も含める
     
     OperationalErrorをキャッチしてUI崩壊を防ぐ
     """
@@ -789,8 +792,15 @@ def get_all_materials():
                 selectinload(Material.use_examples),
                 selectinload(Material.process_example_images),  # 加工例画像
             )
-            .order_by(Material.created_at.desc() if hasattr(Material, 'created_at') else Material.id.desc())
         )
+        
+        # is_publishedフィルタ（デフォルトで公開のみ）
+        if not include_unpublished:
+            if hasattr(Material, 'is_published'):
+                stmt = stmt.filter(Material.is_published == 1)
+        
+        stmt = stmt.order_by(Material.created_at.desc() if hasattr(Material, 'created_at') else Material.id.desc())
+        
         # SQLAlchemy 2.0のunique()で重複を除去
         result = db.execute(stmt)
         materials = result.unique().scalars().all()
@@ -1517,8 +1527,20 @@ def main():
         
         st.markdown("---")
         
+        # 管理者表示チェック（DEBUG=1 or ADMIN=1のときのみ）
+        is_admin = os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1"
+        if is_admin:
+            include_unpublished = st.checkbox(
+                "管理者表示（非公開も表示）",
+                value=st.session_state.get("include_unpublished", False),
+                key="admin_include_unpublished"
+            )
+            st.session_state["include_unpublished"] = include_unpublished
+        else:
+            include_unpublished = False
+        
         # 統計情報（画面左下に小さく表示）
-        materials = get_all_materials()
+        materials = get_all_materials(include_unpublished=include_unpublished)
         
         # SQLで直接カウント（DetachedInstanceError回避）
         db = get_db()
@@ -1556,11 +1578,14 @@ def main():
         show_image_diagnostics(materials, Path.cwd())
         return  # 診断モード時は他のページを表示しない
     
+    # 管理者表示フラグを取得
+    include_unpublished = st.session_state.get("include_unpublished", False)
+    
     # ページルーティング
     if page == "ホーム":
         show_home()
     elif page == "材料一覧":
-        show_materials_list()
+        show_materials_list(include_unpublished=include_unpublished)
     elif page == "材料登録":
         show_detailed_material_form()
     elif page == "ダッシュボード":
@@ -1847,7 +1872,7 @@ def show_home():
             </div>
             """, unsafe_allow_html=True)
 
-def show_materials_list():
+def show_materials_list(include_unpublished: bool = False):
     """材料一覧ページ"""
     st.markdown('<h2 class="section-title">材料一覧</h2>', unsafe_allow_html=True)
     
@@ -1875,7 +1900,7 @@ def show_materials_list():
             st.error("材料が見つかりませんでした。")
             st.session_state.selected_material_id = None
     
-    materials = get_all_materials()
+    materials = get_all_materials(include_unpublished=include_unpublished)
     
     if not materials:
         st.info("まだ材料が登録されていません。「材料登録」から材料を追加してください。")
@@ -2012,11 +2037,44 @@ def show_materials_list():
                     <div style="margin: 20px 0;">
                         {properties_text}
                     </div>
-                    <div style="margin-top: 20px;">
+                    <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
                         <small style="color: #999;">ID: {material.id}</small>
+                        {f'<small style="color: #999;">{"✅ 公開" if getattr(material, "is_published", 1) == 1 else "🔒 非公開"}</small>' if include_unpublished else ''}
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+                
+                # 管理者表示時は公開/非公開切り替えスイッチを表示
+                if include_unpublished:
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        pass  # 詳細ボタンのスペース
+                    with col2:
+                        current_status = getattr(material, "is_published", 1)
+                        new_status = st.toggle(
+                            "公開" if current_status == 1 else "非公開",
+                            value=current_status == 1,
+                            key=f"toggle_publish_{material.id}"
+                        )
+                        if new_status != (current_status == 1):
+                            # ステータス変更
+                            from database import SessionLocal
+                            db = SessionLocal()
+                            try:
+                                # データベースから再取得して更新
+                                from database import Material
+                                db_material = db.query(Material).filter(Material.id == material.id).first()
+                                if db_material:
+                                    db_material.is_published = 1 if new_status else 0
+                                    db.commit()
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"更新エラー: {e}")
+                                import traceback
+                                st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
+                                db.rollback()
+                            finally:
+                                db.close()
                 
                 # ボタンのスタイルを明示的に設定（白文字を確実に表示、上に15px移動）
                 button_key = f"detail_{material.id}"
@@ -2050,7 +2108,10 @@ def show_dashboard():
     """ダッシュボードページ"""
     st.markdown('<h2 class="section-title">ダッシュボード</h2>', unsafe_allow_html=True)
     
-    materials = get_all_materials()
+    # 管理者表示フラグを取得
+    include_unpublished = st.session_state.get("include_unpublished", False)
+    
+    materials = get_all_materials(include_unpublished=include_unpublished)
     
     if not materials:
         st.info("ダッシュボードを表示するには、まず材料を登録してください。")
@@ -2293,7 +2354,10 @@ def show_material_cards():
     """素材カード表示ページ（3タブ構造）"""
     st.markdown('<h2 class="section-title">素材カード</h2>', unsafe_allow_html=True)
     
-    materials = get_all_materials()
+    # 管理者表示フラグを取得
+    include_unpublished = st.session_state.get("include_unpublished", False)
+    
+    materials = get_all_materials(include_unpublished=include_unpublished)
     
     if not materials:
         st.info("材料が登録されていません。")
