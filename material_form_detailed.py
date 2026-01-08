@@ -167,12 +167,21 @@ def show_detailed_material_form():
     
     # フォーム送信
     if form_data and st.button("✅ 材料を登録", type="primary", width='stretch'):
-        try:
-            result = save_material(form_data)
-            if result['action'] == 'created':
+        result = save_material(form_data)
+        
+        # 防御的にresult.get("ok")で分岐
+        if result.get("ok"):
+            # 成功時：result["action"]でcreated/updatedを判定してメッセージ表示
+            if result.get("action") == 'created':
                 st.success("✅ 材料を新規登録しました！")
             else:
                 st.success("✅ 材料を更新しました！")
+        else:
+            # 失敗時：st.error(result["error"])とst.expanderでtraceback表示
+            st.error(f"❌ エラーが発生しました: {result.get('error', '不明なエラー')}")
+            if result.get("traceback"):
+                with st.expander("🔍 エラー詳細（デバッグ用）", expanded=False):
+                    st.code(result["traceback"], language="python")
             st.balloons()
             st.rerun()
         except Exception as e:
@@ -772,11 +781,24 @@ def save_material(form_data):
                 db.add(use_ex)
         
         db.commit()
-        return material, action
+        
+        # 成功時はdictを返す
+        return {
+            "ok": True,
+            "action": action,
+            "material_id": material.id,
+            "uuid": material.uuid,
+        }
         
     except Exception as e:
         db.rollback()
-        raise e
+        import traceback
+        # 失敗時はdictを返す（例外を再発生させない）
+        return {
+            "ok": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
     finally:
         db.close()
 
