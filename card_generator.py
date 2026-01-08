@@ -161,6 +161,11 @@ def generate_material_card(card_data: MaterialCard) -> str:
     else:
         img_onerror = ""
     
+    # space/product画像用のonerror属性（f-string内でバックスラッシュを使わないように変数に格納）
+    img_onerror_hide = "this.style.display='none';"
+    img_onerror_show = "this.nextElementSibling.style.display='block';"
+    img_onerror_combined = img_onerror_hide + " " + img_onerror_show
+    
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -484,13 +489,13 @@ def generate_material_card(card_data: MaterialCard) -> str:
                 <div class="use-examples-grid">
                     <div class="use-example-item">
                         <h4>空間用途</h4>
-                        {f'<img src="{space_url}" alt="空間用途" class="use-example-image" onerror="this.style.display=\'none\'; this.nextElementSibling.style.display=\'block\';">' if space_url else ''}
-                        {f'<div class="no-image" style="{("display:none;" if space_url else "display:block;")} padding: 80px 20px; border-radius: 12px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); color: #999; text-align: center; font-size: 14px; border: 2px dashed #ddd;">📷 画像なし</div>'}
+                        {f'<img src="{space_url}" alt="空間用途" class="use-example-image" onerror="{img_onerror_combined}">' if space_url else ''}
+                        {'<div class="no-image" style="display:none; padding: 80px 20px; border-radius: 12px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); color: #999; text-align: center; font-size: 14px; border: 2px dashed #ddd;">📷 画像なし</div>' if space_url else '<div class="no-image" style="display:block; padding: 80px 20px; border-radius: 12px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); color: #999; text-align: center; font-size: 14px; border: 2px dashed #ddd;">📷 画像なし</div>'}
                     </div>
                     <div class="use-example-item">
                         <h4>製品用途</h4>
-                        {f'<img src="{product_url}" alt="製品用途" class="use-example-image" onerror="this.style.display=\'none\'; this.nextElementSibling.style.display=\'block\';">' if product_url else ''}
-                        {f'<div class="no-image" style="{("display:none;" if product_url else "display:block;")} padding: 80px 20px; border-radius: 12px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); color: #999; text-align: center; font-size: 14px; border: 2px dashed #ddd;">📷 画像なし</div>'}
+                        {f'<img src="{product_url}" alt="製品用途" class="use-example-image" onerror="{img_onerror_combined}">' if product_url else ''}
+                        {'<div class="no-image" style="display:none; padding: 80px 20px; border-radius: 12px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); color: #999; text-align: center; font-size: 14px; border: 2px dashed #ddd;">📷 画像なし</div>' if product_url else '<div class="no-image" style="display:block; padding: 80px 20px; border-radius: 12px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); color: #999; text-align: center; font-size: 14px; border: 2px dashed #ddd;">📷 画像なし</div>'}
                     </div>
                 </div>
             </div>
