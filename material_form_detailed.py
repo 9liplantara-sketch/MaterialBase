@@ -105,20 +105,16 @@ REQUIRED_DEFAULTS = {
 def _normalize_required(form_data: dict, existing=None) -> dict:
     """
     必須フィールドの補完（None/空文字列をデフォルト値で埋める）
-    
-    Args:
-        form_data: フォームデータ
-        existing: 既存のMaterialオブジェクト（更新時）
-    
-    Returns:
-        補完済みのform_data
+    更新時は、既存値が埋まっているなら None/空文字で上書きしない
     """
     d = dict(form_data)
-    
+
     for key, default in REQUIRED_DEFAULTS.items():
         v = d.get(key)
-        
+
+        # 未入力(None / 空文字)なら補完対象
         if v is None or (isinstance(v, str) and v.strip() == ""):
+            # 更新時: 既存値が埋まっていれば維持（上書きしない）
             if existing is not None:
                 cur = getattr(existing, key, None)
                 if cur is not None:
@@ -130,13 +126,13 @@ def _normalize_required(form_data: dict, existing=None) -> dict:
                         # int/float/bool などは None でなければ有効（0もOK）
                         d.pop(key, None)
                         continue
-            
+
+            # 新規 or 既存も空ならデフォルトを入れる
             d[key] = default
-    
-    # DEBUG時のみ補完結果をログ出力
+
     if os.getenv("DEBUG", "0") == "1":
         print(f"[DEBUG] _normalize_required: {d}")
-    
+
     return d
 
 
