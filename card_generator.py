@@ -65,10 +65,8 @@ def generate_material_card(card_data: MaterialCard) -> str:
     qr_img.save(qr_buffer, format='PNG')
     qr_base64 = base64.b64encode(qr_buffer.getvalue()).decode()
     
-    # 背景画像の読み込み（サブ.webpをテクスチャとして使用）
-    sub_bg_path = get_image_path("サブ.webp")
-    sub_bg_base64 = get_base64_image(sub_bg_path) if sub_bg_path else None
-    texture_bg = f'url("data:image/webp;base64,{sub_bg_base64}")' if sub_bg_base64 else 'none'
+    # 背景画像は使用しない
+    texture_bg = 'none'
     
     # 画像パスの処理（参照URL方式に統一）
     # Materialオブジェクトを取得（payloadから構築、または直接受け取る）

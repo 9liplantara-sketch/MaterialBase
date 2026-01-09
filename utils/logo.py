@@ -78,11 +78,12 @@ def read_svg(path: Path, mtime: float) -> Optional[str]:
 def render_svg_inline(svg: str, height_px: int, class_name: str = "") -> str:
     """
     SVGをHTML inline SVGとして描画するためのHTMLを生成
+    サイズはinline styleで確実に指定（CSSに依存しない）
     
     Args:
         svg: SVGコンテンツ（文字列、<svg>タグを含む可能性がある）
-        height_px: 高さ（ピクセル）
-        class_name: CSSクラス名（任意）
+        height_px: 高さ（ピクセル）- この値が確実に適用される
+        class_name: CSSクラス名（任意、余白や整列用）
     
     Returns:
         HTML文字列
@@ -91,12 +92,21 @@ def render_svg_inline(svg: str, height_px: int, class_name: str = "") -> str:
     if "<svg" in svg.lower():
         # 既存の<svg>タグを使用し、style属性を追加/更新
         import re
-        # style属性を追加または更新
+        # style属性を追加または更新（既存のheight指定を上書き）
         if re.search(r'style\s*=', svg, re.IGNORECASE):
-            # 既存のstyle属性に高さを追加
+            # 既存のstyle属性からheightを削除してから追加（確実に指定値を適用）
+            height_pattern = r'height\s*:\s*[^;]+;?'
+            def replace_style(m):
+                old_style = m.group(1)
+                # heightを削除
+                cleaned_style = re.sub(height_pattern, "", old_style, flags=re.IGNORECASE).strip()
+                # セミコロンで区切って整理
+                if cleaned_style and not cleaned_style.endswith(';'):
+                    cleaned_style += ';'
+                return f'style="{cleaned_style} height: {height_px}px !important; width: auto; max-width: 100%; vertical-align: middle;"'
             svg = re.sub(
                 r'style\s*=\s*["\']([^"\']*)["\']',
-                lambda m: f'style="{m.group(1)}; height: {height_px}px; width: auto; vertical-align: middle;"',
+                replace_style,
                 svg,
                 flags=re.IGNORECASE
             )
@@ -104,7 +114,7 @@ def render_svg_inline(svg: str, height_px: int, class_name: str = "") -> str:
             # style属性がない場合は追加
             svg = re.sub(
                 r'<svg([^>]*)>',
-                f'<svg\\1 style="height: {height_px}px; width: auto; vertical-align: middle;">',
+                f'<svg\\1 style="height: {height_px}px !important; width: auto; max-width: 100%; vertical-align: middle;">',
                 svg,
                 flags=re.IGNORECASE
             )
@@ -116,7 +126,7 @@ def render_svg_inline(svg: str, height_px: int, class_name: str = "") -> str:
         class_attr = f' class="{class_name}"' if class_name else ""
         return f"""
         <div{class_attr} style="display: inline-block; line-height: 0;">
-            <svg style="height: {height_px}px; width: auto; vertical-align: middle;" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
+            <svg style="height: {height_px}px !important; width: auto; max-width: 100%; vertical-align: middle;" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
                 {svg}
             </svg>
         </div>
@@ -162,12 +172,12 @@ def render_type_logo(height_px: int = 36, fallback_text: str = "Material Map", d
     return f'<div class="site-logo-fallback" style="font-size: {height_px}px; font-weight: 600; color: #1a1a1a;">{fallback_text}</div>'
 
 
-def render_logo_mark(height_px: int = 96, debug: bool = False) -> Optional[str]:
+def render_logo_mark(height_px: int = 72, debug: bool = False) -> Optional[str]:
     """
     ロゴマークを描画（ホーム画面専用）
     
     Args:
-        height_px: ロゴの高さ（デフォルト96px）
+        height_px: ロゴの高さ（デフォルト72px、3/4サイズ）
         debug: デバッグ情報を表示するか
     
     Returns:
@@ -202,6 +212,7 @@ def render_logo_mark(height_px: int = 96, debug: bool = False) -> Optional[str]:
 def render_site_header(subtitle: Optional[str] = None, debug: bool = False) -> str:
     """
     サイトヘッダーを描画（タイプロゴ + サブタイトル）
+    サブタイトルはタイプロゴの下に配置（縦並び）
     
     Args:
         subtitle: サブタイトル（任意、例：「素材の可能性を探索するデータベース」）
@@ -215,16 +226,20 @@ def render_site_header(subtitle: Optional[str] = None, debug: bool = False) -> s
     if subtitle:
         return f"""
         <div class="site-header">
-            {logo_html}
-            <div class="site-subtitle" style="font-size: 14px; color: #666; margin-left: 12px; line-height: 36px;">
-                {subtitle}
+            <div class="site-title-block">
+                {logo_html}
+                <div class="site-subtitle">
+                    {subtitle}
+                </div>
             </div>
         </div>
         """
     else:
         return f"""
         <div class="site-header">
-            {logo_html}
+            <div class="site-title-block">
+                {logo_html}
+            </div>
         </div>
         """
 

@@ -166,6 +166,9 @@ class MaterialSubmission(Base):
     
     # 投稿者情報（任意）
     submitted_by = Column(String(255))  # 投稿者名/ID
+    
+    # 承認時に作成された材料ID（承認後の参照用）
+    approved_material_id = Column(Integer, ForeignKey("materials.id"), nullable=True)
 
 
 class Property(Base):
@@ -596,6 +599,16 @@ def init_db():
             # image_pathをnullableに変更（既存データは保持）
             # SQLiteではALTER COLUMNが直接できないため、新しいテーブルを作成して移行する必要がある
             # ただし、既存データに影響を与えないため、ここではカラム追加のみ行う
+        
+        # material_submissions テーブルのカラム確認
+        if 'material_submissions' in inspector.get_table_names():
+            existing_columns = [col['name'] for col in inspector.get_columns('material_submissions')]
+            
+            # approved_material_idカラムが存在しない場合は追加
+            if 'approved_material_id' not in existing_columns:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE material_submissions ADD COLUMN approved_material_id INTEGER"))
+                    print("[DB MIGRATION] Added approved_material_id column to material_submissions")
         
     except Exception as e:
         # 既に存在するか、その他のエラー（無視して続行）

@@ -167,11 +167,9 @@ def get_base64_image(image_path):
             return None
     return None
 
-# 背景画像の読み込み
+# 背景画像の読み込み（メイン.webpのみ）
 main_bg_path = get_image_path("メイン.webp")
-sub_bg_path = get_image_path("サブ.webp")
 main_bg_base64 = get_base64_image(main_bg_path) if main_bg_path else None
-sub_bg_base64 = get_base64_image(sub_bg_path) if sub_bg_path else None
 
 # アイコンファイルの読み込み（iconmonstr風のシンプルなSVGアイコン）
 def get_icon_path(icon_name: str) -> Optional[str]:
@@ -594,7 +592,7 @@ def get_custom_css():
         left: 0;
         right: 0;
         bottom: 0;
-        background: {'url("data:image/webp;base64,' + sub_bg_base64 + '")' if sub_bg_base64 else 'none'};
+        background: none;
         background-size: 200%;
         background-position: center;
         opacity: 0.03;
@@ -693,10 +691,17 @@ def get_custom_css():
     /* サイトヘッダー（ロゴ表示用） */
     .site-header {{
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         gap: 12px;
         margin-top: 4px;
         margin-bottom: 12px;
+    }}
+    
+    .site-title-block {{
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0;
     }}
     
     .site-logo svg {{
@@ -705,10 +710,9 @@ def get_custom_css():
         vertical-align: middle;
     }}
     
-    .site-mark svg {{
-        height: 96px;
-        width: auto;
-        vertical-align: middle;
+    .site-mark {{
+        /* サイズは render_logo_mark(height_px=72) の inline style で指定 */
+        /* ここでは余白や整列のみ */
     }}
     
     .site-logo-fallback {{
@@ -720,8 +724,7 @@ def get_custom_css():
     .site-subtitle {{
         font-size: 14px;
         color: #666;
-        margin-left: 12px;
-        line-height: 36px;
+        margin-top: 8px;
     }}
     
     /* モバイル対応（画面幅が小さい場合） */
@@ -736,12 +739,10 @@ def get_custom_css():
             height: 28px;
         }}
         
-        .site-mark svg {{
-            height: 72px;
-        }}
+        /* ロゴマークのサイズは render_logo_mark(height_px=72) の inline style で指定 */
         
         .site-subtitle {{
-            margin-left: 0;
+            margin-top: 8px;
             line-height: 1.4;
         }}
     }}
@@ -1724,68 +1725,89 @@ def main():
 
 def show_home():
     """ホームページ"""
+    # デバッグモードかどうか
+    is_debug = os.getenv("DEBUG", "0") == "1"
+    
     # ロゴマークとタイプロゴを表示
     col1, col2 = st.columns([1, 4])
     with col1:
-        logo_mark_html = render_logo_mark(height_px=96)
+        logo_mark_html = render_logo_mark(height_px=72, debug=is_debug)
         if logo_mark_html:
             st.markdown(logo_mark_html, unsafe_allow_html=True)
     
     with col2:
-        is_debug = os.getenv("DEBUG", "0") == "1"
         st.markdown(render_site_header(subtitle="素材の可能性を探索するデータベース", debug=is_debug), unsafe_allow_html=True)
+    
+    # メイン.webpをメインビジュアルとして表示
+    # プロジェクトルートを推定（static/がある階層をルートとみなす）
+    app_file_path = Path(__file__).resolve()
+    project_root = app_file_path.parent
+    
+    # static/ディレクトリを探してプロジェクトルートを確定
+    current = app_file_path.parent
+    while current != current.parent:  # ルートディレクトリに到達するまで
+        static_dir = current / "static"
+        if static_dir.exists() and static_dir.is_dir():
+            project_root = current
+            break
+        current = current.parent
+    
+    # 優先順位でパスを探索
+    main_webp_paths = [
+        project_root / "static" / "images" / "メイン.webp",
+        project_root / "static" / "メイン.webp",
+        project_root / "メイン.webp",
+    ]
+    
+    main_webp_path = None
+    for path in main_webp_paths:
+        if path.exists() and path.is_file():
+            main_webp_path = path
+            break
+    
+    # メイン.webpをメインビジュアルとして表示
+    if main_webp_path:
+        try:
+            from utils.image_display import display_image_unified
+            st.markdown("""
+            <style>
+                .main-visual {
+                    border-radius: 12px;
+                    margin-top: 12px;
+                    margin-bottom: 24px;
+                    overflow: hidden;
+                }
+            </style>
+            """, unsafe_allow_html=True)
+            st.markdown('<div class="main-visual">', unsafe_allow_html=True)
+            display_image_unified(main_webp_path, width="stretch")
+            st.markdown('</div>', unsafe_allow_html=True)
+        except Exception as e:
+            if is_debug:
+                st.warning(f"メイン.webpの表示に失敗: {e}")
+    elif is_debug:
+        # 見つからない場合の警告（DEBUG=1の時のみ）
+        st.warning("⚠️ メイン.webpが見つかりません")
+        with st.expander("🔍 デバッグ情報", expanded=False):
+            st.write(f"**プロジェクトルート**: `{project_root}`")
+            st.write(f"**探したパス**:")
+            for path in main_webp_paths:
+                st.write(f"- `{path}` (存在: {path.exists()})")
     
     # 管理者表示フラグを取得
     include_unpublished = st.session_state.get("include_unpublished", False)
     materials = get_all_materials(include_unpublished=include_unpublished)
     
-    # サブ画像を装飾として表示
-    sub_img_path = get_image_path("サブ.webp")
-    if sub_img_path:
-        try:
-            sub_img = PILImage.open(sub_img_path)
-            # 画像をリサイズ
-            sub_img.thumbnail((300, 300), PILImage.Resampling.LANCZOS)
-            
-            # 装飾として配置
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col1:
-                from utils.image_display import display_image_unified
-                display_image_unified(sub_img, width=200)
-            with col2:
-                st.markdown("""
-                <div class="hero-section">
-                    <h2 style="color: #1a1a1a; margin-bottom: 20px; font-size: 2rem; font-weight: 600; letter-spacing: -0.01em;">ようこそ</h2>
-                    <p style="font-size: 1.2rem; color: #555; line-height: 1.8; max-width: 800px; margin: 0 auto; font-weight: 500;">
-                        素材カード形式でマテリアル情報を管理する、美しく使いやすいデータベースシステムです。<br>
-                        デザイナーやエンジニアが、材料の可能性を探索するためのツールです。
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-            with col3:
-                st.image(sub_img, width=200)
-        except Exception as e:
-            # 画像読み込み失敗時は通常のヒーローセクション
-            st.markdown("""
-            <div class="hero-section">
-                <h2 style="color: #2c3e50; margin-bottom: 20px; font-size: 2.5rem; font-weight: 800;">✨ ようこそ！</h2>
-                <p style="font-size: 1.2rem; color: #555; line-height: 1.8; max-width: 800px; margin: 0 auto; font-weight: 500;">
-                    素材カード形式でマテリアル情報を管理する、美しく使いやすいデータベースシステムです。<br>
-                    デザイナーやエンジニアが、材料の可能性を探索するためのツールです。
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-    else:
-        # 画像がない場合の通常表示
-        st.markdown("""
-        <div class="hero-section">
-            <h2 style="color: #1a1a1a; margin-bottom: 20px; font-size: 2rem; font-weight: 600; letter-spacing: -0.01em;">ようこそ</h2>
-            <p style="font-size: 1rem; color: #666; line-height: 1.8; max-width: 800px; margin: 0 auto; font-weight: 400;">
-                素材カード形式でマテリアル情報を管理するデータベースシステムです。<br>
-                デザイナーやエンジニアが、材料の可能性を探索するためのツールです。
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+    # ヒーローセクション
+    st.markdown("""
+    <div class="hero-section">
+        <h2 style="color: #2c3e50; margin-bottom: 20px; font-size: 2.5rem; font-weight: 800;">✨ ようこそ！</h2>
+        <p style="font-size: 1.2rem; color: #555; line-height: 1.8; max-width: 800px; margin: 0 auto; font-weight: 500;">
+            素材カード形式でマテリアル情報を管理する、美しく使いやすいデータベースシステムです。<br>
+            デザイナーやエンジニアが、材料の可能性を探索するためのツールです。
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
     
     # 機能紹介カード（iconmonstr風のアイコンを使用）
     st.markdown('<h3 class="section-title">主な機能</h3>', unsafe_allow_html=True)

@@ -7,7 +7,7 @@ import uuid
 import json
 import os
 import re
-from database import SessionLocal, Material, Property, Image, MaterialMetadata, ReferenceURL, UseExample, init_db
+from database import SessionLocal, Material, Property, Image, MaterialMetadata, ReferenceURL, UseExample, MaterialSubmission, init_db
 
 
 # 選択肢の定義
@@ -254,24 +254,71 @@ def show_detailed_material_form(material_id: int = None):
     )
     form_data['is_published'] = 1 if is_published == "公開" else 0
     
+    # 管理者モードかどうかを判定
+    is_admin = os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1"
+    
+    # 投稿者情報（一般ユーザー用、任意）
+    submitted_by = None
+    if not is_admin and not is_edit_mode:
+        st.markdown("---")
+        st.markdown("### 📝 投稿者情報（任意）")
+        submitted_by = st.text_input(
+            "ニックネーム / メールアドレス（任意）",
+            key=f"submitted_by_{material_id if material_id else 'new'}",
+            help="承認連絡が必要な場合に使用します（任意入力）"
+        )
+        if submitted_by and submitted_by.strip() == "":
+            submitted_by = None
+    
     # フォーム送信
-    button_text = "✅ 材料を更新" if is_edit_mode else "✅ 材料を登録"
-    if form_data and st.button(button_text, type="primary", width='stretch'):
-        result = save_material(form_data)
-        
-        # 防御的にresult.get("ok")で分岐
-        if result.get("ok"):
-            # 成功時：result["action"]でcreated/updatedを判定してメッセージ表示
-            if result.get("action") == 'created':
-                st.success("✅ 材料を新規登録しました！")
+    if is_edit_mode or is_admin:
+        # 管理者モードまたは編集モード：直接materialsに保存
+        button_text = "✅ 材料を更新" if is_edit_mode else "✅ 材料を登録"
+        if form_data and st.button(button_text, type="primary", width='stretch'):
+            result = save_material(form_data)
+            
+            # 防御的にresult.get("ok")で分岐
+            if result.get("ok"):
+                # 成功時：result["action"]でcreated/updatedを判定してメッセージ表示
+                if result.get("action") == 'created':
+                    st.success("✅ 材料を新規登録しました！")
+                else:
+                    st.success("✅ 材料を更新しました！")
+                    # 編集モードの場合は編集完了フラグを設定
+                    if is_edit_mode:
+                        st.session_state.edit_completed = True
+                        # 編集ページから一覧に戻る
+                        if st.button("← 一覧に戻る", key="back_after_edit"):
+                            st.session_state.edit_material_id = None
+                            st.session_state.page = "材料一覧"
+                            st.rerun()
             else:
-                st.success("✅ 材料を更新しました！")
-        else:
-            # 失敗時：st.error(result["error"])とst.expanderでtraceback表示
-            st.error(f"❌ エラーが発生しました: {result.get('error', '不明なエラー')}")
-            if result.get("traceback"):
-                with st.expander("🔍 エラー詳細（デバッグ用）", expanded=False):
-                    st.code(result["traceback"], language="python")
+                # 失敗時：st.error(result["error"])とst.expanderでtraceback表示
+                st.error(f"❌ エラーが発生しました: {result.get('error', '不明なエラー')}")
+                if result.get("traceback"):
+                    with st.expander("🔍 エラー詳細（デバッグ用）", expanded=False):
+                        st.code(result["traceback"], language="python")
+    else:
+        # 一般ユーザーモード：submissionsに保存
+        if form_data and st.button("📤 投稿を送信（承認待ち）", type="primary", width='stretch'):
+            result = save_material_submission(form_data, submitted_by=submitted_by)
+            
+            # 防御的にresult.get("ok")で分岐
+            if result.get("ok"):
+                submission_id = result.get("submission_id")
+                submission_uuid = result.get("uuid")
+                st.success("✅ 投稿を送信しました！管理者の承認をお待ちください。")
+                st.info("📝 承認後、材料一覧に表示されます。")
+                st.markdown("---")
+                st.markdown("### 📋 投稿控え")
+                st.code(f"投稿ID: {submission_id}\nUUID: {submission_uuid}", language="text")
+                st.info("💡 このIDを控えておくと、後で投稿ステータスを確認できます。")
+            else:
+                # 失敗時：st.error(result["error"])とst.expanderでtraceback表示
+                st.error(f"❌ エラーが発生しました: {result.get('error', '不明なエラー')}")
+                if result.get("traceback"):
+                    with st.expander("🔍 エラー詳細（デバッグ用）", expanded=False):
+                        st.code(result["traceback"], language="python")
 
 
 def show_layer1_form(existing_material=None):
@@ -894,6 +941,60 @@ def save_material(form_data):
             "action": action,
             "material_id": material.id,
             "uuid": material.uuid,
+        }
+        
+    except Exception as e:
+        db.rollback()
+        import traceback
+        # 失敗時はdictを返す（例外を再発生させない）
+        return {
+            "ok": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
+    finally:
+        db.close()
+
+
+def save_material_submission(form_data: dict, submitted_by: str = None):
+    """
+    材料投稿をmaterial_submissionsテーブルに保存（承認フロー用）
+    
+    Args:
+        form_data: フォーム入力データ（_normalize_requiredで正規化済み）
+        submitted_by: 投稿者情報（任意）
+    
+    Returns:
+        dict: {"ok": True/False, "submission_id": int, "uuid": str, "error": str, "traceback": str}
+    """
+    db = SessionLocal()
+    try:
+        # 必須フィールドの補完（None/空文字列をデフォルト値で埋める）
+        form_data = _normalize_required(form_data, existing=None)
+        
+        # payload_jsonにform_dataをJSON文字列として保存
+        payload_json = json.dumps(form_data, ensure_ascii=False, default=str)
+        
+        # UUIDを生成
+        submission_uuid = str(uuid.uuid4())
+        
+        # MaterialSubmissionを作成
+        submission = MaterialSubmission(
+            uuid=submission_uuid,
+            status="pending",
+            payload_json=payload_json,
+            submitted_by=submitted_by if submitted_by and submitted_by.strip() else None
+        )
+        
+        db.add(submission)
+        db.commit()
+        db.refresh(submission)
+        
+        # 成功時はdictを返す
+        return {
+            "ok": True,
+            "submission_id": submission.id,
+            "uuid": submission.uuid,
         }
         
     except Exception as e:

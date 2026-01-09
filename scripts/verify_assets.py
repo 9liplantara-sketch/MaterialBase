@@ -70,6 +70,51 @@ def verify_assets(project_root: Path) -> tuple[bool, list[str]]:
     warnings = []
     missing_primary = []
     
+    # サブ.webpの参照チェック（再発防止）
+    # ドキュメントファイルは許可、実コードのみをチェック
+    allowed_extensions = {'.md', '.txt', '.rst', '.yml', '.yaml', '.toml', '.json', '.jsonc'}
+    code_extensions = {'.py', '.html', '.htm', '.js', '.jsx', '.ts', '.tsx', '.css', '.scss', '.sass', '.vue', '.svelte'}
+    
+    sub_webp_patterns = [r'sub\.webp', r'サブ\.webp']
+    
+    def check_sub_webp_references(root_path: Path) -> list[str]:
+        """実コード内のサブ.webp参照を検出"""
+        found_refs = []
+        
+        # 実コードファイルを検索
+        for ext in code_extensions:
+            for file_path in root_path.rglob(f'*{ext}'):
+                # ドキュメントディレクトリはスキップ
+                if 'docs' in file_path.parts or 'documentation' in file_path.parts:
+                    continue
+                
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        for line_num, line in enumerate(f, start=1):
+                            for pattern in sub_webp_patterns:
+                                import re
+                                if re.search(pattern, line, re.IGNORECASE):
+                                    # 相対パスで表示
+                                    rel_path = file_path.relative_to(root_path)
+                                    found_refs.append(f"{rel_path}:{line_num}: {line.strip()}")
+                                    break
+                except Exception as e:
+                    if os.getenv("DEBUG", "0") == "1":
+                        print(f"⚠️  {file_path} の読み込みエラー: {e}")
+        
+        return found_refs
+    
+    # サブ.webp参照をチェック
+    sub_webp_refs = check_sub_webp_references(project_root)
+    if sub_webp_refs:
+        error_msg = "❌ サブ.webpの参照が実コード内で検出されました（削除が必要）:"
+        for ref in sub_webp_refs[:10]:  # 最初の10件
+            error_msg += f"\n  {ref}"
+        if len(sub_webp_refs) > 10:
+            error_msg += f"\n  ... 他 {len(sub_webp_refs) - 10} 件"
+        errors.append(error_msg)
+        print(error_msg)
+    
     db = SessionLocal()
     
     try:
