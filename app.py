@@ -36,31 +36,8 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import select, func
 from utils.logo import render_site_header, render_logo_mark, show_logo_debug_info, get_logo_debug_info, get_project_root
 
-# card_generatorとschemasのimport（循環インポート対策）
-# エラー情報をグローバル変数に保存（Debug欄で表示用）
-_card_generator_import_error = None
-_card_generator_import_traceback = None
-
-try:
-    from card_generator import generate_material_card
-    from schemas import MaterialCard
-except Exception as e:
-    # importエラー時のフォールバック（最低限の動作を保証）
-    import traceback
-    _card_generator_import_error = str(e)
-    _card_generator_import_traceback = traceback.format_exc()
-    print(f"Warning: card_generator/schemas import failed: {e}")
-    traceback.print_exc()
-    def generate_material_card(card_data):
-        """フォールバック: 仮のカードHTMLを返す"""
-        return f"<html><body><h1>Material Card (Fallback)</h1><p>ID: {getattr(card_data.payload, 'id', 'N/A')}</p></body></html>"
-    # MaterialCardのフォールバック定義
-    from pydantic import BaseModel
-    class MaterialCardPayload(BaseModel):
-        id: int
-        name: str
-    class MaterialCard(BaseModel):
-        payload: MaterialCardPayload
+# card_generatorとschemasのimportは削除（起動時クラッシュを避けるため）
+# これらのモジュールは使用する関数内でlazy importする
 
 # エントリーポイント関数（本文の最初に必ず出るマーカー、main呼び出しの強制、例外の可視化）
 import traceback
@@ -799,32 +776,37 @@ def should_init_sample_data() -> bool:
     return count == 0
 
 
-def ensure_sample_data():
+def maybe_init_sample_data():
     """
-    サンプルデータが存在しない場合、自動投入（idempotent）
+    サンプルデータを初期化する（環境変数がONのときだけ）
     
-    注意: 
+    注意:
+    - 起動時（トップレベル）では import しない
     - 環境変数 INIT_SAMPLE_DATA=1 が設定されている場合のみ実行
-    - DBが空（materials件数==0）の時だけ実行
-    - 例外が出てもアプリ起動を殺さない（ログ＆Debug表示）
+    - セッション内で1回だけ実行（st.session_stateでガード）
+    - 例外が出てもアプリ起動を殺さない（ログのみ）
     """
-    # 初期化すべきか判定
-    if not should_init_sample_data():
+    if os.getenv("INIT_SAMPLE_DATA") != "1":
         return
     
-    db = None
+    # セッション内で1回だけ実行（Streamlitの再実行特性に対応）
+    if st.session_state.get("_seed_done", False):
+        return
+    
     try:
-        # サンプルデータを投入
+        # Lazy import: 起動時にimportしない（SyntaxErrorがあっても起動できる）
         from init_sample_data import init_sample_data
         init_sample_data()
-        st.info("サンプルデータを自動投入しました。ページをリロードしてください。")
+        print("[INFO] Sample data initialized successfully")
     except Exception as e:
-        # 例外はログ＋画面にst.warning、でもアプリは落とさない
+        # 落とさない（DEBUG時だけ表示でもOK）
         import traceback
-        error_msg = f"サンプルデータの投入中にエラーが発生しました: {e}"
-        print(f"ERROR: {error_msg}\n{traceback.format_exc()}")
-        st.warning(error_msg)
-        # アプリ起動は続行
+        print(f"[WARN] init_sample_data failed: {e}")
+        if os.getenv("DEBUG", "0") == "1":
+            print(traceback.format_exc())
+    finally:
+        # 成功/失敗問わず、セッション内で1回だけ実行するフラグを立てる
+        st.session_state["_seed_done"] = True
 
 def get_db():
     """データベースセッションを取得"""
@@ -1492,16 +1474,19 @@ def main():
     # init_db()の後に実行（スキーマ補完完了後）
     # 例外が出てもアプリ起動を殺さない
     try:
-        ensure_sample_data()
+        maybe_init_sample_data()
     except Exception as e:
-        # 例外を可視化（本文に出す）
-        st.warning(f"ensure_sample_data() failed: {e}")
-        st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
+        # 例外はログのみ（起動時クラッシュを防ぐため、画面には出さない）
+        import traceback
+        print(f"[WARN] maybe_init_sample_data() failed: {e}")
+        if os.getenv("DEBUG", "0") == "1":
+            st.warning(f"maybe_init_sample_data() failed: {e}")
+            st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
         # アプリ起動は続行
     
-    # 画像の自動修復（環境変数フラグがある場合のみ、かつDBが空の時だけ）
+    # 画像の自動修復（INIT_SAMPLE_DATA=1 の時だけ）
     # init_db()の後に実行（スキーマ補完完了後）
-    if should_init_sample_data():
+    if os.getenv("INIT_SAMPLE_DATA") == "1":
         try:
             from utils.ensure_images import ensure_images
             ensure_images(Path.cwd())
@@ -1723,21 +1708,32 @@ def main():
     elif page == "投稿ステータス確認":
         show_submission_status()
 
-def resolve_home_main_visual(project_root: Optional[Path] = None) -> Optional[Path]:
+def resolve_home_main_visual(project_root: Optional[Path] = None) -> tuple[Optional[Path], Optional[bytes]]:
     """
-    ホームのメインビジュアル画像のパスを解決
-    「写真/メイン.webp」を優先し、WebPが読めない環境ではjpg/pngにフォールバック
-    webp非対応ならwebp候補はスキップ
+    ホームのメインビジュアル画像のパスと画像データを解決
+    static/images/メイン.jpg を優先し、WebPが読めない環境ではjpg/pngにフォールバック
+    PILで開けるかを検証して、開けない候補はスキップ
     
     Args:
         project_root: プロジェクトルート（Noneの場合は自動解決）
     
     Returns:
-        見つかった画像のPath、見つからなければNone
+        (見つかった画像のPath, 画像データのbytes) のタプル、見つからなければ (None, None)
     """
     if project_root is None:
-        # utils/logo.pyのget_project_root()を使用
-        project_root = get_project_root()
+        # Path解決は Path(__file__).resolve().parent を project_root として開始
+        project_root = Path(__file__).resolve().parent
+        
+        # 念のため static/ が存在する上位ディレクトリまで最大3階層だけ辿って見つける（Cloudのcwdズレ対策）
+        current = project_root
+        for _ in range(3):
+            static_dir = current / "static"
+            if static_dir.exists() and static_dir.is_dir():
+                project_root = current
+                break
+            if current == current.parent:
+                break
+            current = current.parent
     
     # WebPサポートチェック
     webp_supported = False
@@ -1747,33 +1743,67 @@ def resolve_home_main_visual(project_root: Optional[Path] = None) -> Optional[Pa
     except Exception:
         pass
     
-    # 探索順（上から優先）
-    # webp非対応ならwebp候補はスキップ
-    candidate_paths = []
+    # 候補の優先順（まず static/images を正とする）
+    candidate_paths = [
+        project_root / "static" / "images" / "メイン.jpg",
+        project_root / "static" / "images" / "メイン.png",
+    ]
     
     if webp_supported:
         # WebP対応時のみWebP候補を追加
-        candidate_paths.extend([
-            project_root / "写真" / "メイン.webp",
-            project_root / "static" / "images" / "メイン.webp",
-            project_root / "static" / "メイン.webp",
-        ])
+        candidate_paths.append(project_root / "static" / "images" / "メイン.webp")
     
-    # jpg/pngは常に探索
     candidate_paths.extend([
         project_root / "写真" / "メイン.jpg",
-        project_root / "static" / "images" / "メイン.jpg",
-        project_root / "static" / "メイン.jpg",
         project_root / "写真" / "メイン.png",
-        project_root / "static" / "images" / "メイン.png",
+    ])
+    
+    if webp_supported:
+        candidate_paths.append(project_root / "写真" / "メイン.webp")
+    
+    # 必要なら static/メイン.* も最後尾
+    candidate_paths.extend([
+        project_root / "static" / "メイン.jpg",
         project_root / "static" / "メイン.png",
     ])
     
-    for path in candidate_paths:
-        if path.exists() and path.is_file():
-            return path
+    if webp_supported:
+        candidate_paths.append(project_root / "static" / "メイン.webp")
     
-    return None
+    # 各候補を「存在する & 実際に読み込める」順に選ぶ
+    for path in candidate_paths:
+        if not path.exists() or not path.is_file():
+            continue
+        
+        # PILで開けるかを検証
+        try:
+            from PIL import Image
+            with Image.open(path) as img:
+                # 画像を開いて検証（実際に読み込めるか確認）
+                img.verify()
+            
+            # 検証後、再度開いてbytesに変換
+            # verify()で検証した後は画像が閉じられるので、再度開く必要がある
+            img = Image.open(path)
+            try:
+                # RGBに変換（RGBAやPモードなどに対応）
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # BytesIOに保存してbytesを取得
+                from io import BytesIO
+                buffer = BytesIO()
+                img.save(buffer, format='JPEG', quality=95)
+                image_bytes = buffer.getvalue()
+                
+                return (path, image_bytes)
+            finally:
+                img.close()
+        except Exception as e:
+            # 開けない候補はスキップして次へ（エラーはデバッグ情報に含める）
+            continue
+    
+    return (None, None)
 
 
 def get_main_visual_debug_info() -> Dict[str, Any]:
@@ -1783,7 +1813,19 @@ def get_main_visual_debug_info() -> Dict[str, Any]:
     Returns:
         デバッグ情報の辞書
     """
-    project_root = get_project_root()
+    # Path解決は Path(__file__).resolve().parent を project_root として開始
+    project_root = Path(__file__).resolve().parent
+    
+    # 念のため static/ が存在する上位ディレクトリまで最大3階層だけ辿って見つける
+    current = project_root
+    for _ in range(3):
+        static_dir = current / "static"
+        if static_dir.exists() and static_dir.is_dir():
+            project_root = current
+            break
+        if current == current.parent:
+            break
+        current = current.parent
     
     # WebPサポートチェック
     webp_supported = False
@@ -1793,40 +1835,58 @@ def get_main_visual_debug_info() -> Dict[str, Any]:
     except Exception:
         pass
     
-    # 探索順（上から優先、webp非対応ならwebp候補はスキップ）
-    candidate_paths = []
+    # 候補の優先順（まず static/images を正とする）
+    candidate_paths = [
+        project_root / "static" / "images" / "メイン.jpg",
+        project_root / "static" / "images" / "メイン.png",
+    ]
     
     if webp_supported:
-        # WebP対応時のみWebP候補を追加
-        candidate_paths.extend([
-            project_root / "写真" / "メイン.webp",
-            project_root / "static" / "images" / "メイン.webp",
-            project_root / "static" / "メイン.webp",
-        ])
+        candidate_paths.append(project_root / "static" / "images" / "メイン.webp")
     
-    # jpg/pngは常に探索
     candidate_paths.extend([
         project_root / "写真" / "メイン.jpg",
-        project_root / "static" / "images" / "メイン.jpg",
-        project_root / "static" / "メイン.jpg",
         project_root / "写真" / "メイン.png",
-        project_root / "static" / "images" / "メイン.png",
+    ])
+    
+    if webp_supported:
+        candidate_paths.append(project_root / "写真" / "メイン.webp")
+    
+    candidate_paths.extend([
+        project_root / "static" / "メイン.jpg",
         project_root / "static" / "メイン.png",
     ])
     
-    # 各候補の存在確認
+    if webp_supported:
+        candidate_paths.append(project_root / "static" / "メイン.webp")
+    
+    # 各候補の存在確認とPILで開けるか検証
     candidates = []
     for path in candidate_paths:
         exists = path.exists() and path.is_file()
+        open_ok = False
+        error = None
+        
+        if exists:
+            try:
+                from PIL import Image
+                with Image.open(path) as img:
+                    img.verify()
+                open_ok = True
+            except Exception as e:
+                error = str(e)
+        
         candidates.append({
             "path": str(path),
             "exists": exists,
             "size": path.stat().st_size if exists else 0,
             "mtime": path.stat().st_mtime if exists else 0,
+            "open_ok": open_ok,
+            "error": error,
         })
     
-    # 最終的に選ばれたパス
-    selected_path = resolve_home_main_visual(project_root)
+    # 最終的に選ばれたパスと画像データ
+    selected_path, selected_bytes = resolve_home_main_visual(project_root)
     
     return {
         "project_root": str(project_root),
@@ -1836,6 +1896,7 @@ def get_main_visual_debug_info() -> Dict[str, Any]:
         "selected_exists": selected_path.exists() if selected_path else False,
         "selected_size": selected_path.stat().st_size if selected_path and selected_path.exists() else 0,
         "selected_mtime": selected_path.stat().st_mtime if selected_path and selected_path.exists() else 0,
+        "selected_bytes_size": len(selected_bytes) if selected_bytes else 0,
     }
 
 
@@ -1883,15 +1944,12 @@ def show_home():
         
         st.markdown("---")
     
-    # メイン.webpをメインビジュアルとして表示
-    # CSS無効化の影響を受けないよう、ロゴ/画像描画は常に同じコードパス
-    main_webp_path = resolve_home_main_visual()
+    # メイン画像をメインビジュアルとして表示
+    # st.image(bytes)で直接表示（Streamlit Cloudでも安定）
+    main_image_path, main_image_bytes = resolve_home_main_visual()
     
-    # メイン.webpをメインビジュアルとして表示
-    if main_webp_path:
+    if main_image_path and main_image_bytes:
         try:
-            from utils.image_display import display_image_unified
-            
             # CSSはDEBUG=1のときだけ無効化（<style>挿入だけ止める）
             if not is_debug:
                 st.markdown("""
@@ -1906,11 +1964,15 @@ def show_home():
                 """, unsafe_allow_html=True)
             
             st.markdown('<div class="main-visual">', unsafe_allow_html=True)
-            display_image_unified(main_webp_path, width="stretch")
+            # st.imageにbytesを渡して直接表示（相対パス/CWD依存を避ける）
+            st.image(main_image_bytes, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
         except Exception as e:
             if is_debug:
-                st.warning(f"メイン.webpの表示に失敗: {e}")
+                st.warning(f"メイン画像の表示に失敗: {e}")
+    elif is_debug:
+        # 選べなければ通常は何も出さず、DEBUG=1時だけwarningを出す（ユーザー体験を壊さない）
+        st.warning("⚠️ メイン画像が見つかりませんでした")
     
     # 管理者表示フラグを取得
     include_unpublished = st.session_state.get("include_unpublished", False)
@@ -3398,13 +3460,14 @@ def show_material_cards():
         st.markdown("---")
         st.markdown("### 素材カード（印刷用）")
         
-        # MaterialCard用のDTOを作成（ValidationErrorを防ぐ）
-        from schemas import MaterialCardPayload, MaterialCard, PropertyDTO
-        
+        # Lazy import: card_generatorとschemas（起動時クラッシュを避けるため）
         card_html = None
         error_message = None
         
         try:
+            # 使用する時だけimportする（lazy import）
+            from schemas import MaterialCardPayload, MaterialCard, PropertyDTO
+            from card_generator import generate_material_card
             # 主要画像を取得（安全に）
             primary_image = None
             primary_image_path = None
@@ -3475,12 +3538,18 @@ def show_material_cards():
             card_html = generate_material_card(card_data)
             
         except Exception as e:
-            # エラーメッセージを保存
+            # ImportError/KeyError/その他すべての例外をキャッチ（ホームは必ず表示される）
             error_message = str(e)
             import traceback
             error_traceback = traceback.format_exc()
             print(f"カード生成エラー: {error_message}")
             print(error_traceback)
+            
+            # カード画面にエラーを表示（ホームには出さない）
+            st.error(f"⚠️ カード生成中にエラーが発生しました: {error_message}")
+            if os.getenv("DEBUG", "0") == "1":
+                with st.expander("詳細エラー情報", expanded=False):
+                    st.code(error_traceback, language="python")
             
             # フォールバック：最低限の情報だけのカード
             try:
@@ -3521,17 +3590,15 @@ def show_material_cards():
                 </html>
                 """
         
-        # エラーメッセージを表示
-        if error_message:
-            st.error(f"カード生成時にエラーが発生しました: {error_message}")
-            with st.expander("エラー詳細（開発者向け）"):
-                st.code(error_traceback if 'error_traceback' in locals() else error_message)
-        
         # HTMLを表示
-        try:
-            st.components.v1.html(card_html, height=800, scrolling=True)
-        except:
-            st.markdown(card_html, unsafe_allow_html=True)
+        if card_html:
+            try:
+                st.components.v1.html(card_html, height=800, scrolling=True)
+            except:
+                st.markdown(card_html, unsafe_allow_html=True)
+        else:
+            # エラーが発生した場合、フォールバックカードが表示されない場合
+            st.warning("⚠️ カード生成に失敗しました。上記のエラーメッセージを確認してください。")
         
         # ダウンロードボタン
         st.download_button(
