@@ -7,6 +7,7 @@ import uuid
 import json
 import os
 import re
+import inspect
 from database import SessionLocal, Material, Property, Image, MaterialMetadata, ReferenceURL, UseExample, MaterialSubmission, init_db
 
 
@@ -234,7 +235,62 @@ def show_detailed_material_form(material_id: int = None):
             form_data.update(layer1_data)
     
     with tab2:
-        layer2_data = show_layer2_form(existing_material=existing_material)
+        # show_layer2_form のシグネチャを実行時に確認して互換呼び出しに切り替える
+        def _call_layer2(existing_material):
+            """show_layer2_form を実行時にチェックして呼び出す互換性シム"""
+            try:
+                sig = inspect.signature(show_layer2_form)
+                params = sig.parameters
+                
+                if "existing_material" in params:
+                    # existing_material パラメータが存在する場合
+                    return show_layer2_form(existing_material=existing_material)
+                else:
+                    # existing_material パラメータが存在しない場合（古い実装）
+                    if os.getenv("DEBUG", "0") == "1":
+                        st.warning("⚠️ show_layer2_form が existing_material パラメータを受け取りません（古い実装）")
+                        st.json({
+                            "show_layer2_form.module": getattr(show_layer2_form, "__module__", None),
+                            "show_layer2_form.file": inspect.getsourcefile(show_layer2_form),
+                            "show_layer2_form.signature": str(sig),
+                            "has_existing_material": False,
+                            "parameters": list(params.keys()),
+                        })
+                    return show_layer2_form()
+            except TypeError as e:
+                # 念のため最終フォールバック（古い関数でも落ちない）
+                if os.getenv("DEBUG", "0") == "1":
+                    try:
+                        sig = inspect.signature(show_layer2_form)
+                        params = sig.parameters
+                        st.error(f"⚠️ Layer2呼び出しでTypeError: {e}")
+                        st.json({
+                            "show_layer2_form.module": getattr(show_layer2_form, "__module__", None),
+                            "show_layer2_form.file": inspect.getsourcefile(show_layer2_form),
+                            "show_layer2_form.signature": str(sig),
+                            "has_existing_material": "existing_material" in params,
+                            "parameters": list(params.keys()),
+                            "error": str(e),
+                        })
+                    except Exception as diag_error:
+                        st.error(f"⚠️ Layer2呼び出しでTypeError: {e}（診断情報の取得も失敗: {diag_error}）")
+                # フォールバック: existing_material なしで呼び出す
+                try:
+                    return show_layer2_form()
+                except Exception as fallback_error:
+                    # それでも失敗する場合は空のdictを返す（クラッシュを防ぐ）
+                    if os.getenv("DEBUG", "0") == "1":
+                        st.error(f"⚠️ show_layer2_form() の呼び出しに失敗しました: {fallback_error}")
+                    return {}
+            except Exception as e:
+                # その他の予期しない例外
+                if os.getenv("DEBUG", "0") == "1":
+                    st.error(f"⚠️ show_layer2_form の呼び出しで予期しないエラー: {e}")
+                    import traceback
+                    st.code(traceback.format_exc(), language="python")
+                return {}
+        
+        layer2_data = _call_layer2(existing_material)
         if layer2_data:
             form_data.update(layer2_data)
     
