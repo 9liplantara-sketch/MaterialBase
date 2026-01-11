@@ -2779,20 +2779,24 @@ def show_approval_queue():
     db = SessionLocal()
     try:
         # フィルタ：rejectedも表示するか
+        # 初期化はwidget作成前にのみ行う
+        if "approval_show_rejected" not in st.session_state:
+            st.session_state["approval_show_rejected"] = False
+        
         show_rejected = st.checkbox(
             "却下済みも表示",
-            value=st.session_state.get("approval_show_rejected", False),
             key="approval_show_rejected"
         )
-        st.session_state["approval_show_rejected"] = show_rejected
         
         # 検索：name_official部分一致
+        # 初期化はwidget作成前にのみ行う
+        if "approval_search" not in st.session_state:
+            st.session_state["approval_search"] = ""
+        
         search_query = st.text_input(
             "材料名で検索（部分一致）",
-            value=st.session_state.get("approval_search", ""),
             key="approval_search"
         )
-        st.session_state["approval_search"] = search_query
         
         # ステータスフィルタ
         if show_rejected:
