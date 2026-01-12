@@ -62,7 +62,7 @@ def get_or_create_property(
     value: Optional[float] = None,
     unit: Optional[str] = None,
     measurement_condition: Optional[str] = None
-) -> Tuple[Property, bool]:
+) -> Tuple[Optional[Property], bool]:
     """
     物性データを取得または作成（get-or-createパターン）
     
@@ -77,6 +77,11 @@ def get_or_create_property(
     Returns:
         (Property, created) のタプル
     """
+    # material_id が None の場合は即 return（最終安全策）
+    if not material_id:
+        print(f"[SEED] skip property: material_id is None (property: {property_name})")
+        return None, False
+    
     # 既存の物性データを検索（material_id + property_nameで一意）
     existing = db.query(Property).filter(
         Property.material_id == material_id,

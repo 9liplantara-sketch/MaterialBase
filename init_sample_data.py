@@ -9,8 +9,10 @@ from database import SessionLocal, Material, Property, Image, MaterialMetadata, 
 from image_generator import ensure_material_image
 from datetime import datetime
 from utils.material_seed import get_or_create_material, get_or_create_property, get_or_create_use_example
+from utils.settings import get_flag
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import PendingRollbackError
 from typing import Callable, Tuple, Optional
 
 
@@ -48,11 +50,34 @@ def run_seed_block(db: Session, label: str, fn: Callable, stats: dict, materials
         if material:
             materials_data.append(material)
         
-        nested.commit()  # SAVEPOINTをcommit（外側のトランザクションは継続）
+        # nested.commit() 前に PendingRollback 状態をチェック
+        try:
+            # セッションが PendingRollback 状態でないか確認
+            if db.in_transaction() and db.in_nested_transaction():
+                # 正常な状態なので commit 可能
+                nested.commit()  # SAVEPOINTをcommit（外側のトランザクションは継続）
+            else:
+                # セッションが異常状態の可能性があるため rollback
+                nested.rollback()
+                db.rollback()
+                db.expire_all()
+                print(f"  ⚠️  スキップ: {label} (セッション状態異常のためrollback)")
+                stats["skipped"] += 1
+                return None, False
+        except (PendingRollbackError, Exception) as commit_error:
+            # commit 時にエラーが発生した場合は rollback
+            nested.rollback()
+            db.rollback()
+            db.expire_all()
+            print(f"  ⚠️  スキップ: {label} (commit失敗: {type(commit_error).__name__}: {commit_error})")
+            stats["skipped"] += 1
+            return None, False
+        
         return material, True
         
     except IntegrityError as e:
         nested.rollback()  # SAVEPOINTのみrollback（外側はrollbackしない）
+        db.rollback()      # セッション全体をrollbackしてPendingRollbackErrorを防ぐ
         db.expire_all()    # Sessionの状態をクリーンにしてPendingRollbackErrorを防ぐ
         print(f"  ⚠️  スキップ: {label} (UNIQUE constraint failed: {e})")
         stats["skipped"] += 1
@@ -60,7 +85,8 @@ def run_seed_block(db: Session, label: str, fn: Callable, stats: dict, materials
         
     except Exception as e:
         nested.rollback()  # その他の例外でもSAVEPOINTをrollback
-        db.expire_all()
+        db.rollback()      # セッション全体をrollbackしてPendingRollbackErrorを防ぐ
+        db.expire_all()    # Sessionの状態をクリーンにしてPendingRollbackErrorを防ぐ
         print(f"  ⚠️  エラー: {label} ({type(e).__name__}: {e})")
         stats["skipped"] += 1
         import traceback
@@ -74,6 +100,13 @@ def init_sample_data():
     重複投入を防ぐため、既存の材料名をチェックして差分のみ投入
     IntegrityErrorが発生してもアプリを落とさない（SAVEPOINT方式で各ブロックを独立管理）
     """
+    # フラグを先頭で一度だけ評価（画像処理の完全無効化）
+    SEED_SKIP_IMAGES = get_flag("SEED_SKIP_IMAGES", True)
+    INIT_SAMPLE_DATA_FLAG = get_flag("INIT_SAMPLE_DATA", False)
+    
+    # ログでフラグ状態を可視化
+    print(f"[SEED] SEED_SKIP_IMAGES={SEED_SKIP_IMAGES} INIT_SAMPLE_DATA={INIT_SAMPLE_DATA_FLAG}")
+    
     # データベース初期化
     init_db()
     
@@ -134,15 +167,21 @@ def init_sample_data():
                 description="カリン（花梨）の木材。美しい木目と高い硬度が特徴。"
             )
             
-            if created:
+            # material.id を確定させる（properties追加前に必須）
+            if material:
+                db.flush()
+            if not material or not getattr(material, "id", None):
+                print("[SEED] skip properties: material.id is None (カリン材)")
+            elif created:
                 # 物性データを追加（get-or-create）
                 get_or_create_property(db, material.id, "密度", value=0.75, unit="g/cm³")
                 get_or_create_property(db, material.id, "JIS規格", value=None, unit="JAS（日本農林規格）")
                 get_or_create_property(db, material.id, "引張強度", value=85, unit="MPa")
                 get_or_create_property(db, material.id, "圧縮強度", value=50, unit="MPa")
                 
-                # 画像生成
-                ensure_material_image("カリン材", "木材・紙・セルロース系", material.id, db)
+                # 画像生成（SEED_SKIP_IMAGES フラグで制御、デフォルトはスキップ）
+                if not SEED_SKIP_IMAGES:
+                    ensure_material_image("カリン材", "木材・紙・セルロース系", material.id, db)
             
             return material, created
         
@@ -183,14 +222,20 @@ def init_sample_data():
                 description="クリ（栗）の木材。軽量で加工しやすい。"
             )
             
-            if created:
+            # material.id を確定させる（properties追加前に必須）
+            if material:
+                db.flush()
+            if not material or not getattr(material, "id", None):
+                print("[SEED] skip properties: material.id is None (栗材)")
+            elif created:
                 # 物性データを追加（get-or-create）
                 get_or_create_property(db, material.id, "密度", value=0.56, unit="g/cm³")
                 get_or_create_property(db, material.id, "引張強度", value=65, unit="MPa")
                 get_or_create_property(db, material.id, "圧縮強度", value=35, unit="MPa")
                 
-                # 画像生成
-                ensure_material_image("栗材", "木材・紙・セルロース系", material.id, db)
+                # 画像生成（SEED_SKIP_IMAGES フラグで制御、デフォルトはスキップ）
+                if not SEED_SKIP_IMAGES:
+                    ensure_material_image("栗材", "木材・紙・セルロース系", material.id, db)
             
             return material, created
         
@@ -231,14 +276,20 @@ def init_sample_data():
                 description="カシ（樫）の木材。非常に硬く、耐久性に優れる。"
             )
             
-            if created:
+            # material.id を確定させる（properties追加前に必須）
+            if material:
+                db.flush()
+            if not material or not getattr(material, "id", None):
+                print("[SEED] skip properties: material.id is None (樫材)")
+            elif created:
                 # 物性データを追加（get-or-create）
                 get_or_create_property(db, material.id, "密度", value=0.75, unit="g/cm³")
                 get_or_create_property(db, material.id, "引張強度", value=95, unit="MPa")
                 get_or_create_property(db, material.id, "圧縮強度", value=55, unit="MPa")
                 
-                # 画像生成
-                ensure_material_image("樫材", "木材・紙・セルロース系", material.id, db)
+                # 画像生成（SEED_SKIP_IMAGES フラグで制御、デフォルトはスキップ）
+                if not SEED_SKIP_IMAGES:
+                    ensure_material_image("樫材", "木材・紙・セルロース系", material.id, db)
             
             return material, created
         
@@ -283,7 +334,12 @@ def init_sample_data():
                 description="純アルミニウム。軽量で加工性が良く、耐食性に優れる。JIS H 4000準拠。"
             )
             
-            if created:
+            # material.id を確定させる（properties追加前に必須）
+            if material:
+                db.flush()
+            if not material or not getattr(material, "id", None):
+                print("[SEED] skip properties: material.id is None (アルミニウム)")
+            elif created:
                 # 物性データを追加（get-or-create）
                 get_or_create_property(db, material.id, "密度", value=2.70, unit="g/cm³")
                 get_or_create_property(db, material.id, "引張強度", value=70, unit="MPa")
@@ -292,13 +348,18 @@ def init_sample_data():
                 get_or_create_property(db, material.id, "熱伝導率", value=237, unit="W/(m·K)")
                 get_or_create_property(db, material.id, "JIS規格", value=None, unit="JIS H 4000")
                 
-                # 画像生成
-                ensure_material_image("アルミニウム", "金属・合金", material.id, db)
+                # 画像生成（SEED_SKIP_IMAGES フラグで制御、デフォルトはスキップ）
+                if not SEED_SKIP_IMAGES:
+                    ensure_material_image("アルミニウム", "金属・合金", material.id, db)
                 
                 # 用途例を追加（画像付き、get-or-create）
-                from utils.use_example_image_generator import ensure_use_example_image
-                use1_img = ensure_use_example_image("アルミニウム", "アルミ鍋", "キッチン")
-                use2_img = ensure_use_example_image("アルミニウム", "アルミサッシ", "建築")
+                if not SEED_SKIP_IMAGES:
+                    from utils.use_example_image_generator import ensure_use_example_image
+                    use1_img = ensure_use_example_image("アルミニウム", "アルミ鍋", "キッチン")
+                    use2_img = ensure_use_example_image("アルミニウム", "アルミサッシ", "建築")
+                else:
+                    use1_img = None
+                    use2_img = None
                 
                 get_or_create_use_example(
                     db,
@@ -363,7 +424,12 @@ def init_sample_data():
                 description="オーステナイト系ステンレス鋼。優れた耐食性と加工性を持つ。JIS G 4305準拠。"
             )
             
-            if created:
+            # material.id を確定させる（properties追加前に必須）
+            if material:
+                db.flush()
+            if not material or not getattr(material, "id", None):
+                print("[SEED] skip properties: material.id is None (ステンレス鋼)")
+            elif created:
                 # 物性データを追加（get-or-create）
                 get_or_create_property(db, material.id, "密度", value=7.93, unit="g/cm³")
                 get_or_create_property(db, material.id, "引張強度", value=520, unit="MPa")
@@ -373,12 +439,16 @@ def init_sample_data():
                 get_or_create_property(db, material.id, "JIS規格", value=None, unit="JIS G 4305")
                 get_or_create_property(db, material.id, "主成分", value=None, unit="Fe, Cr 18%, Ni 8%")
                 
-                # 画像生成
-                ensure_material_image("ステンレス鋼", "金属・合金", material.id, db)
+                # 画像生成（SEED_SKIP_IMAGES フラグで制御、デフォルトはスキップ）
+                if not SEED_SKIP_IMAGES:
+                    ensure_material_image("ステンレス鋼", "金属・合金", material.id, db)
                 
                 # 用途例を追加（画像付き、get-or-create）
-                from utils.use_example_image_generator import ensure_use_example_image
-                use1_img = ensure_use_example_image("ステンレス鋼", "調理台/流し台", "キッチン")
+                if not SEED_SKIP_IMAGES:
+                    from utils.use_example_image_generator import ensure_use_example_image
+                    use1_img = ensure_use_example_image("ステンレス鋼", "調理台/流し台", "キッチン")
+                else:
+                    use1_img = None
                 
                 get_or_create_use_example(
                     db,
@@ -432,7 +502,12 @@ def init_sample_data():
                 description="銅と亜鉛の合金。美しい黄金色と優れた加工性を持つ。JIS H 3100準拠。"
             )
             
-            if created:
+            # material.id を確定させる（properties追加前に必須）
+            if material:
+                db.flush()
+            if not material or not getattr(material, "id", None):
+                print("[SEED] skip properties: material.id is None (真鍮)")
+            elif created:
                 # 物性データを追加（get-or-create）
                 get_or_create_property(db, material.id, "密度", value=8.53, unit="g/cm³")
                 get_or_create_property(db, material.id, "引張強度", value=350, unit="MPa")
@@ -442,12 +517,16 @@ def init_sample_data():
                 get_or_create_property(db, material.id, "JIS規格", value=None, unit="JIS H 3100")
                 get_or_create_property(db, material.id, "主成分", value=None, unit="Cu 70%, Zn 30%")
                 
-                # 画像生成
-                ensure_material_image("真鍮", "金属・合金", material.id, db)
+                # 画像生成（SEED_SKIP_IMAGES フラグで制御、デフォルトはスキップ）
+                if not SEED_SKIP_IMAGES:
+                    ensure_material_image("真鍮", "金属・合金", material.id, db)
                 
                 # 用途例を追加（画像付き、get-or-create）
-                from utils.use_example_image_generator import ensure_use_example_image
-                use1_img = ensure_use_example_image("真鍮", "ドアノブ/金物", "内装")
+                if not SEED_SKIP_IMAGES:
+                    from utils.use_example_image_generator import ensure_use_example_image
+                    use1_img = ensure_use_example_image("真鍮", "ドアノブ/金物", "内装")
+                else:
+                    use1_img = None
                 
                 get_or_create_use_example(
                     db,
@@ -504,7 +583,12 @@ def init_sample_data():
                 description="ポリプロピレン樹脂。軽量で耐薬品性に優れ、食品容器などに広く使用される。JIS K 6922準拠。"
             )
             
-            if created:
+            # material.id を確定させる（properties追加前に必須）
+            if material:
+                db.flush()
+            if not material or not getattr(material, "id", None):
+                print("[SEED] skip properties: material.id is None (ポリプロピレン)")
+            elif created:
                 # 物性データを追加（get-or-create）
                 get_or_create_property(db, material.id, "密度", value=0.90, unit="g/cm³")
                 get_or_create_property(db, material.id, "引張強度", value=35, unit="MPa")
@@ -513,13 +597,18 @@ def init_sample_data():
                 get_or_create_property(db, material.id, "ガラス転移温度", value=-10, unit="°C")
                 get_or_create_property(db, material.id, "JIS規格", value=None, unit="JIS K 6922")
                 
-                # 画像生成
-                ensure_material_image("ポリプロピレン", "高分子（樹脂・エラストマー等）", material.id, db)
+                # 画像生成（SEED_SKIP_IMAGES フラグで制御、デフォルトはスキップ）
+                if not SEED_SKIP_IMAGES:
+                    ensure_material_image("ポリプロピレン", "高分子（樹脂・エラストマー等）", material.id, db)
                 
                 # 用途例を追加（画像付き、get-or-create）
-                from utils.use_example_image_generator import ensure_use_example_image
-                use1_img = ensure_use_example_image("ポリプロピレン", "収納ケース", "生活")
-                use2_img = ensure_use_example_image("ポリプロピレン", "配管", "建築")
+                if not SEED_SKIP_IMAGES:
+                    from utils.use_example_image_generator import ensure_use_example_image
+                    use1_img = ensure_use_example_image("ポリプロピレン", "収納ケース", "生活")
+                    use2_img = ensure_use_example_image("ポリプロピレン", "配管", "建築")
+                else:
+                    use1_img = None
+                    use2_img = None
                 
                 get_or_create_use_example(
                     db,
@@ -584,7 +673,12 @@ def init_sample_data():
                 description="ポリエチレン樹脂。最も一般的な熱可塑性樹脂。優れた化学的安定性と電気絶縁性を持つ。JIS K 6760準拠。"
             )
             
-            if created:
+            # material.id を確定させる（properties追加前に必須）
+            if material:
+                db.flush()
+            if not material or not getattr(material, "id", None):
+                print("[SEED] skip properties: material.id is None (ポリエチレン)")
+            elif created:
                 # 物性データを追加（get-or-create）
                 get_or_create_property(db, material.id, "密度", value=0.92, unit="g/cm³")
                 get_or_create_property(db, material.id, "引張強度", value=20, unit="MPa")
@@ -593,12 +687,16 @@ def init_sample_data():
                 get_or_create_property(db, material.id, "ガラス転移温度", value=-120, unit="°C")
                 get_or_create_property(db, material.id, "JIS規格", value=None, unit="JIS K 6760")
                 
-                # 画像生成
-                ensure_material_image("ポリエチレン", "高分子（樹脂・エラストマー等）", material.id, db)
+                # 画像生成（SEED_SKIP_IMAGES フラグで制御、デフォルトはスキップ）
+                if not SEED_SKIP_IMAGES:
+                    ensure_material_image("ポリエチレン", "高分子（樹脂・エラストマー等）", material.id, db)
                 
                 # 用途例を追加（画像付き、get-or-create）
-                from utils.use_example_image_generator import ensure_use_example_image
-                use1_img = ensure_use_example_image("ポリエチレン", "シート/包装材", "生活")
+                if not SEED_SKIP_IMAGES:
+                    from utils.use_example_image_generator import ensure_use_example_image
+                    use1_img = ensure_use_example_image("ポリエチレン", "シート/包装材", "生活")
+                else:
+                    use1_img = None
                 
                 get_or_create_use_example(
                     db,
@@ -653,7 +751,12 @@ def init_sample_data():
                 description="ポリ塩化ビニル樹脂。硬質と軟質があり、建築材料やパイプなどに広く使用される。JIS K 6723準拠。"
             )
             
-            if created:
+            # material.id を確定させる（properties追加前に必須）
+            if material:
+                db.flush()
+            if not material or not getattr(material, "id", None):
+                print("[SEED] skip properties: material.id is None (ポリ塩化ビニル)")
+            elif created:
                 # 物性データを追加（get-or-create）
                 get_or_create_property(db, material.id, "密度", value=1.38, unit="g/cm³")
                 get_or_create_property(db, material.id, "引張強度", value=50, unit="MPa")
@@ -661,12 +764,16 @@ def init_sample_data():
                 get_or_create_property(db, material.id, "ガラス転移温度", value=87, unit="°C")
                 get_or_create_property(db, material.id, "JIS規格", value=None, unit="JIS K 6723")
                 
-                # 画像生成
-                ensure_material_image("ポリ塩化ビニル", "高分子（樹脂・エラストマー等）", material.id, db)
+                # 画像生成（SEED_SKIP_IMAGES フラグで制御、デフォルトはスキップ）
+                if not SEED_SKIP_IMAGES:
+                    ensure_material_image("ポリ塩化ビニル", "高分子（樹脂・エラストマー等）", material.id, db)
                 
                 # 用途例を追加（画像付き、get-or-create）
-                from utils.use_example_image_generator import ensure_use_example_image
-                use1_img = ensure_use_example_image("ポリ塩化ビニル", "シート/内装材", "建築")
+                if not SEED_SKIP_IMAGES:
+                    from utils.use_example_image_generator import ensure_use_example_image
+                    use1_img = ensure_use_example_image("ポリ塩化ビニル", "シート/内装材", "建築")
+                else:
+                    use1_img = None
                 
                 get_or_create_use_example(
                     db,
@@ -686,6 +793,11 @@ def init_sample_data():
         
         # 成功時のみcommit（SAVEPOINT方式により、個別のIntegrityErrorは各ブロックでrollback済み）
         db.commit()
+        
+        # seed完了時の materials 件数を確認
+        materials_count_after = db.query(Material).count()
+        print(f"[SEED] materials_count_after={materials_count_after}")
+        
         print("\n" + "=" * 60)
         print("✅ サンプルデータの追加が完了しました！")
         print("=" * 60)
@@ -693,6 +805,7 @@ def init_sample_data():
         print(f"  ✅ 作成: {stats['created']}件")
         print(f"  ⏭️  スキップ: {stats['skipped']}件")
         print(f"  📝 更新: {stats['updated']}件")
+        print(f"  📦 データベース内の材料総数: {materials_count_after}件")
         if materials_data:
             print(f"\n📊 登録された材料一覧:\n")
             for i, mat in enumerate(materials_data, 1):
