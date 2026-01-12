@@ -1,19 +1,65 @@
 """
 データベース設定とモデル定義（詳細仕様対応版）
+Postgres対応: URL駆動でSQLite/Postgres両対応
 """
 from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Boolean, UniqueConstraint, Index, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 import json
+import os
 
-# SQLiteデータベースの作成
-SQLALCHEMY_DATABASE_URL = "sqlite:///./materials.db"
+# 設定からデータベースURLを取得（優先順位: st.secrets > os.environ > フォールバック）
+try:
+    from utils.settings import get_database_url, is_cloud, get_db_dialect
+    SQLALCHEMY_DATABASE_URL = get_database_url()
+    DB_DIALECT = get_db_dialect(SQLALCHEMY_DATABASE_URL)
+    IS_CLOUD = is_cloud()
+    
+    # Cloud環境でSQLiteを使用しようとした場合は例外
+    if IS_CLOUD and DB_DIALECT == "sqlite":
+        raise RuntimeError(
+            "SQLite is not allowed on Streamlit Cloud. "
+            "Please set DATABASE_URL to PostgreSQL in Streamlit Secrets."
+        )
+except Exception as e:
+    # エラーを再発生（Cloudでの設定ミスを明確にする）
+    if "DATABASE_URL" in str(e) or "SQLite is not allowed" in str(e):
+        raise
+    
+    # ローカル環境のみ: フォールバック（SQLite）
+    SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./materials.db")
+    DB_DIALECT = "postgresql" if SQLALCHEMY_DATABASE_URL.startswith(("postgresql://", "postgres://")) else "sqlite"
+    IS_CLOUD = False
 
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+# DEBUGモード判定
+DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
+
+# エンジン作成（dialectに応じて設定を変更）
+if DB_DIALECT == "postgresql":
+    # Postgres設定
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL,
+        pool_pre_ping=True,  # 接続の死活監視
+        future=True,  # SQLAlchemy 2.0互換
+        echo=DEBUG_MODE,  # DEBUG時のみSQLログ
+    )
+elif DB_DIALECT == "sqlite":
+    # SQLite設定（ローカル開発用）
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        echo=DEBUG_MODE,  # DEBUG時のみSQLログ
+    )
+else:
+    raise ValueError(f"Unsupported database dialect: {DB_DIALECT}")
+
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    autocommit=False,
+    expire_on_commit=False
 )
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
@@ -403,28 +449,54 @@ def migrate_sqlite_schema_if_needed(engine) -> None:
 
 def init_db():
     """
-    データベースを初期化（既存テーブルは保持）
+    データベースを初期化
     
-    S3画像URL対応のマイグレーション:
-    - Image.url カラム追加
-    - Material.texture_image_url カラム追加
-    - UseExample.image_url カラム追加
-    - ProcessExampleImage.image_url カラム追加
-    - Image.file_path を nullable に変更（既存データは保持）
-    - ProcessExampleImage.image_path を nullable に変更（既存データは保持）
+    方針:
+    - Postgres: Alembicによるマイグレーションを推奨（MIGRATE_ON_START=1で自動実行可）
+    - SQLite（ローカルのみ）: create_all + スキーマ補完（後方互換）
     
-    一意制約の追加（重複投入を防ぐ）:
-    - Material.name_official を一意制約に
-    - Property (material_id, property_name) を一意制約に
-    - UseExample (material_id, example_name) を一意制約に
-    - MaterialMetadata (material_id, key) を一意制約に
-    
-    注意: 既存の file_path / image_path カラムは削除せず保持（後方互換性）
-    注意: 一意制約は既存テーブルに追加できない場合がある（SQLite制限）ため、
-          アプリ側のロジックでも二重ガードを実装
+    注意: Cloud環境ではSQLiteは使用不可（必ずPostgresを指定）
     """
+    # Alembicマイグレーション（MIGRATE_ON_START=1の時のみ自動実行）
+    migrate_on_start = os.getenv("MIGRATE_ON_START", "0") == "1"
+    
+    if migrate_on_start and DB_DIALECT == "postgresql":
+        try:
+            from alembic.config import Config
+            from alembic import command
+            alembic_cfg = Config("alembic.ini")
+            # マイグレーション実行
+            command.upgrade(alembic_cfg, "head")
+            print("[DB INIT] Alembic migration applied (MIGRATE_ON_START=1)")
+            # Alembicで処理した場合は後続のcreate_allはスキップ（ただし念のため継続）
+            # 通常はAlembicが全てのスキーマ変更を管理するため、create_allは不要
+            # ただし、既存のSQLite固有のマイグレーションロジックとの互換性のため、Postgresでも一部実行
+        except FileNotFoundError:
+            print("[DB INIT] alembic.ini not found, skipping Alembic migration")
+        except Exception as e:
+            print(f"[DB INIT] Alembic migration failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # エラー時はcreate_allにフォールバック（開発環境のみ）
+            if not IS_CLOUD:
+                print("[DB INIT] Falling back to create_all (local dev only)")
+    
     # 既存のDBがあっても create_all は無害（足りないテーブルだけ作る）
-    Base.metadata.create_all(bind=engine)
+    # 注意: Postgresでは通常Alembicを使用するため、create_allは開発時のみ
+    if DB_DIALECT == "sqlite":
+        # SQLite（ローカル開発）: create_all + スキーマ補完
+        Base.metadata.create_all(bind=engine)
+    elif DB_DIALECT == "postgresql" and not migrate_on_start and not IS_CLOUD:
+        # Postgres（ローカル開発、Alembic未使用時のみ）: create_all
+        Base.metadata.create_all(bind=engine)
+    elif DB_DIALECT == "postgresql" and IS_CLOUD and not migrate_on_start:
+        # Cloud環境でPostgres + Alembic未使用の場合は警告（ただし動作は継続）
+        print("[DB INIT] WARNING: Cloud環境でAlembic未使用。MIGRATE_ON_START=1を推奨します。")
+        # 念のためcreate_allを実行（ただし通常はAlembicを使用）
+        try:
+            Base.metadata.create_all(bind=engine)
+        except Exception as e:
+            print(f"[DB INIT] create_all failed (Alembic推奨): {e}")
     
     # SQLiteの不足カラム補完（今回のコア修正）
     if engine.url.get_backend_name() == "sqlite":

@@ -16,6 +16,40 @@ def get_build_sha() -> str:
         return sha
     except Exception:
         return "unknown"
+
+
+def get_running_sha() -> str:
+    """
+    現在実行中のコミットSHAを取得（常時表示用）
+    
+    Returns:
+        short SHA文字列、取得失敗時は"unknown"
+    """
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        return "unknown"
+
+
+def is_debug() -> bool:
+    """
+    DEBUGモードが有効かどうかを判定（os.environ + st.secrets の両方をチェック）
+    
+    Returns:
+        DEBUGが有効ならTrue、それ以外はFalse
+    """
+    # os.environ をチェック
+    if os.getenv("DEBUG") == "1":
+        return True
+    
+    # st.secrets をチェック（例外時はFalse）
+    try:
+        return str(st.secrets.get("DEBUG", "0")) == "1"
+    except Exception:
+        return False
 from pathlib import Path
 from typing import Optional, Dict, Any
 from PIL import Image as PILImage
@@ -1426,6 +1460,33 @@ def render_debug_sidebar_early():
 def main():
     # 起動順序を固定：Debug表示 → init_db() → その後に通常処理
     
+    # 常時表示: 実行中のコミットSHA（反映確認用）
+    st.caption(f"RUNNING_SHA: {get_running_sha()}")
+    
+    # DEBUG判定とデバッグ情報表示
+    if is_debug():
+        debug_info = {
+            "DEBUG_ENV": os.getenv("DEBUG"),
+            "DEBUG_SECRET": None,
+            "DB_URL": None,
+        }
+        # st.secretsからDEBUGを取得
+        try:
+            debug_info["DEBUG_SECRET"] = st.secrets.get("DEBUG")
+        except Exception:
+            pass
+        
+        # DB接続先情報を取得（マスク済み）
+        try:
+            from utils.settings import get_database_url, mask_db_url, get_db_dialect
+            db_url = get_database_url()
+            debug_info["DB_URL"] = mask_db_url(db_url)
+            debug_info["DB_DIALECT"] = get_db_dialect(db_url)
+        except Exception as e:
+            debug_info["DB_ERROR"] = str(e)
+        
+        st.json(debug_info)
+    
     # 本文到達マーカー（DBやoption_menuより前に必ず出す）
     st.markdown("### ✅ App booted (body reached)")
     print("[BOOT] body reached")  # runtime logsで見える
@@ -1902,6 +1963,10 @@ def get_main_visual_debug_info() -> Dict[str, Any]:
 
 def show_home():
     """ホームページ"""
+    # DEBUGタグ（反映確認用）
+    if os.getenv("DEBUG", "0") == "1":
+        st.caption("BUILD_TAG: APPROVAL_IMG_EDIT_FIX_V1")
+    
     # デバッグモードかどうか
     is_debug = os.getenv("DEBUG", "0") == "1"
     
@@ -2037,7 +2102,8 @@ def show_home():
             st.markdown("### 🔍 強制画像テスト（診断用）")
             test_material = materials[0]
             from utils.image_display import get_material_image_ref
-            test_src, test_debug = get_material_image_ref(test_material, "primary", Path.cwd())
+            from utils.logo import get_project_root
+            test_src, test_debug = get_material_image_ref(test_material, "primary", get_project_root())
             
             st.write(f"**テスト対象:** {test_material.name_official or test_material.name}")
             st.write(f"**chosen_branch:** {test_debug.get('chosen_branch', 'N/A')}")
@@ -2077,7 +2143,8 @@ def show_home():
                     
                     # 材料の主画像を取得（get_material_image_refを使用）
                     # get_material_image_refを使用
-                    image_src, image_debug = get_material_image_ref(material, "primary", Path.cwd())
+                    from utils.logo import get_project_root
+                    image_src, image_debug = get_material_image_ref(material, "primary", get_project_root())
                     image_source = image_src
                     
                     # サムネサイズで表示（プレースホルダー付き）
@@ -2306,10 +2373,16 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                 import time
                 
                 image_source = None
-                if material.images:
-                    # get_material_image_refを使用
-                    image_src, image_debug = get_material_image_ref(material, "primary", Path.cwd())
-                    image_source = image_src
+                image_debug = None
+                # get_material_image_refを使用（常に呼び出す、material.imagesガードを削除）
+                from utils.logo import get_project_root
+                image_src, image_debug = get_material_image_ref(material, "primary", get_project_root())
+                image_source = image_src
+                
+                # DEBUG=1の時だけ画像探索結果を表示
+                if os.getenv("DEBUG", "0") == "1" and image_debug:
+                    with st.expander(f"🔍 画像探索デバッグ: {material_name}", expanded=False):
+                        st.json(image_debug)
                 
                 # 画像HTML（プレースホルダー含む、キャッシュ回避）
                 if image_source:
@@ -2655,8 +2728,9 @@ def show_search():
                         
                         # 素材画像を取得（主役として表示、URL優先）
                         from utils.image_display import get_material_image_ref
+                        from utils.logo import get_project_root
                         # get_material_image_refを使用
-                        image_src, image_debug = get_material_image_ref(material, "primary", Path.cwd())
+                        image_src, image_debug = get_material_image_ref(material, "primary", get_project_root())
                         image_source = image_src
                         
                         # 画像HTML（プレースホルダー含む、キャッシュ回避）

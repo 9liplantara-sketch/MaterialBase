@@ -2,6 +2,106 @@
 
 このプロトタイプをオンラインで動かすためのデプロイ方法を説明します。
 
+## データベース設定（必須）
+
+### Streamlit Cloud Secrets設定
+
+Streamlit Community Cloudではローカルファイル（SQLite）が永続化されないため、**外部Postgresデータベースが必須**です。
+
+#### Secrets設定方法
+
+1. Streamlit Cloudのダッシュボードで「Settings」→「Secrets」を開く
+2. 以下のいずれかの形式で設定:
+
+**推奨形式（connections方式）:**
+```toml
+[connections.materialbase_db]
+url = "postgresql://USER:PASSWORD@HOST:5432/DBNAME?sslmode=require"
+```
+
+**簡易形式:**
+```toml
+DATABASE_URL = "postgresql://USER:PASSWORD@HOST:5432/DBNAME?sslmode=require"
+```
+
+#### データベースプロバイダーの例
+
+**Neon (推奨):**
+- Neonは無料プランでPostgresを提供
+- 接続URL例: `postgresql://user:pass@ep-xxx.us-east-2.aws.neon.tech/neondb?sslmode=require`
+- 注意: `sslmode=require`が必須（NeonはSSL必須）
+
+**Supabase:**
+- 接続URL例: `postgresql://postgres:pass@db.xxx.supabase.co:5432/postgres`
+- SSL設定: `sslmode=require`を推奨
+
+**その他のPostgresプロバイダー:**
+- ElephantSQL、Railway、Renderなど
+- 接続URLは各プロバイダーのドキュメントを参照
+
+#### 重要な注意事項
+
+- **Cloud環境ではSQLiteフォールバックは禁止**: `DATABASE_URL`が設定されていない場合はエラーになります
+- **ローカル開発**: `DATABASE_URL`が未設定の場合、`sqlite:///./materials.db`が使用されます（開発用）
+
+## データベースマイグレーション（Alembic）
+
+### 初回セットアップ
+
+1. **Alembicを初期化（初回のみ）:**
+   ```bash
+   alembic init alembic
+   ```
+
+2. **alembic/env.pyを編集:**
+   ```python
+   from database import Base
+   from utils.settings import get_database_url
+   
+   target_metadata = Base.metadata
+   
+   # run_migrations_offline()とrun_migrations_online()内で:
+   url = get_database_url()
+   ```
+
+3. **初回マイグレーションを作成:**
+   ```bash
+   alembic revision --autogenerate -m "init schema"
+   ```
+   **重要**: 生成されたマイグレーションファイル（`alembic/versions/xxx_init_schema.py`）をレビューしてください
+
+4. **マイグレーションを適用:**
+   ```bash
+   alembic upgrade head
+   ```
+
+### スキーマ変更時
+
+1. **モデルを変更**（`database.py`のMaterial、ReferenceURLなど）
+
+2. **マイグレーションを生成:**
+   ```bash
+   alembic revision --autogenerate -m "add_new_column"
+   ```
+
+3. **生成されたマイグレーションをレビュー**（`alembic/versions/`内のファイル）
+
+4. **マイグレーションを適用:**
+   ```bash
+   alembic upgrade head
+   ```
+
+### 自動マイグレーション（オプション）
+
+Streamlit Cloudで起動時に自動マイグレーションを実行する場合:
+
+**Secretsに追加:**
+```toml
+MIGRATE_ON_START = "1"
+```
+
+**注意**: 自動マイグレーションは便利ですが、通常はデプロイ前に手動で`alembic upgrade head`を実行することを推奨します（安全性のため）
+
 ## 方法1: Streamlit Cloud（推奨・最も簡単）
 
 Streamlit Cloudは無料でStreamlitアプリをホスティングできます。

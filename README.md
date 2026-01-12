@@ -19,7 +19,51 @@
 pip install -r requirements.txt
 ```
 
-### 2. アプリケーションの起動
+### 2. データベース設定
+
+**ローカル開発（SQLite）:**
+```bash
+# 環境変数なしで起動 → SQLiteが自動使用
+streamlit run app.py
+```
+
+**本番（Postgres必須）:**
+Streamlit Secretsに以下を設定：
+
+```toml
+# .streamlit/secrets.toml（Cloud Secrets管理画面）
+[connections.materialbase_db]
+url = "postgresql://USER:PASSWORD@HOST:5432/DBNAME?sslmode=require"
+```
+
+詳細は [`POSTGRES_MIGRATION.md`](POSTGRES_MIGRATION.md) を参照してください。
+
+**重要**: Streamlit CloudではSQLiteは使用できません（リブートでデータが消えるため）。
+
+### 3. Alembicマイグレーション（Postgres使用時）
+
+```bash
+# Alembic初期化（初回のみ）
+alembic init alembic
+
+# alembic/env.pyを設定（POSTGRES_MIGRATION.md参照）
+
+# 初回マイグレーション作成
+alembic revision --autogenerate -m "init schema"
+
+# マイグレーション適用
+alembic upgrade head
+```
+
+詳細は [`POSTGRES_MIGRATION.md`](POSTGRES_MIGRATION.md) を参照してください。
+
+### 4. アプリケーションの起動
+
+```bash
+streamlit run app.py
+```
+
+または（FastAPIの場合）
 
 ```bash
 python main.py
@@ -31,7 +75,7 @@ python main.py
 uvicorn main:app --reload
 ```
 
-### 3. アクセス
+### 5. アクセス
 
 - Web UI: http://localhost:8000
 - API ドキュメント: http://localhost:8000/api/docs

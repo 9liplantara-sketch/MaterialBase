@@ -24,4 +24,8 @@ plotly>=5.18.0
 
 # S3ストレージ（オプション、S3を使用する場合）
 boto3>=1.28.0
-botocore>=1.31.0
+botocore>=1.28.0
+
+# データベース（Postgres移行対応）
+psycopg2-binary>=2.9.9
+alembic>=1.12.1
