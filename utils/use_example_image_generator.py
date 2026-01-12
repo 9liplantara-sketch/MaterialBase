@@ -124,6 +124,13 @@ def ensure_use_example_image(
     Returns:
         画像ファイルのパス（相対パス）、生成失敗時はNone
     """
+    from utils.settings import get_flag
+    
+    # DB書き込み許可フラグ（デフォルト False = Cloud/seedでは絶対書かない）
+    if not get_flag("ENABLE_IMAGE_DB_WRITE", False):
+        print(f"[IMAGE] skip DB write: ENABLE_IMAGE_DB_WRITE is not enabled (material: {material_name}, use: {use_title})")
+        return None
+    
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     

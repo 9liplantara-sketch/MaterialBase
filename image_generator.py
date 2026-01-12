@@ -175,6 +175,17 @@ def ensure_material_image(material_name, category, material_id, db):
     """
     from database import Image as ImageModel
     from utils.image_health import normalize_image_path, resolve_image_path, check_image_health
+    from utils.settings import get_flag
+    
+    # DB書き込み許可フラグ（デフォルト False = Cloud/seedでは絶対書かない）
+    if not get_flag("ENABLE_IMAGE_DB_WRITE", False):
+        print(f"[IMAGE] skip DB write: ENABLE_IMAGE_DB_WRITE is not enabled (material: {material_name})")
+        return None
+    
+    # material_id が None の場合は即 return（ログだけ）
+    if not material_id:
+        print(f"[SEED] skip image: material_id is None (material: {material_name})")
+        return None
     
     # 既存の画像をチェック（健康状態も確認）
     existing = db.query(ImageModel).filter(ImageModel.material_id == material_id).first()
