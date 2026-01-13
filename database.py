@@ -35,31 +35,38 @@ except Exception as e:
 # DEBUGモード判定
 DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
 
-# エンジン作成（dialectに応じて設定を変更）
-if DB_DIALECT == "postgresql":
-    # Postgres設定
-    engine = create_engine(
-        SQLALCHEMY_DATABASE_URL,
-        pool_pre_ping=True,  # 接続の死活監視
-        future=True,  # SQLAlchemy 2.0互換
-        echo=DEBUG_MODE,  # DEBUG時のみSQLログ
+# エンジンとSessionLocalをキャッシュ経由で取得（utils/db.py を使用）
+try:
+    from utils.db import get_engine, get_sessionmaker
+    # キャッシュされた engine と sessionmaker を取得
+    engine = get_engine(SQLALCHEMY_DATABASE_URL)
+    SessionLocal = get_sessionmaker(SQLALCHEMY_DATABASE_URL)
+except Exception as e:
+    # フォールバック: 従来の方法（後方互換性）
+    if DB_DIALECT == "postgresql":
+        # Postgres設定
+        engine = create_engine(
+            SQLALCHEMY_DATABASE_URL,
+            pool_pre_ping=True,  # 接続の死活監視
+            future=True,  # SQLAlchemy 2.0互換
+            echo=DEBUG_MODE,  # DEBUG時のみSQLログ
+        )
+    elif DB_DIALECT == "sqlite":
+        # SQLite設定（ローカル開発用）
+        engine = create_engine(
+            SQLALCHEMY_DATABASE_URL,
+            connect_args={"check_same_thread": False},
+            echo=DEBUG_MODE,  # DEBUG時のみSQLログ
+        )
+    else:
+        raise ValueError(f"Unsupported database dialect: {DB_DIALECT}")
+    
+    SessionLocal = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        autocommit=False,
+        expire_on_commit=False
     )
-elif DB_DIALECT == "sqlite":
-    # SQLite設定（ローカル開発用）
-    engine = create_engine(
-        SQLALCHEMY_DATABASE_URL,
-        connect_args={"check_same_thread": False},
-        echo=DEBUG_MODE,  # DEBUG時のみSQLログ
-    )
-else:
-    raise ValueError(f"Unsupported database dialect: {DB_DIALECT}")
-
-SessionLocal = sessionmaker(
-    bind=engine,
-    autoflush=False,
-    autocommit=False,
-    expire_on_commit=False
-)
 
 Base = declarative_base()
 
@@ -239,13 +246,25 @@ class Property(Base):
 class Image(Base):
     """画像テーブル"""
     __tablename__ = "images"
+    __table_args__ = (
+        # material_id + kind を一意制約に（同じ材料に同じkindの画像を重複登録しない）
+        UniqueConstraint('material_id', 'kind', name='uq_image_material_kind'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     material_id = Column(Integer, ForeignKey("materials.id"), nullable=False)
+    kind = Column(String(50), nullable=False, default="primary")  # primary/space/product
     file_path = Column(String(500))  # ローカルパス（後方互換、nullableに変更）
-    url = Column(String(1000))  # S3 URL（新規追加、nullable）
-    image_type = Column(String(50))  # sample, microscope, etc.
+    url = Column(String(1000))  # S3 URL（後方互換、nullable）
+    r2_key = Column(String(500))  # R2内のキー（パス）
+    public_url = Column(String(1000))  # R2公開URL（優先）
+    bytes = Column(Integer)  # ファイルサイズ（バイト）
+    mime = Column(String(100))  # MIMEタイプ（例: "image/jpeg"）
+    sha256 = Column(String(64))  # SHA256ハッシュ
+    image_type = Column(String(50))  # sample, microscope, etc.（後方互換）
     description = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # リレーション
     material = relationship("Material", back_populates="images")
@@ -457,6 +476,31 @@ def init_db():
     
     注意: Cloud環境ではSQLiteは使用不可（必ずPostgresを指定）
     """
+    # Postgres + Cloud + 通常運用時はスキーマ検査をスキップ（パフォーマンス向上）
+    if DB_DIALECT == "postgresql" and IS_CLOUD:
+        try:
+            from utils.settings import get_flag
+        except Exception:
+            # utils.settings が利用できない場合はフォールバック
+            def get_flag(key: str, default: bool = False) -> bool:
+                value = os.getenv(key, "").lower().strip()
+                return value in ("1", "true", "yes", "on")
+        
+        verify = get_flag("VERIFY_SCHEMA_ON_START", False)
+        migrate = get_flag("MIGRATE_ON_START", False)
+        debug = os.getenv("DEBUG", "0") == "1"
+        
+        if not migrate and not verify and not debug:
+            print("[DB INIT] skip schema verification (postgres cloud, normal operation)")
+            # 軽い接続確認だけ行う（オプション）
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text("SELECT 1"))
+                print("[DB INIT] connection check: OK")
+            except Exception as e:
+                print(f"[DB INIT] connection check failed: {e}")
+            return
+    
     # Alembicマイグレーション（MIGRATE_ON_START=1の時のみ自動実行）
     migrate_on_start = os.getenv("MIGRATE_ON_START", "0") == "1"
     

@@ -58,6 +58,10 @@ from io import BytesIO
 import base64
 import pandas as pd
 import plotly.express as px
+
+# グローバル変数の初期化（NameErrorを防ぐ）
+_card_generator_import_error = None
+_card_generator_import_traceback = None
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from collections import Counter
@@ -846,6 +850,146 @@ def get_db():
     """データベースセッションを取得"""
     return SessionLocal()
 
+
+@st.cache_data(ttl=30)
+def get_material_count_cached(db_url: str, include_unpublished: bool = False, include_deleted: bool = False) -> int:
+    """
+    材料件数を取得（キャッシュ付き、30秒TTL）
+    
+    Args:
+        db_url: データベースURL（キャッシュキー用）
+        include_unpublished: Trueの場合、非公開（is_published=0）も含める
+        include_deleted: Trueの場合、論理削除済み（is_deleted=1）も含める
+    
+    Returns:
+        材料件数
+    """
+    import time
+    t0 = time.perf_counter() if is_debug() else None
+    
+    from utils.db import get_sessionmaker
+    from sqlalchemy import select, func
+    SessionLocal = get_sessionmaker(db_url)
+    db = SessionLocal()
+    try:
+        stmt = select(func.count()).select_from(Material)
+        
+        if not include_deleted:
+            if hasattr(Material, 'is_deleted'):
+                stmt = stmt.filter(Material.is_deleted == 0)
+        
+        if not include_unpublished:
+            if hasattr(Material, 'is_published'):
+                stmt = stmt.filter(Material.is_published == 1)
+        
+        count = db.execute(stmt).scalar_one()
+        
+        if t0 is not None:
+            print(f"[PERF] get_material_count_cached: {time.perf_counter() - t0:.3f}s")
+        
+        return count
+    finally:
+        db.close()
+
+
+@st.cache_data(ttl=30)
+def fetch_materials_page_cached(
+    db_url: str,
+    include_unpublished: bool = False,
+    include_deleted: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+    search_query: str = None
+) -> List[Dict[str, Any]]:
+    """
+    材料一覧をページングで取得（キャッシュ付き、30秒TTL、dict化して返す）
+    
+    Args:
+        db_url: データベースURL（キャッシュキー用）
+        include_unpublished: Trueの場合、非公開（is_published=0）も含める
+        include_deleted: Trueの場合、論理削除済み（is_deleted=1）も含める
+        limit: 取得件数
+        offset: オフセット
+        search_query: 検索クエリ（材料名で部分一致）
+    
+    Returns:
+        材料データのdictリスト（表示用）
+    """
+    import time
+    t0 = time.perf_counter() if is_debug() else None
+    
+    from utils.db import get_sessionmaker
+    from utils.material_cache import freeze_material_row
+    from sqlalchemy import select
+    from sqlalchemy.orm import noload, load_only
+    from typing import List, Dict, Any
+    
+    SessionLocal = get_sessionmaker(db_url)
+    db = SessionLocal()
+    try:
+        # 一覧表示用：必要な列だけをロードし、リレーションは全てnoload（高速化）
+        stmt = (
+            select(Material)
+            .options(
+                # 必要な列だけをロード（パフォーマンス向上）
+                load_only(
+                    Material.id,
+                    Material.uuid,
+                    Material.name_official,
+                    Material.name,  # 後方互換
+                    Material.category_main,
+                    Material.category,  # 後方互換
+                    Material.is_published,
+                    Material.is_deleted,
+                    Material.created_at,
+                    Material.updated_at,
+                ),
+                # リレーションは全てnoload（一覧では不要）
+                noload(Material.properties),
+                noload(Material.images),
+                noload(Material.reference_urls),
+                noload(Material.use_examples),
+                noload(Material.metadata_items),
+                noload(Material.process_example_images),
+            )
+        )
+        
+        # フィルタ
+        if not include_deleted:
+            if hasattr(Material, 'is_deleted'):
+                stmt = stmt.filter(Material.is_deleted == 0)
+        
+        if not include_unpublished:
+            if hasattr(Material, 'is_published'):
+                stmt = stmt.filter(Material.is_published == 1)
+        
+        # 検索クエリ
+        if search_query and search_query.strip():
+            stmt = stmt.filter(Material.name_official.ilike(f"%{search_query.strip()}%"))
+        
+        # ソート
+        stmt = stmt.order_by(
+            Material.created_at.desc() if hasattr(Material, 'created_at') else Material.id.desc()
+        )
+        
+        # ページング
+        stmt = stmt.limit(limit).offset(offset)
+        
+        # 実行
+        result = db.execute(stmt)
+        materials = result.unique().scalars().all()
+        
+        # dict化（DetachedInstanceErrorを防ぐ、scalar列のみ参照）
+        material_dicts = [freeze_material_row(m) for m in materials]
+        
+        if t0 is not None:
+            print(f"[PERF] fetch_materials_page_cached(limit={limit}, offset={offset}): {time.perf_counter() - t0:.3f}s")
+        
+        return material_dicts
+    finally:
+        db.close()
+
+
 def get_all_materials(include_unpublished: bool = False, include_deleted: bool = False):
     """
     全材料を取得（Eager Loadでリレーションも先読み・全リレーション網羅）
@@ -1340,13 +1484,16 @@ def render_debug_sidebar_early():
                 
                 st.write("---")
                 
-                # card_generator/schemasのimportエラー情報
+                # card_generator/schemasのimportエラー情報（防御的に参照）
                 try:
-                    if _card_generator_import_error:
+                    err = globals().get("_card_generator_import_error")
+                    tb = globals().get("_card_generator_import_traceback")
+                    if err:
                         st.write("**card_generator/schemas import エラー:**")
-                        st.write(f"- **エラー:** {_card_generator_import_error}")
-                        with st.expander("詳細なトレースバック", expanded=False):
-                            st.code(_card_generator_import_traceback, language="python")
+                        st.write(f"- **エラー:** {err}")
+                        if tb:
+                            with st.expander("詳細なトレースバック", expanded=False):
+                                st.code(tb, language="python")
                     else:
                         st.write("**card_generator/schemas import:** ✅ 成功")
                 except Exception as e:
@@ -1458,6 +1605,10 @@ def render_debug_sidebar_early():
 
 
 def main():
+    # パフォーマンス計測（DEBUG=1のみ）
+    import time
+    t0_main = time.perf_counter() if is_debug() else None
+    
     # 起動順序を固定：Debug表示 → init_db() → その後に通常処理
     
     # 常時表示: 実行中のコミットSHA（反映確認用）
@@ -1963,6 +2114,10 @@ def get_main_visual_debug_info() -> Dict[str, Any]:
 
 def show_home():
     """ホームページ"""
+    # パフォーマンス計測（DEBUG=1のみ）
+    import time
+    t0 = time.perf_counter() if is_debug() else None
+    
     # DEBUGタグ（反映確認用）
     if os.getenv("DEBUG", "0") == "1":
         st.caption("BUILD_TAG: APPROVAL_IMG_EDIT_FIX_V1")
@@ -2041,7 +2196,12 @@ def show_home():
     
     # 管理者表示フラグを取得
     include_unpublished = st.session_state.get("include_unpublished", False)
+    
+    # DBアクセス計測
+    t1 = time.perf_counter() if t0 is not None else None
     materials = get_all_materials(include_unpublished=include_unpublished)
+    if t1 is not None:
+        print(f"[PERF] show_home() get_all_materials: {time.perf_counter() - t1:.3f}s")
     
     # ヒーローセクション
     st.markdown("""
@@ -2124,6 +2284,11 @@ def show_home():
             
             with st.expander("🔍 詳細デバッグ情報", expanded=True):
                 st.json(test_debug)
+    
+    # パフォーマンス計測ログ（DEBUG=1のみ）
+    if t0 is not None:
+        elapsed = time.perf_counter() - t0
+        print(f"[PERF] show_home() total: {elapsed:.3f}s")
     
     # 最近登録された材料
     if materials:
@@ -2254,6 +2419,10 @@ def show_home():
 
 def show_materials_list(include_unpublished: bool = False, include_deleted: bool = False):
     """材料一覧ページ"""
+    # パフォーマンス計測（DEBUG=1のみ）
+    import time
+    t0 = time.perf_counter() if is_debug() else None
+    
     is_debug = os.getenv("DEBUG", "0") == "1"
     st.markdown(render_site_header(debug=is_debug), unsafe_allow_html=True)
     st.markdown('<h2 class="section-title">材料一覧</h2>', unsafe_allow_html=True)
@@ -2846,6 +3015,10 @@ def show_search():
 
 def show_approval_queue():
     """承認待ち一覧ページ（管理者のみ）"""
+    # パフォーマンス計測（DEBUG=1のみ）
+    import time
+    t0 = time.perf_counter() if is_debug() else None
+    
     is_debug = os.getenv("DEBUG", "0") == "1"
     st.markdown(render_site_header(debug=is_debug), unsafe_allow_html=True)
     st.markdown('<h2 class="section-title">📋 承認待ち一覧</h2>', unsafe_allow_html=True)
@@ -2997,6 +3170,19 @@ def show_approval_queue():
                     else:
                         st.info("既存材料が見つかりません（新規登録）")
                     
+                    # アップロードされた画像のプレビュー
+                    uploaded_images = payload.get('uploaded_images', [])
+                    if uploaded_images:
+                        st.markdown("---")
+                        st.markdown("### 📷 アップロードされた画像")
+                        for img_info in uploaded_images:
+                            kind = img_info.get('kind', 'primary')
+                            public_url = img_info.get('public_url')
+                            if public_url:
+                                st.markdown(f"**{kind}画像:**")
+                                st.image(public_url, caption=f"{kind}画像", use_container_width=True)
+                                st.caption(f"URL: {public_url}")
+                    
                     # プレビュー（簡易表示）
                     st.markdown("---")
                     st.markdown("### プレビュー（全データ）")
@@ -3107,9 +3293,24 @@ def approve_submission(submission_id: int, editor_note: str = None, db=None):
         # 必須フィールドの補完
         form_data = _normalize_required(form_data, existing=None)
         
+        # payload をサニタイズ：Material カラムだけに絞る（relationship キーを除去）
+        # Material.__table__.columns の名前だけを許可し、それ以外は捨てる
+        allowed_columns = {c.name for c in Material.__table__.columns}
+        # relationship キーも明示的に除外（安全のため）
+        relationship_keys = {"images", "uploaded_images", "reference_urls", "use_examples", "properties", "metadata_items", "process_example_images"}
+        payload_for_material = {
+            k: v for k, v in form_data.items()
+            if k in allowed_columns and k not in relationship_keys and v is not None
+        }
+        
+        # 既存の「images」キー互換を完全無視（ログ出力だけ）
+        if "images" in form_data:
+            if os.getenv("DEBUG", "0") == "1":
+                print(f"[APPROVE] WARNING: payload contains 'images' key (ignored): {type(form_data['images'])}")
+        
         # materialsテーブルにupsert（name_officialで既存チェック）
         existing_material = db.query(Material).filter(
-            Material.name_official == form_data.get('name_official')
+            Material.name_official == payload_for_material.get('name_official')
         ).first()
         
         if existing_material:
@@ -3123,10 +3324,8 @@ def approve_submission(submission_id: int, editor_note: str = None, db=None):
             db.add(material)
             action = 'created'
         
-        # 必須フィールドを設定（Noneはスキップ）
-        for k, v in form_data.items():
-            if v is None:
-                continue
+        # Material カラムのみを設定（relationship は除外済み）
+        for k, v in payload_for_material.items():
             setattr(material, k, v)
         
         # 承認時は削除されていない状態にする（公開は後でトグルON）
@@ -3220,6 +3419,34 @@ def approve_submission(submission_id: int, editor_note: str = None, db=None):
                     description=ex.get('desc')
                 )
                 db.add(use_ex)
+        
+        # material.id を確実にするため、flush を実行
+        db.flush()
+        
+        # 画像情報を materials/images に反映（submission の uploaded_images のみを使用）
+        uploaded_images = form_data.get('uploaded_images', [])
+        if uploaded_images:
+            try:
+                from utils.image_repo import upsert_image
+                
+                for img_info in uploaded_images:
+                    kind = img_info.get('kind', 'primary')
+                    upsert_image(
+                        db=db,
+                        material_id=material.id,
+                        kind=kind,
+                        r2_key=img_info.get('r2_key'),
+                        public_url=img_info.get('public_url'),
+                        bytes=img_info.get('bytes'),
+                        mime=img_info.get('mime'),
+                        sha256=img_info.get('sha256'),
+                    )
+            except Exception as e:
+                # 画像反映失敗はログだけ（承認は成功させる）
+                if os.getenv("DEBUG", "0") == "1":
+                    import traceback
+                    print(f"[APPROVE] Image upsert failed (material_id={material.id}): {e}")
+                    traceback.print_exc()
         
         # submissionを更新
         submission.status = "approved"
@@ -3542,10 +3769,16 @@ def show_material_cards():
         card_html = None
         error_message = None
         
+        # グローバル変数の宣言（tryブロックの外で宣言）
+        global _card_generator_import_error, _card_generator_import_traceback
+        
         try:
             # 使用する時だけimportする（lazy import）
             from schemas import MaterialCardPayload, MaterialCard, PropertyDTO
             from card_generator import generate_material_card
+            # 成功時はエラー情報をクリア
+            _card_generator_import_error = None
+            _card_generator_import_traceback = None
             # 主要画像を取得（安全に）
             primary_image = None
             primary_image_path = None
@@ -3620,6 +3853,9 @@ def show_material_cards():
             error_message = str(e)
             import traceback
             error_traceback = traceback.format_exc()
+            # グローバル変数に記録（render_debug_sidebar_early で表示される）
+            _card_generator_import_error = error_message
+            _card_generator_import_traceback = error_traceback
             print(f"カード生成エラー: {error_message}")
             print(error_traceback)
             

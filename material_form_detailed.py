@@ -363,12 +363,26 @@ def show_detailed_material_form(material_id: int = None):
             if result.get("ok"):
                 submission_id = result.get("submission_id")
                 submission_uuid = result.get("uuid")
+                uploaded_images = result.get("uploaded_images", [])
+                
                 st.success("✅ 投稿を送信しました！管理者の承認をお待ちください。")
                 st.info("📝 承認後、材料一覧に表示されます。")
                 st.markdown("---")
                 st.markdown("### 📋 投稿控え")
                 st.code(f"投稿ID: {submission_id}\nUUID: {submission_uuid}", language="text")
                 st.info("💡 このIDを控えておくと、後で投稿ステータスを確認できます。")
+                
+                # アップロードされた画像のプレビュー
+                if uploaded_images:
+                    st.markdown("---")
+                    st.markdown("### 📷 アップロードされた画像")
+                    for img_info in uploaded_images:
+                        kind = img_info.get('kind', 'primary')
+                        public_url = img_info.get('public_url')
+                        if public_url:
+                            st.markdown(f"**{kind}画像:**")
+                            st.image(public_url, caption=f"{kind}画像", use_container_width=True)
+                            st.caption(f"URL: {public_url}")
             else:
                 # 失敗時：st.error(result["error"])とst.expanderでtraceback表示
                 st.error(f"❌ エラーが発生しました: {result.get('error', '不明なエラー')}")
@@ -1064,14 +1078,68 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
     """
     db = SessionLocal()
     try:
+        # UUIDを生成（R2 プレフィックス用）
+        submission_uuid = str(uuid.uuid4())
+        
+        # 画像を form_data から pop（UploadedFile は JSON 化できないため）
+        # 防御的に複数回 pop して確実に除去（再発防止）
+        uploaded_files = form_data.pop('images', [])
+        if 'images' in form_data:
+            # 念のため再度除去（_normalize_required で再追加された可能性）
+            form_data.pop('images', None)
+        
+        uploaded_images = []
+        
         # 必須フィールドの補完（None/空文字列をデフォルト値で埋める）
+        # images を除去した後に _normalize_required を呼ぶ（images が再追加されないように）
         form_data = _normalize_required(form_data, existing=None)
+        
+        # 再度 images を除去（念のため）
+        if 'images' in form_data:
+            form_data.pop('images', None)
+        
+        # R2 アップロード処理（フラグチェック）
+        from utils.settings import get_flag
+        
+        enable_r2_upload = get_flag("ENABLE_R2_UPLOAD", True)
+        # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES の時は必ず False 扱い（安全）
+        if get_flag("INIT_SAMPLE_DATA", False) or get_flag("SEED_SKIP_IMAGES", False):
+            enable_r2_upload = False
+        
+        if enable_r2_upload and uploaded_files:
+            try:
+                # R2 関連の import は enable_r2_upload=True の時だけ（起動安定化）
+                from utils.r2_storage import upload_uploadedfile_to_prefix
+                
+                # プレフィックスを決定
+                prefix = f"submissions/{submission_uuid}"
+                
+                # 各ファイルをアップロード（最初を primary、2番目を space、3番目を product として扱う）
+                kind_map = ["primary", "space", "product"]
+                for idx, uploaded_file in enumerate(uploaded_files[:3]):  # 最大3ファイル
+                    kind = kind_map[idx] if idx < len(kind_map) else "primary"
+                    r2_result = upload_uploadedfile_to_prefix(uploaded_file, prefix, kind)
+                    uploaded_images.append({
+                        "kind": kind,
+                        "r2_key": r2_result["r2_key"],
+                        "public_url": r2_result["public_url"],
+                        "bytes": r2_result["bytes"],
+                        "mime": r2_result["mime"],
+                        "sha256": r2_result["sha256"],
+                    })
+            except Exception as e:
+                # R2 アップロード失敗はログだけ（投稿保存は成功させる）
+                if os.getenv("DEBUG", "0") == "1":
+                    import traceback
+                    print(f"[R2] Upload failed (submission_uuid={submission_uuid}): {e}")
+                    traceback.print_exc()
+        
+        # payload_json に uploaded_images を追加
+        if uploaded_images:
+            form_data["uploaded_images"] = uploaded_images
         
         # payload_jsonにform_dataをJSON文字列として保存
         payload_json = json.dumps(form_data, ensure_ascii=False, default=str)
-        
-        # UUIDを生成
-        submission_uuid = str(uuid.uuid4())
         
         # MaterialSubmissionを作成
         submission = MaterialSubmission(
@@ -1090,6 +1158,7 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
             "ok": True,
             "submission_id": submission.id,
             "uuid": submission.uuid,
+            "uploaded_images": uploaded_images,  # プレビュー用
         }
         
     except Exception as e:
