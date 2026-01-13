@@ -51,7 +51,7 @@ def is_debug() -> bool:
     except Exception:
         return False
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 from PIL import Image as PILImage
 import qrcode
 from io import BytesIO
@@ -922,7 +922,6 @@ def fetch_materials_page_cached(
     from utils.material_cache import freeze_material_row
     from sqlalchemy import select
     from sqlalchemy.orm import noload, load_only
-    from typing import List, Dict, Any
     
     SessionLocal = get_sessionmaker(db_url)
     db = SessionLocal()
