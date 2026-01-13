@@ -991,6 +991,43 @@ def save_material(form_data):
         
         db.commit()
         
+        # R2 アップロード処理（material.id 確定後）
+        uploaded_files = form_data.get('images', [])
+        if uploaded_files and material.id:
+            from utils.settings import get_flag
+            from utils.r2_storage import upload_uploadedfile
+            from utils.image_repo import upsert_image
+            
+            # 画像アップロードはフラグで制御
+            enable_r2_upload = get_flag("ENABLE_R2_UPLOAD", True)
+            # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES の時は必ず False 扱い（安全）
+            if get_flag("INIT_SAMPLE_DATA", False) or get_flag("SEED_SKIP_IMAGES", False):
+                enable_r2_upload = False
+            
+            if enable_r2_upload:
+                try:
+                    # 最初のファイルを primary として扱う
+                    if len(uploaded_files) > 0:
+                        primary_file = uploaded_files[0]
+                        r2_result = upload_uploadedfile(primary_file, material.id, "primary")
+                        upsert_image(
+                            db=db,
+                            material_id=material.id,
+                            kind="primary",
+                            r2_key=r2_result["r2_key"],
+                            public_url=r2_result["public_url"],
+                            bytes=r2_result["bytes"],
+                            mime=r2_result["mime"],
+                            sha256=r2_result["sha256"],
+                        )
+                        db.commit()
+                except Exception as e:
+                    # R2 アップロード失敗はログだけ（材料保存は成功させる）
+                    if os.getenv("DEBUG", "0") == "1":
+                        import traceback
+                        print(f"[R2] Upload failed (material_id={material.id}): {e}")
+                        traceback.print_exc()
+        
         # 成功時はdictを返す
         return {
             "ok": True,

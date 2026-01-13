@@ -40,6 +40,28 @@ url = "postgresql://USER:PASSWORD@HOST:5432/DBNAME?sslmode=require"
 
 **重要**: Streamlit CloudではSQLiteは使用できません（リブートでデータが消えるため）。
 
+### 2-1. Cloudflare R2 ストレージ設定（画像アップロード用）
+
+**本番（R2必須）:**
+Streamlit Secretsに以下を設定：
+
+```toml
+# Cloudflare R2 の認証情報
+R2_ACCOUNT_ID = "your-account-id"
+R2_ACCESS_KEY_ID = "your-access-key-id"
+R2_SECRET_ACCESS_KEY = "your-secret-access-key"
+R2_BUCKET = "your-bucket-name"
+R2_PUBLIC_BASE_URL = "https://your-bucket.r2.dev"
+
+# R2 アップロードを有効化（デフォルト: True）
+ENABLE_R2_UPLOAD = "1"
+```
+
+**注意:**
+- `R2_PUBLIC_BASE_URL` は R2 バケットの公開URL（例: `https://your-bucket.r2.dev`）
+- seed中（`INIT_SAMPLE_DATA=1`, `SEED_SKIP_IMAGES=1`）では画像アップロードは自動的に無効化されます
+- `ENABLE_R2_UPLOAD=0` に設定すると、画像アップロードが無効化されます（seed時は推奨）
+
 ### 3. Alembicマイグレーション（Postgres使用時）
 
 ```bash
