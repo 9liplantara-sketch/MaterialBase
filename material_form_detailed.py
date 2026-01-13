@@ -995,10 +995,8 @@ def save_material(form_data):
         uploaded_files = form_data.get('images', [])
         if uploaded_files and material.id:
             from utils.settings import get_flag
-            from utils.r2_storage import upload_uploadedfile
-            from utils.image_repo import upsert_image
             
-            # 画像アップロードはフラグで制御
+            # 画像アップロードはフラグで制御（import 前にチェックして起動安定化）
             enable_r2_upload = get_flag("ENABLE_R2_UPLOAD", True)
             # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES の時は必ず False 扱い（安全）
             if get_flag("INIT_SAMPLE_DATA", False) or get_flag("SEED_SKIP_IMAGES", False):
@@ -1006,6 +1004,10 @@ def save_material(form_data):
             
             if enable_r2_upload:
                 try:
+                    # R2 関連の import は enable_r2_upload=True の時だけ（起動安定化）
+                    from utils.r2_storage import upload_uploadedfile
+                    from utils.image_repo import upsert_image
+                    
                     # 最初のファイルを primary として扱う
                     if len(uploaded_files) > 0:
                         primary_file = uploaded_files[0]

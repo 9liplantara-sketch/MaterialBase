@@ -4,7 +4,6 @@ Cloudflare R2 ストレージ統合モジュール
 """
 import os
 import hashlib
-import uuid
 from typing import Optional, Dict, Any
 from pathlib import Path
 
@@ -16,6 +15,8 @@ try:
 except ImportError:
     BOTO3_AVAILABLE = False
     boto3 = None
+    ClientError = None
+    BotoCoreError = None
 
 # Streamlit のインポートを安全に行う
 try:
@@ -27,13 +28,15 @@ except Exception:
 try:
     from utils.settings import get_flag, get_secret_str
 except Exception:
-    # フォールバック
+    # フォールバック: 安全側に倒す実装
     def get_flag(key: str, default: bool = False) -> bool:
-        # 安全側に倒す
+        # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES は True を返す（画像処理を止める）
         if key in ("INIT_SAMPLE_DATA", "SEED_SKIP_IMAGES"):
             return True
+        # ENABLE_R2_UPLOAD は False を返す（DB書き込みを止める）
         if key == "ENABLE_R2_UPLOAD":
             return False
+        # その他は default を返す
         return default
     
     def get_secret_str(key: str, default: str = "") -> str:
@@ -127,7 +130,8 @@ def upload_bytes_to_r2(key: str, body: bytes, content_type: str, bucket: Optiona
             Body=body,
             ContentType=content_type,
         )
-    except (ClientError, BotoCoreError) as e:
+    except Exception as e:
+        # ClientError, BotoCoreError が None の場合も含めて全ての例外をキャッチ
         raise RuntimeError(f"Failed to upload to R2: {e}")
 
 
