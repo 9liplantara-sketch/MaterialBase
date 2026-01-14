@@ -999,21 +999,58 @@ def get_all_materials(include_unpublished: bool = False, include_deleted: bool =
         include_deleted: Trueの場合、論理削除済み（is_deleted=1）も含める
     
     OperationalErrorをキャッチしてUI崩壊を防ぐ
+    スキーマドリフト検知: images.kind が存在しない場合は安全モードで動作
     """
+    # スキーマドリフト検知（軽量、キャッシュ済み）
+    try:
+        from database import get_schema_drift_status
+        from utils.settings import get_database_url
+        schema_status = get_schema_drift_status(get_database_url())
+        images_kind_exists = schema_status.get("images_kind_exists", False)
+        
+        # images.kind が存在しない場合は安全モードで動作
+        if not images_kind_exists:
+            # 警告を表示（管理者向け）
+            if os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1":
+                st.warning("⚠️ DB schema mismatch: images.kind column does not exist. Run migration with MIGRATE_ON_START=1")
+            else:
+                st.info("ℹ️ 画像が利用できません（DB migrate必要）")
+    except Exception as e:
+        # スキーマチェック失敗時は安全側に倒す（images をロードしない）
+        images_kind_exists = False
+        if os.getenv("DEBUG", "0") == "1":
+            print(f"[SCHEMA] schema check failed, using safe mode: {e}")
+    
     db = get_db()
     try:
-        # Eager Loadで全リレーションを先読み（DetachedInstanceErrorを防ぐ）
-        stmt = (
-            select(Material)
-            .options(
-                selectinload(Material.properties),
-                selectinload(Material.images),
-                selectinload(Material.metadata_items),
-                selectinload(Material.reference_urls),
-                selectinload(Material.use_examples),
-                selectinload(Material.process_example_images),  # 加工例画像
+        # 安全モード: images.kind が存在しない場合は images をロードしない
+        if images_kind_exists:
+            # 通常モード: 全リレーションを先読み
+            stmt = (
+                select(Material)
+                .options(
+                    selectinload(Material.properties),
+                    selectinload(Material.images),
+                    selectinload(Material.metadata_items),
+                    selectinload(Material.reference_urls),
+                    selectinload(Material.use_examples),
+                    selectinload(Material.process_example_images),  # 加工例画像
+                )
             )
-        )
+        else:
+            # 安全モード: images をロードしない（スキーマ不整合を回避）
+            from sqlalchemy.orm import noload
+            stmt = (
+                select(Material)
+                .options(
+                    selectinload(Material.properties),
+                    noload(Material.images),  # images をロードしない
+                    selectinload(Material.metadata_items),
+                    selectinload(Material.reference_urls),
+                    selectinload(Material.use_examples),
+                    selectinload(Material.process_example_images),
+                )
+            )
         
         # is_deletedフィルタ（デフォルトで削除されていないもののみ）
         if not include_deleted:
@@ -1061,21 +1098,52 @@ def get_all_materials(include_unpublished: bool = False, include_deleted: bool =
         db.close()
 
 def get_material_by_id(material_id: int):
-    """IDで材料を取得（Eager Loadでリレーションも先読み・全リレーション網羅）"""
+    """
+    IDで材料を取得（Eager Loadでリレーションも先読み・全リレーション網羅）
+    スキーマドリフト検知: images.kind が存在しない場合は安全モードで動作
+    """
+    # スキーマドリフト検知（軽量、キャッシュ済み）
+    try:
+        from database import get_schema_drift_status
+        from utils.settings import get_database_url
+        schema_status = get_schema_drift_status(get_database_url())
+        images_kind_exists = schema_status.get("images_kind_exists", False)
+    except Exception:
+        # スキーマチェック失敗時は安全側に倒す
+        images_kind_exists = False
+    
     db = get_db()
     try:
-        stmt = (
-            select(Material)
-            .options(
-                selectinload(Material.properties),
-                selectinload(Material.images),
-                selectinload(Material.metadata_items),
-                selectinload(Material.reference_urls),
-                selectinload(Material.use_examples),
-                selectinload(Material.process_example_images),  # 加工例画像
+        # 安全モード: images.kind が存在しない場合は images をロードしない
+        if images_kind_exists:
+            # 通常モード: 全リレーションを先読み
+            stmt = (
+                select(Material)
+                .options(
+                    selectinload(Material.properties),
+                    selectinload(Material.images),
+                    selectinload(Material.metadata_items),
+                    selectinload(Material.reference_urls),
+                    selectinload(Material.use_examples),
+                    selectinload(Material.process_example_images),  # 加工例画像
+                )
+                .filter(Material.id == material_id)
             )
-            .filter(Material.id == material_id)
-        )
+        else:
+            # 安全モード: images をロードしない（スキーマ不整合を回避）
+            from sqlalchemy.orm import noload
+            stmt = (
+                select(Material)
+                .options(
+                    selectinload(Material.properties),
+                    noload(Material.images),  # images をロードしない
+                    selectinload(Material.metadata_items),
+                    selectinload(Material.reference_urls),
+                    selectinload(Material.use_examples),
+                    selectinload(Material.process_example_images),
+                )
+                .filter(Material.id == material_id)
+            )
         material = db.execute(stmt).scalar_one_or_none()
         return material
     finally:
@@ -1669,7 +1737,42 @@ def main():
         st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
         # st.stop()は呼ばない（本文を表示するため）
     
-    # 3. その後に通常処理（Debugは既にrender_debug_sidebar_early()で表示済み）
+    # 3. スキーマドリフト検知（軽量、キャッシュ済み）
+    try:
+        from database import get_schema_drift_status
+        from utils.settings import get_database_url
+        schema_status = get_schema_drift_status(get_database_url())
+        
+        # スキーマ不整合がある場合は警告を表示
+        if not schema_status.get("images_kind_exists", False):
+            st.warning("""
+            ⚠️ **DB Schema Mismatch Detected**
+            
+            The `images.kind` column is missing. This may cause errors when loading materials.
+            
+            **To fix:**
+            1. Set `MIGRATE_ON_START=1` in Streamlit Secrets
+            2. Reboot the application
+            3. The migration will run automatically and add the missing column
+            
+            **Current status:** Running in safe mode (images are not loaded to prevent crashes)
+            """)
+            
+            # 管理者向けに詳細情報を表示（is_admin は後で定義されるが、ここでは直接チェック）
+            if os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1":
+                with st.expander("🔍 Schema Status Details", expanded=False):
+                    st.json(schema_status)
+        
+        # エラーがある場合は表示
+        if schema_status.get("errors"):
+            for error in schema_status["errors"]:
+                st.error(f"Schema check error: {error}")
+    except Exception as e:
+        # スキーマチェック失敗時はログだけ（アプリは続行）
+        if os.getenv("DEBUG", "0") == "1":
+            print(f"[SCHEMA] schema check failed: {e}")
+    
+    # 4. その後に通常処理（Debugは既にrender_debug_sidebar_early()で表示済み）
     
     # アセット確保（生成物の自動生成）
     try:
@@ -3784,14 +3887,26 @@ def show_material_cards():
             primary_image_type = None
             primary_image_description = None
             
+            # 画像情報の取得（安全モード対応）
+            # 注意: 安全モードでは material.images は noload されているため空のリストになる
+            # そのため、hasattr と len チェックで安全に処理
+            primary_image = None
+            primary_image_path = None
+            primary_image_type = None
+            primary_image_description = None
+            
             try:
+                # material.images にアクセス（安全モードでは空のリスト）
                 if hasattr(material, 'images') and material.images and len(material.images) > 0:
                     primary_image = material.images[0]
                     primary_image_path = getattr(primary_image, 'file_path', None) if primary_image else None
                     primary_image_type = getattr(primary_image, 'image_type', None) if primary_image else None
                     primary_image_description = getattr(primary_image, 'description', None) if primary_image else None
             except Exception as img_e:
-                print(f"画像取得エラー（続行）: {img_e}")
+                # 安全モードやスキーマ不整合時は material.images が空またはアクセス不可
+                # エラーは握り潰して続行（画像なしでカード生成）
+                if os.getenv("DEBUG", "0") == "1":
+                    print(f"画像取得エラー（続行、安全モードの可能性）: {img_e}")
             
             # 物性データをDTOに変換（安全に）
             properties_dto = []

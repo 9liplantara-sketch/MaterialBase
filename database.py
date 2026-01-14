@@ -733,6 +733,120 @@ def init_db():
         print(f"スキーマ拡張チェック: {e}")
 
 
+# Streamlit のインポートを安全に行う（スキーマドリフト検知のキャッシュ用）
+try:
+    import streamlit as st
+except Exception:
+    st = None
+
+
+# スキーマドリフト検知（軽量、pg_catalog大量アクセスを避ける）
+def check_schema_drift(engine) -> dict:
+    """
+    スキーマドリフトを軽量に検知（information_schema.columns を使用、pg_catalog大量アクセスを避ける）
+    
+    Args:
+        engine: SQLAlchemy Engine
+    
+    Returns:
+        dict: {
+            "images_kind_exists": bool,
+            "errors": list[str],
+            "warnings": list[str]
+        }
+    """
+    result = {
+        "images_kind_exists": False,
+        "errors": [],
+        "warnings": []
+    }
+    
+    try:
+        from sqlalchemy import text
+        
+        # information_schema.columns を使用（pg_catalog より軽量）
+        if DB_DIALECT == "postgresql":
+            with engine.connect() as conn:
+                # images.kind 列の存在確認（軽量クエリ）
+                query = text("""
+                    SELECT COUNT(*) as count
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'images'
+                      AND column_name = 'kind'
+                """)
+                row = conn.execute(query).fetchone()
+                result["images_kind_exists"] = (row[0] > 0) if row else False
+                
+                if not result["images_kind_exists"]:
+                    result["warnings"].append("images.kind column does not exist (migration required)")
+                    print("[SCHEMA] missing column images.kind - run migration with MIGRATE_ON_START=1")
+        elif DB_DIALECT == "sqlite":
+            # SQLite の場合は PRAGMA table_info を使用
+            with engine.connect() as conn:
+                query = text("PRAGMA table_info(images)")
+                rows = conn.execute(query).fetchall()
+                column_names = [row[1] for row in rows]  # row[1] が column name
+                result["images_kind_exists"] = "kind" in column_names
+                
+                if not result["images_kind_exists"]:
+                    result["warnings"].append("images.kind column does not exist (migration required)")
+                    print("[SCHEMA] missing column images.kind - run migration with MIGRATE_ON_START=1")
+    except Exception as e:
+        result["errors"].append(f"Schema check failed: {e}")
+        print(f"[SCHEMA] schema check error: {e}")
+    
+    return result
+
+
+# スキーマドリフト検知結果をキャッシュ（Streamlit再実行時の重複チェックを避ける）
+def _get_schema_drift_status_impl(_db_url: str) -> dict:
+    """
+    スキーマドリフト検知結果を取得（内部実装）
+    
+    Args:
+        _db_url: データベースURL（キャッシュキー用）
+    
+    Returns:
+        dict: check_schema_drift() の結果
+    """
+    try:
+        from utils.db import get_engine
+        engine = get_engine()
+        return check_schema_drift(engine)
+    except Exception as e:
+        return {
+            "images_kind_exists": False,
+            "errors": [f"Failed to check schema: {e}"],
+            "warnings": []
+        }
+
+
+# Streamlit が利用可能な場合は cache_data(ttl=60) でキャッシュ
+if st is not None:
+    @st.cache_data(ttl=60)
+    def get_schema_drift_status(_db_url: str) -> dict:
+        """
+        スキーマドリフト検知結果を取得（キャッシュ付き、60秒TTL）
+        
+        Args:
+            _db_url: データベースURL（キャッシュキー用）
+        
+        Returns:
+            dict: check_schema_drift() の結果
+        """
+        return _get_schema_drift_status_impl(_db_url)
+else:
+    # Streamlit が利用できない場合は通常の関数として動作
+    _schema_drift_cache = None
+    
+    def get_schema_drift_status(_db_url: str = None) -> dict:
+        global _schema_drift_cache
+        if _schema_drift_cache is None:
+            _schema_drift_cache = _get_schema_drift_status_impl(_db_url or "")
+        return _schema_drift_cache
+
+
 # データベースセッションの依存性注入用
 def get_db():
     db = SessionLocal()
