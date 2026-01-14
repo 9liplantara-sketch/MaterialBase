@@ -621,6 +621,85 @@ def init_db():
                 import traceback
                 traceback.print_exc()
             
+            # (任意) MIGRATE_ON_START=1 のときに、足りない列を自動追加
+            try:
+                print("[DB INIT] Checking for missing images columns and auto-adding if needed...")
+                from sqlalchemy import create_engine
+                verify_engine = create_engine(db_url, pool_pre_ping=True)
+                with verify_engine.connect() as conn:
+                    # スキーマチェックを実行して欠けている列を確認
+                    schema_result = check_schema_drift(verify_engine)
+                    missing_columns = schema_result.get("images_missing_columns", [])
+                    
+                    if missing_columns:
+                        print(f"[DB INIT] Auto-adding missing columns: {', '.join(missing_columns)}")
+                        # 各欠けている列を追加
+                        for col in missing_columns:
+                            try:
+                                if DB_DIALECT == "postgresql":
+                                    # Postgres の場合は IF NOT EXISTS を使用
+                                    if col == "kind":
+                                        alter_query = sa_text("ALTER TABLE images ADD COLUMN IF NOT EXISTS kind VARCHAR(50)")
+                                    elif col == "r2_key":
+                                        alter_query = sa_text("ALTER TABLE images ADD COLUMN IF NOT EXISTS r2_key VARCHAR(500)")
+                                    elif col == "public_url":
+                                        alter_query = sa_text("ALTER TABLE images ADD COLUMN IF NOT EXISTS public_url VARCHAR(1000)")
+                                    elif col == "mime":
+                                        alter_query = sa_text("ALTER TABLE images ADD COLUMN IF NOT EXISTS mime VARCHAR(100)")
+                                    elif col == "sha256":
+                                        alter_query = sa_text("ALTER TABLE images ADD COLUMN IF NOT EXISTS sha256 VARCHAR(64)")
+                                    elif col == "bytes":
+                                        alter_query = sa_text("ALTER TABLE images ADD COLUMN IF NOT EXISTS bytes INTEGER")
+                                    else:
+                                        print(f"[DB INIT] WARNING: Unknown column name: {col}")
+                                        continue
+                                else:
+                                    # SQLite の場合は IF NOT EXISTS が使えないので、存在確認してから追加
+                                    query = sa_text("PRAGMA table_info(images)")
+                                    rows = conn.execute(query).fetchall()
+                                    existing_columns = {row[1] for row in rows}
+                                    if col in existing_columns:
+                                        print(f"[DB INIT] Column {col} already exists, skipping")
+                                        continue
+                                    
+                                    if col == "kind":
+                                        alter_query = sa_text("ALTER TABLE images ADD COLUMN kind VARCHAR(50)")
+                                    elif col == "r2_key":
+                                        alter_query = sa_text("ALTER TABLE images ADD COLUMN r2_key VARCHAR(500)")
+                                    elif col == "public_url":
+                                        alter_query = sa_text("ALTER TABLE images ADD COLUMN public_url VARCHAR(1000)")
+                                    elif col == "mime":
+                                        alter_query = sa_text("ALTER TABLE images ADD COLUMN mime VARCHAR(100)")
+                                    elif col == "sha256":
+                                        alter_query = sa_text("ALTER TABLE images ADD COLUMN sha256 VARCHAR(64)")
+                                    elif col == "bytes":
+                                        alter_query = sa_text("ALTER TABLE images ADD COLUMN bytes INTEGER")
+                                    else:
+                                        print(f"[DB INIT] WARNING: Unknown column name: {col}")
+                                        continue
+                                
+                                conn.execute(alter_query)
+                                conn.commit()
+                                print(f"[DB INIT] Column {col} added successfully")
+                            except Exception as col_error:
+                                print(f"[DB INIT] ERROR: Failed to add column {col}: {col_error}")
+                        
+                        # 再度スキーマチェックを実行して確認
+                        schema_result_after = check_schema_drift(verify_engine)
+                        missing_after = schema_result_after.get("images_missing_columns", [])
+                        if len(missing_after) == 0:
+                            print("[DB INIT] All required images columns verified: EXISTS")
+                        else:
+                            print(f"[DB INIT] WARNING: Some columns still missing after auto-add: {', '.join(missing_after)}")
+                    else:
+                        print("[DB INIT] All required images columns already exist, no auto-add needed")
+                
+                verify_engine.dispose()
+            except Exception as auto_add_error:
+                print(f"[DB INIT] WARNING: Auto-add columns failed (non-critical): {auto_add_error}")
+                import traceback
+                traceback.print_exc()
+            
             # Alembicで処理した場合は後続のcreate_allはスキップ（ただし念のため継続）
             # 通常はAlembicが全てのスキーマ変更を管理するため、create_allは不要
             # ただし、既存のSQLite固有のマイグレーションロジックとの互換性のため、Postgresでも一部実行
@@ -913,7 +992,9 @@ def _get_schema_drift_status_impl(_db_url: str) -> dict:
     Returns:
         dict: {
             "ok": bool,
-            "images_kind_exists": bool,
+            "images_kind_exists": bool,  # 後方互換のため残す
+            "images_ok": bool,  # 必須列が全て存在するか
+            "images_missing_columns": list[str],  # 欠けている列のリスト
             "errors": list[str],
             "warnings": list[str]
         }
@@ -929,6 +1010,8 @@ def _get_schema_drift_status_impl(_db_url: str) -> dict:
             return {
                 "ok": False,
                 "images_kind_exists": False,
+                "images_ok": False,
+                "images_missing_columns": [],
                 "errors": ["Database URL is empty"],
                 "warnings": []
             }
@@ -956,6 +1039,8 @@ def _get_schema_drift_status_impl(_db_url: str) -> dict:
             return {
                 "ok": False,
                 "images_kind_exists": False,
+                "images_ok": False,
+                "images_missing_columns": [],
                 "errors": [f"Unsupported database dialect: {db_dialect}"],
                 "warnings": []
             }
@@ -968,13 +1053,20 @@ def _get_schema_drift_status_impl(_db_url: str) -> dict:
         
         # 成功時は ok=True を追加
         result["ok"] = True
+        # images_ok と images_missing_columns が設定されていない場合は安全側に倒す
+        if "images_ok" not in result:
+            result["images_ok"] = False
+        if "images_missing_columns" not in result:
+            result["images_missing_columns"] = []
         return result
         
     except Exception as e:
-        # 失敗時は安全側に倒す（images_kind_exists=False）
+        # 失敗時は安全側に倒す（images_kind_exists=False, images_ok=False）
         return {
             "ok": False,
             "images_kind_exists": False,
+            "images_ok": False,
+            "images_missing_columns": [],
             "errors": [f"Failed to check schema: {e}"],
             "warnings": []
         }

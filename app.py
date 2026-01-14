@@ -1034,24 +1034,27 @@ def get_all_materials(include_unpublished: bool = False, include_deleted: bool =
         from utils.settings import get_database_url
         schema_status = get_schema_drift_status(get_database_url())
         
-        # スキーマチェックが成功した場合のみ images_kind_exists を使用
+        # スキーマチェックが成功した場合のみ images_ok を使用
         if schema_status.get("ok", False):
-            images_kind_exists = schema_status.get("images_kind_exists", False)
+            images_ok = schema_status.get("images_ok", False)
+            # 後方互換: images_kind_exists も確認（images_ok が無い場合のフォールバック）
+            if "images_ok" not in schema_status:
+                images_ok = schema_status.get("images_kind_exists", False)
         else:
             # スキーマチェック失敗時は安全側に倒す（images をロードしない）
-            images_kind_exists = False
+            images_ok = False
             if os.getenv("DEBUG", "0") == "1":
                 print(f"[SCHEMA] schema check failed (ok=False), using safe mode: {schema_status.get('errors', [])}")
     except Exception as e:
         # スキーマチェック失敗時は安全側に倒す（images をロードしない）
-        images_kind_exists = False
+        images_ok = False
         if os.getenv("DEBUG", "0") == "1":
             print(f"[SCHEMA] schema check exception, using safe mode: {e}")
     
     db = get_db()
     try:
-        # 安全モード: images.kind が存在しない場合は images をロードしない
-        if images_kind_exists:
+        # 安全モード: images の必須列が欠けている場合は images をロードしない
+        if images_ok:
             # 通常モード: 全リレーションを先読み
             stmt = (
                 select(Material)
@@ -1135,20 +1138,23 @@ def get_material_by_id(material_id: int):
         from utils.settings import get_database_url
         schema_status = get_schema_drift_status(get_database_url())
         
-        # スキーマチェックが成功した場合のみ images_kind_exists を使用
+        # スキーマチェックが成功した場合のみ images_ok を使用
         if schema_status.get("ok", False):
-            images_kind_exists = schema_status.get("images_kind_exists", False)
+            images_ok = schema_status.get("images_ok", False)
+            # 後方互換: images_kind_exists も確認（images_ok が無い場合のフォールバック）
+            if "images_ok" not in schema_status:
+                images_ok = schema_status.get("images_kind_exists", False)
         else:
             # スキーマチェック失敗時は安全側に倒す
-            images_kind_exists = False
+            images_ok = False
     except Exception:
         # スキーマチェック失敗時は安全側に倒す
-        images_kind_exists = False
+        images_ok = False
     
     db = get_db()
     try:
-        # 安全モード: images.kind が存在しない場合は images をロードしない
-        if images_kind_exists:
+        # 安全モード: images の必須列が欠けている場合は images をロードしない
+        if images_ok:
             # 通常モード: 全リレーションを先読み
             stmt = (
                 select(Material)
@@ -1801,19 +1807,39 @@ def main():
         # スキーマチェックが成功した場合のみ、スキーマ不整合の警告を表示
         if schema_status.get("ok", False):
             # スキーマ不整合がある場合は警告を表示
-            if not schema_status.get("images_kind_exists", False):
-                st.warning("""
-                ⚠️ **DB Schema Mismatch Detected**
-                
-                The `images.kind` column is missing. This may cause errors when loading materials.
-                
-                **To fix:**
-                1. Set `MIGRATE_ON_START=1` in Streamlit Secrets
-                2. Reboot the application
-                3. The migration will run automatically and add the missing column
-                
-                **Current status:** Running in safe mode (images are not loaded to prevent crashes)
-                """)
+            images_ok = schema_status.get("images_ok", False)
+            # 後方互換: images_kind_exists も確認
+            if not images_ok and not schema_status.get("images_kind_exists", False):
+                missing_columns = schema_status.get("images_missing_columns", [])
+                if missing_columns:
+                    missing_cols_str = ", ".join(missing_columns)
+                    st.warning(f"""
+                    ⚠️ **DB Schema Mismatch Detected**
+                    
+                    The `images` table is missing required columns: **{missing_cols_str}**
+                    
+                    This may cause errors when loading materials.
+                    
+                    **To fix:**
+                    1. Set `MIGRATE_ON_START=1` in Streamlit Secrets
+                    2. Reboot the application
+                    3. The migration will run automatically and add the missing columns
+                    
+                    **Current status:** Running in safe mode (images are not loaded to prevent crashes)
+                    """)
+                else:
+                    st.warning("""
+                    ⚠️ **DB Schema Mismatch Detected**
+                    
+                    The `images` table is missing required columns. This may cause errors when loading materials.
+                    
+                    **To fix:**
+                    1. Set `MIGRATE_ON_START=1` in Streamlit Secrets
+                    2. Reboot the application
+                    3. The migration will run automatically and add the missing columns
+                    
+                    **Current status:** Running in safe mode (images are not loaded to prevent crashes)
+                    """)
                 
                 # 管理者向けに詳細情報を表示（is_admin は後で定義されるが、ここでは直接チェック）
                 if os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1":
