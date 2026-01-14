@@ -802,20 +802,74 @@ def check_schema_drift(engine) -> dict:
 # スキーマドリフト検知結果をキャッシュ（Streamlit再実行時の重複チェックを避ける）
 def _get_schema_drift_status_impl(_db_url: str) -> dict:
     """
-    スキーマドリフト検知結果を取得（内部実装）
+    スキーマドリフト検知結果を取得（内部実装、utils.db に依存しない）
     
     Args:
-        _db_url: データベースURL（キャッシュキー用）
+        _db_url: データベースURL（キャッシュキー用、実際に使用する）
     
     Returns:
-        dict: check_schema_drift() の結果
+        dict: {
+            "ok": bool,
+            "images_kind_exists": bool,
+            "errors": list[str],
+            "warnings": list[str]
+        }
     """
     try:
-        from utils.db import get_engine
-        engine = get_engine()
-        return check_schema_drift(engine)
+        # utils.db に依存せず、直接 create_engine を使用
+        from sqlalchemy import create_engine, text
+        from utils.settings import get_db_dialect
+        
+        # db_url が空の場合はエラー
+        if not _db_url or not _db_url.strip():
+            return {
+                "ok": False,
+                "images_kind_exists": False,
+                "errors": ["Database URL is empty"],
+                "warnings": []
+            }
+        
+        # データベースダイアレクトを取得
+        db_dialect = get_db_dialect(_db_url)
+        
+        # エンジンを作成（軽量、接続プールは最小限）
+        if db_dialect == "postgresql":
+            engine = create_engine(
+                _db_url,
+                pool_pre_ping=True,
+                future=True,
+                echo=False,  # スキーマチェック時はログを出さない
+                pool_size=1,  # 最小限のプールサイズ
+                max_overflow=0
+            )
+        elif db_dialect == "sqlite":
+            engine = create_engine(
+                _db_url,
+                connect_args={"check_same_thread": False},
+                echo=False
+            )
+        else:
+            return {
+                "ok": False,
+                "images_kind_exists": False,
+                "errors": [f"Unsupported database dialect: {db_dialect}"],
+                "warnings": []
+            }
+        
+        # スキーマドリフト検知を実行
+        result = check_schema_drift(engine)
+        
+        # エンジンを閉じる
+        engine.dispose()
+        
+        # 成功時は ok=True を追加
+        result["ok"] = True
+        return result
+        
     except Exception as e:
+        # 失敗時は安全側に倒す（images_kind_exists=False）
         return {
+            "ok": False,
             "images_kind_exists": False,
             "errors": [f"Failed to check schema: {e}"],
             "warnings": []

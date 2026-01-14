@@ -1006,20 +1006,20 @@ def get_all_materials(include_unpublished: bool = False, include_deleted: bool =
         from database import get_schema_drift_status
         from utils.settings import get_database_url
         schema_status = get_schema_drift_status(get_database_url())
-        images_kind_exists = schema_status.get("images_kind_exists", False)
         
-        # images.kind が存在しない場合は安全モードで動作
-        if not images_kind_exists:
-            # 警告を表示（管理者向け）
-            if os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1":
-                st.warning("⚠️ DB schema mismatch: images.kind column does not exist. Run migration with MIGRATE_ON_START=1")
-            else:
-                st.info("ℹ️ 画像が利用できません（DB migrate必要）")
+        # スキーマチェックが成功した場合のみ images_kind_exists を使用
+        if schema_status.get("ok", False):
+            images_kind_exists = schema_status.get("images_kind_exists", False)
+        else:
+            # スキーマチェック失敗時は安全側に倒す（images をロードしない）
+            images_kind_exists = False
+            if os.getenv("DEBUG", "0") == "1":
+                print(f"[SCHEMA] schema check failed (ok=False), using safe mode: {schema_status.get('errors', [])}")
     except Exception as e:
         # スキーマチェック失敗時は安全側に倒す（images をロードしない）
         images_kind_exists = False
         if os.getenv("DEBUG", "0") == "1":
-            print(f"[SCHEMA] schema check failed, using safe mode: {e}")
+            print(f"[SCHEMA] schema check exception, using safe mode: {e}")
     
     db = get_db()
     try:
@@ -1107,7 +1107,13 @@ def get_material_by_id(material_id: int):
         from database import get_schema_drift_status
         from utils.settings import get_database_url
         schema_status = get_schema_drift_status(get_database_url())
-        images_kind_exists = schema_status.get("images_kind_exists", False)
+        
+        # スキーマチェックが成功した場合のみ images_kind_exists を使用
+        if schema_status.get("ok", False):
+            images_kind_exists = schema_status.get("images_kind_exists", False)
+        else:
+            # スキーマチェック失敗時は安全側に倒す
+            images_kind_exists = False
     except Exception:
         # スキーマチェック失敗時は安全側に倒す
         images_kind_exists = False
@@ -1743,34 +1749,56 @@ def main():
         from utils.settings import get_database_url
         schema_status = get_schema_drift_status(get_database_url())
         
-        # スキーマ不整合がある場合は警告を表示
-        if not schema_status.get("images_kind_exists", False):
+        # スキーマチェックが成功した場合のみ、スキーマ不整合の警告を表示
+        if schema_status.get("ok", False):
+            # スキーマ不整合がある場合は警告を表示
+            if not schema_status.get("images_kind_exists", False):
+                st.warning("""
+                ⚠️ **DB Schema Mismatch Detected**
+                
+                The `images.kind` column is missing. This may cause errors when loading materials.
+                
+                **To fix:**
+                1. Set `MIGRATE_ON_START=1` in Streamlit Secrets
+                2. Reboot the application
+                3. The migration will run automatically and add the missing column
+                
+                **Current status:** Running in safe mode (images are not loaded to prevent crashes)
+                """)
+                
+                # 管理者向けに詳細情報を表示（is_admin は後で定義されるが、ここでは直接チェック）
+                if os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1":
+                    with st.expander("🔍 Schema Status Details", expanded=False):
+                        st.json(schema_status)
+            
+            # エラーがある場合は表示（ok==True の場合でも）
+            if schema_status.get("errors"):
+                for error in schema_status["errors"]:
+                    st.warning(f"Schema check warning: {error}")
+        else:
+            # スキーマチェックが失敗した場合（ok==False）
             st.warning("""
-            ⚠️ **DB Schema Mismatch Detected**
+            ⚠️ **DB Schema Check Failed**
             
-            The `images.kind` column is missing. This may cause errors when loading materials.
+            Unable to verify database schema. Running in safe mode to prevent crashes.
             
-            **To fix:**
-            1. Set `MIGRATE_ON_START=1` in Streamlit Secrets
-            2. Reboot the application
-            3. The migration will run automatically and add the missing column
-            
-            **Current status:** Running in safe mode (images are not loaded to prevent crashes)
+            **Details:**
             """)
+            if schema_status.get("errors"):
+                for error in schema_status["errors"]:
+                    st.error(f"Schema check error: {error}")
             
-            # 管理者向けに詳細情報を表示（is_admin は後で定義されるが、ここでは直接チェック）
+            # 管理者向けに詳細情報を表示
             if os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1":
                 with st.expander("🔍 Schema Status Details", expanded=False):
                     st.json(schema_status)
-        
-        # エラーがある場合は表示
-        if schema_status.get("errors"):
-            for error in schema_status["errors"]:
-                st.error(f"Schema check error: {error}")
     except Exception as e:
-        # スキーマチェック失敗時はログだけ（アプリは続行）
+        # スキーマチェック失敗時は警告を表示して続行（PANICしない）
+        st.warning(f"⚠️ DB Schema check failed: {e}. Running in safe mode.")
         if os.getenv("DEBUG", "0") == "1":
-            print(f"[SCHEMA] schema check failed: {e}")
+            print(f"[SCHEMA] schema check exception: {e}")
+            import traceback
+            traceback.print_exc()
     
     # 4. その後に通常処理（Debugは既にrender_debug_sidebar_early()で表示済み）
     
@@ -2218,14 +2246,16 @@ def show_home():
     """ホームページ"""
     # パフォーマンス計測（DEBUG=1のみ）
     import time
-    t0 = time.perf_counter() if is_debug() else None
+    # is_debug 関数を呼ぶ前に、ローカル変数名を debug_enabled に変更（シャドーイング回避）
+    debug_enabled = is_debug_flag()
+    t0 = time.perf_counter() if debug_enabled else None
     
     # DEBUGタグ（反映確認用）
-    if os.getenv("DEBUG", "0") == "1":
+    if debug_enabled:
         st.caption("BUILD_TAG: APPROVAL_IMG_EDIT_FIX_V1")
     
-    # デバッグモードかどうか
-    is_debug = os.getenv("DEBUG", "0") == "1"
+    # デバッグモードかどうか（ローカル変数名を debug_enabled に統一）
+    debug_enabled = os.getenv("DEBUG", "0") == "1"
     
     # 修正1: DEBUGモードでもロゴ/画像描画は必ず実行（CSS無効化は<style>注入だけ）
     # ロゴマークとタイプロゴを表示（ホームでは常に表示）
@@ -2523,10 +2553,12 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
     """材料一覧ページ"""
     # パフォーマンス計測（DEBUG=1のみ）
     import time
-    t0 = time.perf_counter() if is_debug() else None
+    # is_debug 関数を呼ぶ前に、ローカル変数名を debug_enabled に変更（シャドーイング回避）
+    debug_enabled = is_debug_flag()
+    t0 = time.perf_counter() if debug_enabled else None
     
-    is_debug = os.getenv("DEBUG", "0") == "1"
-    st.markdown(render_site_header(debug=is_debug), unsafe_allow_html=True)
+    debug_enabled = os.getenv("DEBUG", "0") == "1"
+    st.markdown(render_site_header(debug=debug_enabled), unsafe_allow_html=True)
     st.markdown('<h2 class="section-title">材料一覧</h2>', unsafe_allow_html=True)
     
     # 詳細表示モードのチェック
@@ -3119,10 +3151,12 @@ def show_approval_queue():
     """承認待ち一覧ページ（管理者のみ）"""
     # パフォーマンス計測（DEBUG=1のみ）
     import time
-    t0 = time.perf_counter() if is_debug() else None
+    # is_debug 関数を呼ぶ前に、ローカル変数名を debug_enabled に変更（シャドーイング回避）
+    debug_enabled = is_debug_flag()
+    t0 = time.perf_counter() if debug_enabled else None
     
-    is_debug = os.getenv("DEBUG", "0") == "1"
-    st.markdown(render_site_header(debug=is_debug), unsafe_allow_html=True)
+    debug_enabled = os.getenv("DEBUG", "0") == "1"
+    st.markdown(render_site_header(debug=debug_enabled), unsafe_allow_html=True)
     st.markdown('<h2 class="section-title">📋 承認待ち一覧</h2>', unsafe_allow_html=True)
     
     db = SessionLocal()
