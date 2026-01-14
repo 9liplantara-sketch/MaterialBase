@@ -488,11 +488,13 @@ def init_db():
         
         verify = get_flag("VERIFY_SCHEMA_ON_START", False)
         migrate = get_flag("MIGRATE_ON_START", False)
-        debug = os.getenv("DEBUG", "0") == "1"
         
-        if not migrate and not verify and not debug:
+        # スキーマ検査を走らせるのは VERIFY_SCHEMA_ON_START=1 の時だけ
+        # MIGRATE_ON_START=1 の時は alembic upgrade head を実行
+        # それ以外（通常運用、DEBUG=1含む）は pg_catalog を叩く検査を完全にスキップ
+        if not migrate and not verify:
             print("[DB INIT] skip schema verification (postgres cloud, normal operation)")
-            # 軽い接続確認だけ行う（オプション）
+            # 軽い接続確認だけ行う（SELECT 1）
             try:
                 with engine.connect() as conn:
                     conn.execute(text("SELECT 1"))
