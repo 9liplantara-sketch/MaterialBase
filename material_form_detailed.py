@@ -1011,9 +1011,20 @@ def save_material(form_data):
             import utils.settings as settings
             
             # 画像アップロードはフラグで制御（import 前にチェックして起動安定化）
-            enable_r2_upload = settings.get_flag("ENABLE_R2_UPLOAD", True)
+            # get_flag が無い場合に備えた二重化
+            flag_fn = getattr(settings, "get_flag", None)
+            if not callable(flag_fn):
+                # フォールバック: os.getenv のみで判定
+                def flag_fn(key, default=False):
+                    value = os.getenv(key)
+                    if value is None:
+                        return default
+                    value_str = str(value).lower().strip()
+                    return value_str in ("1", "true", "yes", "y", "on")
+            
+            enable_r2_upload = flag_fn("ENABLE_R2_UPLOAD", True)
             # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES の時は必ず False 扱い（安全）
-            if settings.get_flag("INIT_SAMPLE_DATA", False) or settings.get_flag("SEED_SKIP_IMAGES", False):
+            if flag_fn("INIT_SAMPLE_DATA", False) or flag_fn("SEED_SKIP_IMAGES", False):
                 enable_r2_upload = False
             
             if enable_r2_upload:

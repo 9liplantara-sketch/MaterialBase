@@ -1740,6 +1740,21 @@ def main():
             db_url = settings.get_database_url()
             debug_info["DB_URL"] = settings.mask_db_url(db_url)
             debug_info["DB_DIALECT"] = settings.get_db_dialect(db_url)
+            
+            # utils.settings のデバッグ情報（原因特定用）
+            try:
+                debug_info["utils.settings"] = {
+                    "__file__": str(getattr(settings, "__file__", "unknown")),
+                    "has_get_flag": hasattr(settings, "get_flag"),
+                    "get_flag_callable": callable(getattr(settings, "get_flag", None)),
+                    "version": getattr(settings, "SETTINGS_VERSION", "unknown"),
+                    "dir_contains_get_flag": "get_flag" in dir(settings),
+                }
+                # get_flag が呼べるかテスト
+                test_flag = settings.get_flag("DEBUG", False)
+                debug_info["utils.settings"]["test_get_flag_result"] = test_flag
+            except Exception as e:
+                debug_info["utils.settings"] = {"error": str(e)}
         except Exception as e:
             debug_info["DB_ERROR"] = str(e)
         

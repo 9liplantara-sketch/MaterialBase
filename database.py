@@ -481,8 +481,15 @@ def init_db():
     if DB_DIALECT == "postgresql" and IS_CLOUD:
         try:
             import utils.settings as settings
-            verify = settings.get_flag("VERIFY_SCHEMA_ON_START", False)
-            migrate = settings.get_flag("MIGRATE_ON_START", False)
+            # get_flag が無い場合に備えた二重化
+            flag_fn = getattr(settings, "get_flag", None)
+            if callable(flag_fn):
+                verify = flag_fn("VERIFY_SCHEMA_ON_START", False)
+                migrate = flag_fn("MIGRATE_ON_START", False)
+            else:
+                # フォールバック: os.getenv のみで判定
+                verify = os.getenv("VERIFY_SCHEMA_ON_START", "0") == "1"
+                migrate = os.getenv("MIGRATE_ON_START", "0") == "1"
         except Exception:
             # utils.settings が利用できない場合はフォールバック
             verify = os.getenv("VERIFY_SCHEMA_ON_START", "0") == "1"
