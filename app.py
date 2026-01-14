@@ -1736,10 +1736,10 @@ def main():
         
         # DB接続先情報を取得（マスク済み）
         try:
-            from utils.settings import get_database_url, mask_db_url, get_db_dialect
-            db_url = get_database_url()
-            debug_info["DB_URL"] = mask_db_url(db_url)
-            debug_info["DB_DIALECT"] = get_db_dialect(db_url)
+            import utils.settings as settings
+            db_url = settings.get_database_url()
+            debug_info["DB_URL"] = settings.mask_db_url(db_url)
+            debug_info["DB_DIALECT"] = settings.get_db_dialect(db_url)
         except Exception as e:
             debug_info["DB_ERROR"] = str(e)
         

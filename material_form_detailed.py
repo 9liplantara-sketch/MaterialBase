@@ -1008,12 +1008,12 @@ def save_material(form_data):
         # R2 アップロード処理（material.id 確定後）
         uploaded_files = form_data.get('images', [])
         if uploaded_files and material.id:
-            from utils.settings import get_flag
+            import utils.settings as settings
             
             # 画像アップロードはフラグで制御（import 前にチェックして起動安定化）
-            enable_r2_upload = get_flag("ENABLE_R2_UPLOAD", True)
+            enable_r2_upload = settings.get_flag("ENABLE_R2_UPLOAD", True)
             # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES の時は必ず False 扱い（安全）
-            if get_flag("INIT_SAMPLE_DATA", False) or get_flag("SEED_SKIP_IMAGES", False):
+            if settings.get_flag("INIT_SAMPLE_DATA", False) or settings.get_flag("SEED_SKIP_IMAGES", False):
                 enable_r2_upload = False
             
             if enable_r2_upload:
@@ -1099,11 +1099,11 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
             form_data.pop('images', None)
         
         # R2 アップロード処理（フラグチェック）
-        from utils.settings import get_flag
+        import utils.settings as settings
         
-        enable_r2_upload = get_flag("ENABLE_R2_UPLOAD", True)
+        enable_r2_upload = settings.get_flag("ENABLE_R2_UPLOAD", True)
         # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES の時は必ず False 扱い（安全）
-        if get_flag("INIT_SAMPLE_DATA", False) or get_flag("SEED_SKIP_IMAGES", False):
+        if settings.get_flag("INIT_SAMPLE_DATA", False) or settings.get_flag("SEED_SKIP_IMAGES", False):
             enable_r2_upload = False
         
         if enable_r2_upload and uploaded_files:

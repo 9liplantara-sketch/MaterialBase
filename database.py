@@ -480,15 +480,13 @@ def init_db():
     # Postgres + Cloud + 通常運用時はスキーマ検査をスキップ（パフォーマンス向上）
     if DB_DIALECT == "postgresql" and IS_CLOUD:
         try:
-            from utils.settings import get_flag
+            import utils.settings as settings
+            verify = settings.get_flag("VERIFY_SCHEMA_ON_START", False)
+            migrate = settings.get_flag("MIGRATE_ON_START", False)
         except Exception:
             # utils.settings が利用できない場合はフォールバック
-            def get_flag(key: str, default: bool = False) -> bool:
-                value = os.getenv(key, "").lower().strip()
-                return value in ("1", "true", "yes", "on")
-        
-        verify = get_flag("VERIFY_SCHEMA_ON_START", False)
-        migrate = get_flag("MIGRATE_ON_START", False)
+            verify = os.getenv("VERIFY_SCHEMA_ON_START", "0") == "1"
+            migrate = os.getenv("MIGRATE_ON_START", "0") == "1"
         
         # スキーマ検査を走らせるのは VERIFY_SCHEMA_ON_START=1 の時だけ
         # MIGRATE_ON_START=1 の時は alembic upgrade head を実行
@@ -496,9 +494,8 @@ def init_db():
         if not migrate and not verify:
             print("[DB INIT] skip schema verification (postgres cloud, normal operation)")
             # 軽い接続確認だけ行う（SELECT 1）
-            # text衝突を避けるため、sqlalchemy.text を直接参照
+            # text衝突を避けるため、トップレベルで import 済みの sa_text を使用
             try:
-                from sqlalchemy import text as sa_text
                 with engine.connect() as conn:
                     conn.execute(sa_text("SELECT 1"))
                 print("[DB INIT] connection check: OK")
@@ -611,7 +608,7 @@ def init_db():
     
     # 既存データベースへのカラム追加（安全にALTER）
     try:
-        from sqlalchemy import inspect, text
+        from sqlalchemy import inspect
         inspector = inspect(engine)
         
         # 一意制約の追加（既存テーブルに追加を試みる、失敗しても続行）
@@ -818,8 +815,9 @@ def _get_schema_drift_status_impl(_db_url: str) -> dict:
     """
     try:
         # utils.db に依存せず、直接 create_engine を使用
-        from sqlalchemy import create_engine, text
-        from utils.settings import get_db_dialect
+        from sqlalchemy import create_engine
+        import utils.settings as settings
+        db_dialect = settings.get_db_dialect(_db_url)
         
         # db_url が空の場合はエラー
         if not _db_url or not _db_url.strip():
@@ -830,8 +828,8 @@ def _get_schema_drift_status_impl(_db_url: str) -> dict:
                 "warnings": []
             }
         
-        # データベースダイアレクトを取得
-        db_dialect = get_db_dialect(_db_url)
+        # データベースダイアレクトを取得（settings を使用）
+        db_dialect = settings.get_db_dialect(_db_url)
         
         # エンジンを作成（軽量、接続プールは最小限）
         if db_dialect == "postgresql":
