@@ -519,17 +519,36 @@ def init_db():
         try:
             from alembic.config import Config
             from alembic import command
+            import utils.settings as settings
+            
+            print("[DB INIT] Alembic migration start (MIGRATE_ON_START=1)")
+            
+            # データベースURLを取得（utils.settings を使用）
+            db_url = settings.get_database_url()
+            masked_url = settings.mask_db_url(db_url)
+            print(f"[DB INIT] Database URL: {masked_url}")
+            
+            # Alembic Config を作成
             alembic_cfg = Config("alembic.ini")
+            
+            # sqlalchemy.url を必ず設定（Streamlit Secrets から取得した URL を使用）
+            alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+            print("[DB INIT] sqlalchemy.url set in alembic config")
+            
+            # 環境変数にも設定（alembic/env.py のフォールバック用、setdefaultではなく代入で確実に）
+            os.environ["DATABASE_URL"] = db_url
+            print("[DB INIT] DATABASE_URL set in environment")
+            
             # マイグレーション実行
             command.upgrade(alembic_cfg, "head")
-            print("[DB INIT] Alembic migration applied (MIGRATE_ON_START=1)")
+            print("[DB INIT] Alembic migration end: SUCCESS")
             # Alembicで処理した場合は後続のcreate_allはスキップ（ただし念のため継続）
             # 通常はAlembicが全てのスキーマ変更を管理するため、create_allは不要
             # ただし、既存のSQLite固有のマイグレーションロジックとの互換性のため、Postgresでも一部実行
         except FileNotFoundError:
-            print("[DB INIT] alembic.ini not found, skipping Alembic migration")
+            print("[DB INIT] Alembic migration failed: alembic.ini not found, skipping")
         except Exception as e:
-            print(f"[DB INIT] Alembic migration failed: {e}")
+            print(f"[DB INIT] Alembic migration end: FAILED - {e}")
             import traceback
             traceback.print_exc()
             # エラー時はcreate_allにフォールバック（開発環境のみ）
