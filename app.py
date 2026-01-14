@@ -50,6 +50,23 @@ def is_debug() -> bool:
         return str(st.secrets.get("DEBUG", "0")) == "1"
     except Exception:
         return False
+
+
+# is_debug_flag: 関数名衝突を避けるための alias（ファイル先頭で必ず定義）
+# utils.settings から import を試みるが、失敗時は fallback で is_debug を使用
+try:
+    from utils.settings import is_debug as is_debug_flag
+except Exception:
+    # utils.settings が壊れている場合の fallback
+    is_debug_flag = is_debug
+
+
+# 実行順序の安全策: is_debug_flag が callable であることを確認
+if not callable(is_debug_flag):
+    # 万が一 callable でない場合は fallback
+    is_debug_flag = is_debug
+
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from PIL import Image as PILImage
@@ -865,7 +882,12 @@ def get_material_count_cached(db_url: str, include_unpublished: bool = False, in
         材料件数
     """
     import time
-    t0 = time.perf_counter() if is_debug() else None
+    # 実行順序の安全策: is_debug_flag が存在することを確認
+    if "is_debug_flag" not in globals() or not callable(globals().get("is_debug_flag")):
+        debug_enabled = os.getenv("DEBUG", "0") == "1"
+    else:
+        debug_enabled = is_debug_flag()
+    t0 = time.perf_counter() if debug_enabled else None
     
     from utils.db import get_sessionmaker
     from sqlalchemy import select, func
@@ -916,7 +938,12 @@ def fetch_materials_page_cached(
         材料データのdictリスト（表示用）
     """
     import time
-    t0 = time.perf_counter() if is_debug() else None
+    # 実行順序の安全策: is_debug_flag が存在することを確認
+    if "is_debug_flag" not in globals() or not callable(globals().get("is_debug_flag")):
+        debug_enabled = os.getenv("DEBUG", "0") == "1"
+    else:
+        debug_enabled = is_debug_flag()
+    t0 = time.perf_counter() if debug_enabled else None
     
     from utils.db import get_sessionmaker
     from utils.material_cache import freeze_material_row
@@ -1678,9 +1705,16 @@ def render_debug_sidebar_early():
 
 
 def main():
+    # 実行順序の安全策: is_debug_flag が存在することを確認
+    if "is_debug_flag" not in globals() or not callable(globals().get("is_debug_flag")):
+        # 万が一 is_debug_flag が存在しない場合は警告を出して続行
+        st.warning("⚠️ is_debug_flag is not available. Using fallback.")
+        # fallback を定義
+        globals()["is_debug_flag"] = is_debug
+    
     # パフォーマンス計測（DEBUG=1のみ）
     import time
-    t0_main = time.perf_counter() if is_debug() else None
+    t0_main = time.perf_counter() if is_debug_flag() else None
     
     # 起動順序を固定：Debug表示 → init_db() → その後に通常処理
     
@@ -1688,7 +1722,7 @@ def main():
     st.caption(f"RUNNING_SHA: {get_running_sha()}")
     
     # DEBUG判定とデバッグ情報表示
-    if is_debug():
+    if is_debug_flag():
         debug_info = {
             "DEBUG_ENV": os.getenv("DEBUG"),
             "DEBUG_SECRET": None,
@@ -2244,10 +2278,15 @@ def get_main_visual_debug_info() -> Dict[str, Any]:
 
 def show_home():
     """ホームページ"""
+    # 実行順序の安全策: is_debug_flag が存在することを確認
+    if "is_debug_flag" not in globals() or not callable(globals().get("is_debug_flag")):
+        # 万が一 is_debug_flag が存在しない場合は fallback
+        debug_enabled = os.getenv("DEBUG", "0") == "1"
+    else:
+        debug_enabled = is_debug_flag()
+    
     # パフォーマンス計測（DEBUG=1のみ）
     import time
-    # is_debug 関数を呼ぶ前に、ローカル変数名を debug_enabled に変更（シャドーイング回避）
-    debug_enabled = is_debug_flag()
     t0 = time.perf_counter() if debug_enabled else None
     
     # DEBUGタグ（反映確認用）
