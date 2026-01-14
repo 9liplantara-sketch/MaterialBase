@@ -2,7 +2,8 @@
 データベース設定とモデル定義（詳細仕様対応版）
 Postgres対応: URL駆動でSQLite/Postgres両対応
 """
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Boolean, UniqueConstraint, Index, text
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Boolean, UniqueConstraint, Index
+from sqlalchemy import text as sa_text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -495,12 +496,16 @@ def init_db():
         if not migrate and not verify:
             print("[DB INIT] skip schema verification (postgres cloud, normal operation)")
             # 軽い接続確認だけ行う（SELECT 1）
+            # text衝突を避けるため、sqlalchemy.text を直接参照
             try:
+                from sqlalchemy import text as sa_text
                 with engine.connect() as conn:
-                    conn.execute(text("SELECT 1"))
+                    conn.execute(sa_text("SELECT 1"))
                 print("[DB INIT] connection check: OK")
             except Exception as e:
                 print(f"[DB INIT] connection check failed: {e}")
+                import traceback
+                traceback.print_exc()
             return
     
     # Alembicマイグレーション（MIGRATE_ON_START=1の時のみ自動実行）
@@ -552,30 +557,28 @@ def init_db():
             # 既存データにis_published=1を設定（後方互換）
             try:
                 with engine.begin() as conn:
-                    from sqlalchemy import text
                     # is_publishedカラムが存在する場合、NULLのレコードに1を設定
-                    conn.execute(text("UPDATE materials SET is_published = 1 WHERE is_published IS NULL"))
+                    conn.execute(sa_text("UPDATE materials SET is_published = 1 WHERE is_published IS NULL"))
             except Exception as e:
                 print(f"[DB MIGRATION] Failed to set default is_published: {e}")
             
             # 必須フィールドの空文字修正（既存DBの空文字をデフォルト値で埋める）
             try:
                 with engine.begin() as conn:
-                    from sqlalchemy import text
                     # prototyping_difficulty が NULL または空文字列の場合、"中" に補完
-                    result1 = conn.execute(text("""
+                    result1 = conn.execute(sa_text("""
                         UPDATE materials
                         SET prototyping_difficulty = '中'
                         WHERE prototyping_difficulty IS NULL OR TRIM(prototyping_difficulty) = ''
                     """))
                     # equipment_level が NULL または空文字列の場合、"家庭/工房レベル" に補完
-                    result2 = conn.execute(text("""
+                    result2 = conn.execute(sa_text("""
                         UPDATE materials
                         SET equipment_level = '家庭/工房レベル'
                         WHERE equipment_level IS NULL OR TRIM(equipment_level) = ''
                     """))
                     # visibility が NULL または空文字列の場合、"公開（誰でも閲覧可）" に補完
-                    result3 = conn.execute(text("""
+                    result3 = conn.execute(sa_text("""
                         UPDATE materials
                         SET visibility = '公開（誰でも閲覧可）'
                         WHERE visibility IS NULL OR TRIM(visibility) = ''
@@ -588,13 +591,13 @@ def init_db():
                         inspector = inspect(engine)
                         columns = [col['name'] for col in inspector.get_columns('materials')]
                         if 'is_deleted' not in columns:
-                            conn.execute(text("ALTER TABLE materials ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0"))
+                            conn.execute(sa_text("ALTER TABLE materials ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0"))
                             print("[DB MIGRATION] Added is_deleted column to materials")
                         if 'deleted_at' not in columns:
-                            conn.execute(text("ALTER TABLE materials ADD COLUMN deleted_at DATETIME"))
+                            conn.execute(sa_text("ALTER TABLE materials ADD COLUMN deleted_at DATETIME"))
                             print("[DB MIGRATION] Added deleted_at column to materials")
                         # 既存行をis_deleted=0で埋める
-                        result4 = conn.execute(text("UPDATE materials SET is_deleted = 0 WHERE is_deleted IS NULL"))
+                        result4 = conn.execute(sa_text("UPDATE materials SET is_deleted = 0 WHERE is_deleted IS NULL"))
                         print(f"[DB MIGRATION] Initialized is_deleted: {result4.rowcount} rows")
                     except Exception as e:
                         print(f"[DB MIGRATION] Failed to add is_deleted/deleted_at: {e}")
@@ -620,7 +623,7 @@ def init_db():
                     # 一意インデックスを作成（SQLiteでは制約として機能）
                     with engine.connect() as conn:
                         try:
-                            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_material_name_official ON materials(name_official)"))
+                            conn.execute(sa_text("CREATE UNIQUE INDEX IF NOT EXISTS uq_material_name_official ON materials(name_official)"))
                             conn.commit()
                         except Exception:
                             pass  # 既に存在するか、制約追加が失敗した場合は無視
@@ -630,7 +633,7 @@ def init_db():
                 if 'uq_property_material_name' not in existing_indexes:
                     with engine.connect() as conn:
                         try:
-                            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_property_material_name ON properties(material_id, property_name)"))
+                            conn.execute(sa_text("CREATE UNIQUE INDEX IF NOT EXISTS uq_property_material_name ON properties(material_id, property_name)"))
                             conn.commit()
                         except Exception:
                             pass
@@ -640,7 +643,7 @@ def init_db():
                 if 'uq_use_example_material_name' not in existing_indexes:
                     with engine.connect() as conn:
                         try:
-                            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_use_example_material_name ON use_examples(material_id, example_name)"))
+                            conn.execute(sa_text("CREATE UNIQUE INDEX IF NOT EXISTS uq_use_example_material_name ON use_examples(material_id, example_name)"))
                             conn.commit()
                         except Exception:
                             pass
@@ -650,7 +653,7 @@ def init_db():
                 if 'uq_metadata_material_key' not in existing_indexes:
                     with engine.connect() as conn:
                         try:
-                            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_metadata_material_key ON material_metadata(material_id, key)"))
+                            conn.execute(sa_text("CREATE UNIQUE INDEX IF NOT EXISTS uq_metadata_material_key ON material_metadata(material_id, key)"))
                             conn.commit()
                         except Exception:
                             pass
@@ -665,14 +668,14 @@ def init_db():
             # texture_image_pathカラムが存在しない場合は追加
             if 'texture_image_path' not in existing_columns:
                 with engine.connect() as conn:
-                    conn.execute(text("ALTER TABLE materials ADD COLUMN texture_image_path VARCHAR(500)"))
+                    conn.execute(sa_text("ALTER TABLE materials ADD COLUMN texture_image_path VARCHAR(500)"))
                     conn.commit()
                 print("✓ texture_image_pathカラムを追加しました")
             
             # texture_image_urlカラムが存在しない場合は追加
             if 'texture_image_url' not in existing_columns:
                 with engine.connect() as conn:
-                    conn.execute(text("ALTER TABLE materials ADD COLUMN texture_image_url VARCHAR(1000)"))
+                    conn.execute(sa_text("ALTER TABLE materials ADD COLUMN texture_image_url VARCHAR(1000)"))
                     conn.commit()
                 print("✓ texture_image_urlカラムを追加しました")
         
@@ -683,7 +686,7 @@ def init_db():
             # urlカラムが存在しない場合は追加
             if 'url' not in existing_columns:
                 with engine.connect() as conn:
-                    conn.execute(text("ALTER TABLE images ADD COLUMN url VARCHAR(1000)"))
+                    conn.execute(sa_text("ALTER TABLE images ADD COLUMN url VARCHAR(1000)"))
                     conn.commit()
                 print("✓ images.urlカラムを追加しました")
             
@@ -699,7 +702,7 @@ def init_db():
             # image_urlカラムが存在しない場合は追加
             if 'image_url' not in existing_columns:
                 with engine.connect() as conn:
-                    conn.execute(text("ALTER TABLE use_examples ADD COLUMN image_url VARCHAR(1000)"))
+                    conn.execute(sa_text("ALTER TABLE use_examples ADD COLUMN image_url VARCHAR(1000)"))
                     conn.commit()
                 print("✓ use_examples.image_urlカラムを追加しました")
         
@@ -710,7 +713,7 @@ def init_db():
             # image_urlカラムが存在しない場合は追加
             if 'image_url' not in existing_columns:
                 with engine.connect() as conn:
-                    conn.execute(text("ALTER TABLE process_example_images ADD COLUMN image_url VARCHAR(1000)"))
+                    conn.execute(sa_text("ALTER TABLE process_example_images ADD COLUMN image_url VARCHAR(1000)"))
                     conn.commit()
                 print("✓ process_example_images.image_urlカラムを追加しました")
             
@@ -725,7 +728,7 @@ def init_db():
             # approved_material_idカラムが存在しない場合は追加
             if 'approved_material_id' not in existing_columns:
                 with engine.begin() as conn:
-                    conn.execute(text("ALTER TABLE material_submissions ADD COLUMN approved_material_id INTEGER"))
+                    conn.execute(sa_text("ALTER TABLE material_submissions ADD COLUMN approved_material_id INTEGER"))
                     print("[DB MIGRATION] Added approved_material_id column to material_submissions")
         
     except Exception as e:
@@ -762,13 +765,11 @@ def check_schema_drift(engine) -> dict:
     }
     
     try:
-        from sqlalchemy import text
-        
         # information_schema.columns を使用（pg_catalog より軽量）
         if DB_DIALECT == "postgresql":
             with engine.connect() as conn:
                 # images.kind 列の存在確認（軽量クエリ）
-                query = text("""
+                query = sa_text("""
                     SELECT COUNT(*) as count
                     FROM information_schema.columns
                     WHERE table_schema = 'public'
@@ -784,7 +785,7 @@ def check_schema_drift(engine) -> dict:
         elif DB_DIALECT == "sqlite":
             # SQLite の場合は PRAGMA table_info を使用
             with engine.connect() as conn:
-                query = text("PRAGMA table_info(images)")
+                query = sa_text("PRAGMA table_info(images)")
                 rows = conn.execute(query).fetchall()
                 column_names = [row[1] for row in rows]  # row[1] が column name
                 result["images_kind_exists"] = "kind" in column_names
