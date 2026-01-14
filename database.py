@@ -542,6 +542,85 @@ def init_db():
             # マイグレーション実行
             command.upgrade(alembic_cfg, "head")
             print("[DB INIT] Alembic migration end: SUCCESS")
+            
+            # migration後の"実確認": images.kind が本当に存在するかDBへ直接問い合わせ
+            print("[DB INIT] Verifying images.kind column exists...")
+            try:
+                from sqlalchemy import create_engine
+                verify_engine = create_engine(db_url, pool_pre_ping=True)
+                with verify_engine.connect() as conn:
+                    # Postgres の場合
+                    if DB_DIALECT == "postgresql":
+                        query = sa_text("""
+                            SELECT COUNT(*) FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                              AND table_name = 'images'
+                              AND column_name = 'kind'
+                        """)
+                        row = conn.execute(query).fetchone()
+                        kind_exists = (row[0] > 0) if row else False
+                    # SQLite の場合
+                    else:
+                        query = sa_text("PRAGMA table_info(images)")
+                        rows = conn.execute(query).fetchall()
+                        column_names = [row[1] for row in rows]  # row[1] が column name
+                        kind_exists = "kind" in column_names
+                    
+                    if not kind_exists:
+                        print("[DB INIT] WARNING: images.kind column still missing after migration")
+                        print("[DB INIT] Attempting direct ALTER TABLE as fallback...")
+                        # 最終手段として明示的に1回だけ ALTER TABLE を実行
+                        try:
+                            if DB_DIALECT == "postgresql":
+                                alter_query = sa_text("ALTER TABLE images ADD COLUMN IF NOT EXISTS kind VARCHAR(50)")
+                            else:
+                                alter_query = sa_text("ALTER TABLE images ADD COLUMN kind VARCHAR(50)")
+                            conn.execute(alter_query)
+                            conn.commit()
+                            print("[DB INIT] ALTER TABLE executed successfully")
+                            
+                            # 再度存在確認
+                            if DB_DIALECT == "postgresql":
+                                verify_query = sa_text("""
+                                    SELECT COUNT(*) FROM information_schema.columns
+                                    WHERE table_schema = 'public'
+                                      AND table_name = 'images'
+                                      AND column_name = 'kind'
+                                """)
+                                verify_row = conn.execute(verify_query).fetchone()
+                                kind_exists_after = (verify_row[0] > 0) if verify_row else False
+                            else:
+                                verify_query = sa_text("PRAGMA table_info(images)")
+                                verify_rows = conn.execute(verify_query).fetchall()
+                                verify_column_names = [row[1] for row in verify_rows]
+                                kind_exists_after = "kind" in verify_column_names
+                            
+                            if kind_exists_after:
+                                print("[DB INIT] images.kind column verified: EXISTS")
+                            else:
+                                print("[DB INIT] ERROR: images.kind column still missing after ALTER TABLE")
+                        except Exception as alter_error:
+                            print(f"[DB INIT] ERROR: ALTER TABLE failed: {alter_error}")
+                    else:
+                        print("[DB INIT] images.kind column verified: EXISTS")
+                
+                verify_engine.dispose()
+            except Exception as verify_error:
+                print(f"[DB INIT] WARNING: Column verification failed: {verify_error}")
+            
+            # migration成功後に schema drift 判定のキャッシュを必ず無効化
+            try:
+                # Streamlit が利用可能な場合はキャッシュをクリア
+                if st is not None:
+                    # get_schema_drift_status は @st.cache_data(ttl=60) でデコレートされている
+                    # 循環インポートを避けるため、直接 st.cache_data.clear() を使用
+                    st.cache_data.clear()
+                    print("[DB INIT] Schema drift cache cleared (st.cache_data.clear())")
+            except Exception as cache_error:
+                print(f"[DB INIT] WARNING: Cache clear failed (non-critical): {cache_error}")
+                import traceback
+                traceback.print_exc()
+            
             # Alembicで処理した場合は後続のcreate_allはスキップ（ただし念のため継続）
             # 通常はAlembicが全てのスキーマ変更を管理するため、create_allは不要
             # ただし、既存のSQLite固有のマイグレーションロジックとの互換性のため、Postgresでも一部実行

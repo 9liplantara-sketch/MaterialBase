@@ -1036,7 +1036,9 @@ def save_material(form_data):
                     # 最初のファイルを primary として扱う
                     if len(uploaded_files) > 0:
                         primary_file = uploaded_files[0]
+                        print(f"[R2] Starting upload for material_id={material.id}, file={primary_file.name}")
                         r2_result = upload_uploadedfile(primary_file, material.id, "primary")
+                        print(f"[R2] Upload completed: r2_key={r2_result.get('r2_key')}, public_url={r2_result.get('public_url')}")
                         upsert_image(
                             db=db,
                             material_id=material.id,
@@ -1050,10 +1052,16 @@ def save_material(form_data):
                         db.commit()
                 except Exception as e:
                     # R2 アップロード失敗はログだけ（材料保存は成功させる）
-                    if os.getenv("DEBUG", "0") == "1":
-                        import traceback
-                        print(f"[R2] Upload failed (material_id={material.id}): {e}")
-                        traceback.print_exc()
+                    error_msg = f"R2 upload failed: {e}"
+                    print(f"[MATERIAL] ERROR: {error_msg}")
+                    import traceback
+                    traceback.print_exc()
+                    # Streamlit が利用可能な場合は警告を表示
+                    try:
+                        import streamlit as st
+                        st.warning(f"⚠️ R2 upload failed: {str(e)[:100]}")
+                    except Exception:
+                        pass
         
         # 成功時はdictを返す
         return {
@@ -1112,9 +1120,20 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
         # R2 アップロード処理（フラグチェック）
         import utils.settings as settings
         
-        enable_r2_upload = settings.get_flag("ENABLE_R2_UPLOAD", True)
+        # get_flag が無い場合に備えた二重化
+        flag_fn = getattr(settings, "get_flag", None)
+        if not callable(flag_fn):
+            # フォールバック: os.getenv のみで判定
+            def flag_fn(key, default=False):
+                value = os.getenv(key)
+                if value is None:
+                    return default
+                value_str = str(value).lower().strip()
+                return value_str in ("1", "true", "yes", "y", "on")
+        
+        enable_r2_upload = flag_fn("ENABLE_R2_UPLOAD", True)
         # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES の時は必ず False 扱い（安全）
-        if settings.get_flag("INIT_SAMPLE_DATA", False) or settings.get_flag("SEED_SKIP_IMAGES", False):
+        if flag_fn("INIT_SAMPLE_DATA", False) or flag_fn("SEED_SKIP_IMAGES", False):
             enable_r2_upload = False
         
         if enable_r2_upload and uploaded_files:
@@ -1124,11 +1143,13 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
                 
                 # プレフィックスを決定
                 prefix = f"submissions/{submission_uuid}"
+                print(f"[R2] Starting submission upload: prefix={prefix}, files={len(uploaded_files)}")
                 
                 # 各ファイルをアップロード（最初を primary、2番目を space、3番目を product として扱う）
                 kind_map = ["primary", "space", "product"]
                 for idx, uploaded_file in enumerate(uploaded_files[:3]):  # 最大3ファイル
                     kind = kind_map[idx] if idx < len(kind_map) else "primary"
+                    print(f"[R2] Uploading file {idx+1}/{min(len(uploaded_files), 3)}: {uploaded_file.name}, kind={kind}")
                     r2_result = upload_uploadedfile_to_prefix(uploaded_file, prefix, kind)
                     uploaded_images.append({
                         "kind": kind,
@@ -1138,12 +1159,21 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
                         "mime": r2_result["mime"],
                         "sha256": r2_result["sha256"],
                     })
+                    print(f"[R2] Upload completed: r2_key={r2_result.get('r2_key')}, public_url={r2_result.get('public_url')}")
+                
+                print(f"[R2] Submission upload completed: {len(uploaded_images)} files uploaded")
             except Exception as e:
                 # R2 アップロード失敗はログだけ（投稿保存は成功させる）
-                if os.getenv("DEBUG", "0") == "1":
-                    import traceback
-                    print(f"[R2] Upload failed (submission_uuid={submission_uuid}): {e}")
-                    traceback.print_exc()
+                error_msg = f"R2 upload failed: {e}"
+                print(f"[SUBMISSION] ERROR: {error_msg}")
+                import traceback
+                traceback.print_exc()
+                # Streamlit が利用可能な場合は警告を表示
+                try:
+                    import streamlit as st
+                    st.warning(f"⚠️ R2 upload failed: {str(e)[:100]}")
+                except Exception:
+                    pass
         
         # payload_json に uploaded_images を追加
         if uploaded_images:
