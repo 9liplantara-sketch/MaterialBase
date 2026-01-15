@@ -8,7 +8,16 @@ import json
 import os
 import re
 import inspect
+import logging
 from database import SessionLocal, Material, Property, Image, MaterialMetadata, ReferenceURL, UseExample, MaterialSubmission, init_db
+
+# ロガーを設定（Cloudで確実に追えるように）
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('[%(name)s] %(levelname)s: %(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # 選択肢の定義
@@ -226,111 +235,147 @@ def show_detailed_material_form(material_id: int = None):
     else:
         form_data = {}
     
-    # タブでレイヤー①とレイヤー②を分ける
-    tab1, tab2 = st.tabs(["📋 レイヤー①：必須情報", "✨ レイヤー②：任意情報"])
-    
-    with tab1:
-        layer1_data = show_layer1_form(existing_material=existing_material)
-        if layer1_data:
-            form_data.update(layer1_data)
-    
-    with tab2:
-        # show_layer2_form のシグネチャを実行時に確認して互換呼び出しに切り替える
-        def _call_layer2(existing_material):
-            """show_layer2_form を実行時にチェックして呼び出す互換性シム"""
-            try:
-                sig = inspect.signature(show_layer2_form)
-                params = sig.parameters
-                
-                if "existing_material" in params:
-                    # existing_material パラメータが存在する場合
-                    return show_layer2_form(existing_material=existing_material)
-                else:
-                    # existing_material パラメータが存在しない場合（古い実装）
-                    if os.getenv("DEBUG", "0") == "1":
-                        st.warning("⚠️ show_layer2_form が existing_material パラメータを受け取りません（古い実装）")
-                        st.json({
-                            "show_layer2_form.module": getattr(show_layer2_form, "__module__", None),
-                            "show_layer2_form.file": inspect.getsourcefile(show_layer2_form),
-                            "show_layer2_form.signature": str(sig),
-                            "has_existing_material": False,
-                            "parameters": list(params.keys()),
-                        })
-                    return show_layer2_form()
-            except TypeError as e:
-                # 念のため最終フォールバック（古い関数でも落ちない）
-                if os.getenv("DEBUG", "0") == "1":
-                    try:
-                        sig = inspect.signature(show_layer2_form)
-                        params = sig.parameters
-                        st.error(f"⚠️ Layer2呼び出しでTypeError: {e}")
-                        st.json({
-                            "show_layer2_form.module": getattr(show_layer2_form, "__module__", None),
-                            "show_layer2_form.file": inspect.getsourcefile(show_layer2_form),
-                            "show_layer2_form.signature": str(sig),
-                            "has_existing_material": "existing_material" in params,
-                            "parameters": list(params.keys()),
-                            "error": str(e),
-                        })
-                    except Exception as diag_error:
-                        st.error(f"⚠️ Layer2呼び出しでTypeError: {e}（診断情報の取得も失敗: {diag_error}）")
-                # フォールバック: existing_material なしで呼び出す
-                try:
-                    return show_layer2_form()
-                except Exception as fallback_error:
-                    # それでも失敗する場合は空のdictを返す（クラッシュを防ぐ）
-                    if os.getenv("DEBUG", "0") == "1":
-                        st.error(f"⚠️ show_layer2_form() の呼び出しに失敗しました: {fallback_error}")
-                    return {}
-            except Exception as e:
-                # その他の予期しない例外
-                if os.getenv("DEBUG", "0") == "1":
-                    st.error(f"⚠️ show_layer2_form の呼び出しで予期しないエラー: {e}")
-                    import traceback
-                    st.code(traceback.format_exc(), language="python")
-                return {}
+    # フォーム全体を st.form で囲む（画像アップロードを確実に保持）
+    with st.form("material_form", clear_on_submit=False):
+        # タブでレイヤー①とレイヤー②を分ける
+        tab1, tab2 = st.tabs(["📋 レイヤー①：必須情報", "✨ レイヤー②：任意情報"])
         
-        layer2_data = _call_layer2(existing_material)
-        if layer2_data:
-            form_data.update(layer2_data)
-    
-    # 掲載可否の設定
-    st.markdown("---")
-    st.markdown("### 📢 掲載設定")
-    # 編集モードの場合は既存値を初期値に
-    default_published_index = 0
-    if existing_material:
-        default_published_index = 0 if getattr(existing_material, 'is_published', 1) == 1 else 1
-    is_published = st.radio(
-        "掲載:",
-        ["公開", "非公開"],
-        index=default_published_index,  # デフォルトは公開（編集時は既存値）
-        horizontal=True,
-        key=f"is_published_{material_id if material_id else 'new'}"
-    )
-    form_data['is_published'] = 1 if is_published == "公開" else 0
-    
-    # 管理者モードかどうかを判定
-    is_admin = os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1"
-    
-    # 投稿者情報（一般ユーザー用、任意）
-    submitted_by = None
-    if not is_admin and not is_edit_mode:
+        with tab1:
+            layer1_data = show_layer1_form(existing_material=existing_material)
+            if layer1_data:
+                form_data.update(layer1_data)
+        
+        with tab2:
+            # show_layer2_form のシグネチャを実行時に確認して互換呼び出しに切り替える
+            def _call_layer2(existing_material):
+                """show_layer2_form を実行時にチェックして呼び出す互換性シム"""
+                try:
+                    sig = inspect.signature(show_layer2_form)
+                    params = sig.parameters
+                    
+                    if "existing_material" in params:
+                        # existing_material パラメータが存在する場合
+                        return show_layer2_form(existing_material=existing_material)
+                    else:
+                        # existing_material パラメータが存在しない場合（古い実装）
+                        if os.getenv("DEBUG", "0") == "1":
+                            st.warning("⚠️ show_layer2_form が existing_material パラメータを受け取りません（古い実装）")
+                            st.json({
+                                "show_layer2_form.module": getattr(show_layer2_form, "__module__", None),
+                                "show_layer2_form.file": inspect.getsourcefile(show_layer2_form),
+                                "show_layer2_form.signature": str(sig),
+                                "has_existing_material": False,
+                                "parameters": list(params.keys()),
+                            })
+                        return show_layer2_form()
+                except TypeError as e:
+                    # 念のため最終フォールバック（古い関数でも落ちない）
+                    if os.getenv("DEBUG", "0") == "1":
+                        try:
+                            sig = inspect.signature(show_layer2_form)
+                            params = sig.parameters
+                            st.error(f"⚠️ Layer2呼び出しでTypeError: {e}")
+                            st.json({
+                                "show_layer2_form.module": getattr(show_layer2_form, "__module__", None),
+                                "show_layer2_form.file": inspect.getsourcefile(show_layer2_form),
+                                "show_layer2_form.signature": str(sig),
+                                "has_existing_material": "existing_material" in params,
+                                "parameters": list(params.keys()),
+                                "error": str(e),
+                            })
+                        except Exception as diag_error:
+                            st.error(f"⚠️ Layer2呼び出しでTypeError: {e}（診断情報の取得も失敗: {diag_error}）")
+                    # フォールバック: existing_material なしで呼び出す
+                    try:
+                        return show_layer2_form()
+                    except Exception as fallback_error:
+                        # それでも失敗する場合は空のdictを返す（クラッシュを防ぐ）
+                        if os.getenv("DEBUG", "0") == "1":
+                            st.error(f"⚠️ show_layer2_form() の呼び出しに失敗しました: {fallback_error}")
+                        return {}
+                except Exception as e:
+                    # その他の予期しない例外
+                    if os.getenv("DEBUG", "0") == "1":
+                        st.error(f"⚠️ show_layer2_form の呼び出しで予期しないエラー: {e}")
+                        import traceback
+                        st.code(traceback.format_exc(), language="python")
+                    return {}
+            
+            layer2_data = _call_layer2(existing_material)
+            if layer2_data:
+                form_data.update(layer2_data)
+        
+        # 掲載可否の設定
         st.markdown("---")
-        st.markdown("### 📝 投稿者情報（任意）")
-        submitted_by = st.text_input(
-            "ニックネーム / メールアドレス（任意）",
-            key=f"submitted_by_{material_id if material_id else 'new'}",
-            help="承認連絡が必要な場合に使用します（任意入力）"
+        st.markdown("### 📢 掲載設定")
+        # 編集モードの場合は既存値を初期値に
+        default_published_index = 0
+        if existing_material:
+            default_published_index = 0 if getattr(existing_material, 'is_published', 1) == 1 else 1
+        is_published = st.radio(
+            "掲載:",
+            ["公開", "非公開"],
+            index=default_published_index,  # デフォルトは公開（編集時は既存値）
+            horizontal=True,
+            key=f"is_published_{material_id if material_id else 'new'}"
         )
-        if submitted_by and submitted_by.strip() == "":
-            submitted_by = None
+        form_data['is_published'] = 1 if is_published == "公開" else 0
+        
+        # 管理者モードかどうかを判定
+        is_admin = os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1"
+        
+        # 投稿者情報（一般ユーザー用、任意）
+        submitted_by = None
+        if not is_admin and not is_edit_mode:
+            st.markdown("---")
+            st.markdown("### 📝 投稿者情報（任意）")
+            submitted_by = st.text_input(
+                "ニックネーム / メールアドレス（任意）",
+                key=f"submitted_by_{material_id if material_id else 'new'}",
+                help="承認連絡が必要な場合に使用します（任意入力）"
+            )
+            if submitted_by and submitted_by.strip() == "":
+                submitted_by = None
+        
+        # フォーム送信ボタン
+        submitted = False
+        if is_edit_mode or is_admin:
+            # 管理者モードまたは編集モード：直接materialsに保存
+            button_text = "✅ 材料を更新" if is_edit_mode else "✅ 材料を登録"
+            submitted = st.form_submit_button(button_text, type="primary", use_container_width=True)
+        else:
+            # 一般ユーザーモード：submissionsに保存
+            submitted = st.form_submit_button("📤 投稿を送信（承認待ち）", type="primary", use_container_width=True)
     
-    # フォーム送信
-    if is_edit_mode or is_admin:
-        # 管理者モードまたは編集モード：直接materialsに保存
-        button_text = "✅ 材料を更新" if is_edit_mode else "✅ 材料を登録"
-        if form_data and st.button(button_text, type="primary", width='stretch'):
+    # submitted 時は、必ず st.session_state から画像を取得（rerunで消えるのを防ぐ）
+    if submitted:
+        # 画像を st.session_state から取得（file_uploader の key を使用）
+        uploaded_files_from_state = st.session_state.get("primary_image", [])
+        if not uploaded_files_from_state:
+            # 複数ファイル対応の key も試す
+            uploaded_files_from_state = st.session_state.get("images", [])
+        
+        # form_data の images を上書き（確実に取得）
+        if uploaded_files_from_state:
+            form_data['images'] = uploaded_files_from_state if isinstance(uploaded_files_from_state, list) else [uploaded_files_from_state]
+        else:
+            form_data['images'] = []
+        
+        # 画像枚数をログ出力
+        image_count = len(form_data.get('images', []))
+        print(f"[MATERIAL FORM] Submitted: image_count={image_count}")
+        if image_count > 0:
+            st.info(f"📸 選択された画像: {image_count} 枚")
+            for idx, img in enumerate(form_data['images']):
+                if hasattr(img, 'name'):
+                    print(f"[MATERIAL FORM] Image {idx+1}: {img.name}")
+        else:
+            st.info("ℹ️ 画像は選択されていません")
+            print("[MATERIAL FORM] No images selected")
+        
+        # フォーム送信処理
+        if is_edit_mode or is_admin:
+            # 管理者モードまたは編集モード：直接materialsに保存
             result = save_material(form_data)
             
             # 防御的にresult.get("ok")で分岐
@@ -482,12 +527,13 @@ def show_layer1_form(existing_material=None):
     
     form_data['reference_urls'] = ref_urls
     
-    # 画像アップロード
+    # 画像アップロード（st.form 内で確実に保持されるように key を設定）
     st.markdown("**1-5 画像（材料/サンプル/用途例）**")
     uploaded_files = st.file_uploader(
         "画像をアップロード（複数可）",
         type=['png', 'jpg', 'jpeg'],
         accept_multiple_files=True,
+        key="primary_image",  # session_state で確実に保持されるように key を設定
         help="ドラッグ&ドロップで複数ファイルをアップロードできます"
     )
     form_data['images'] = uploaded_files
@@ -866,6 +912,105 @@ def show_layer2_form():
     return form_data
 
 
+def handle_primary_image(material_id: int, uploaded_files: list) -> None:
+    """
+    主画像をR2にアップロードし、imagesテーブルへupsertする共通関数
+    
+    Args:
+        material_id: 材料ID（確定済み）
+        uploaded_files: UploadedFile のリスト（空の場合はスキップ）
+    
+    Returns:
+        None（例外時はログとUI警告のみ、材料保存は継続）
+    """
+    if not uploaded_files or len(uploaded_files) == 0:
+        logger.info("[R2] skip: no uploaded file")
+        st.info("ℹ️ 画像が選択されていないため、R2アップロードをスキップします")
+        return
+    
+    # 最初のファイルを primary として扱う
+    primary_file = uploaded_files[0]
+    if primary_file is None:
+        logger.warning("[R2] WARNING: primary_file is None, skipping upload")
+        st.warning("⚠️ 画像ファイルが無効です。R2アップロードをスキップします。")
+        return
+    
+    # R2設定のチェック
+    import utils.settings as settings
+    
+    # get_flag が無い場合に備えた二重化
+    flag_fn = getattr(settings, "get_flag", None)
+    if not callable(flag_fn):
+        # フォールバック: os.getenv のみで判定
+        def flag_fn(key, default=False):
+            value = os.getenv(key)
+            if value is None:
+                return default
+            value_str = str(value).lower().strip()
+            return value_str in ("1", "true", "yes", "y", "on")
+    
+    enable_r2_upload = flag_fn("ENABLE_R2_UPLOAD", True)
+    # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES の時は必ず False 扱い（安全）
+    if flag_fn("INIT_SAMPLE_DATA", False) or flag_fn("SEED_SKIP_IMAGES", False):
+        enable_r2_upload = False
+        logger.info("[R2] skip: INIT_SAMPLE_DATA or SEED_SKIP_IMAGES is True")
+        st.info("ℹ️ サンプルデータ生成中はR2アップロードをスキップします")
+        return
+    
+    if not enable_r2_upload:
+        logger.info("[R2] skip: ENABLE_R2_UPLOAD is False")
+        st.info("ℹ️ R2アップロードが無効化されています")
+        return
+    
+    # R2 アップロード処理
+    try:
+        from utils.r2_storage import upload_uploadedfile, get_r2_client
+        from utils.image_repo import upsert_image
+        
+        # R2設定の確認（Missing keys を理由付きでUIにも出す）
+        try:
+            # get_r2_client を呼んで設定不足を検知
+            _ = get_r2_client()
+        except RuntimeError as r2_config_error:
+            error_msg = str(r2_config_error)
+            logger.warning(f"[R2] Configuration error: {error_msg}")
+            st.warning(f"⚠️ R2設定が不足しています: {error_msg}")
+            return
+        
+        # ファイル名を取得
+        file_name = getattr(primary_file, 'name', 'unknown')
+        logger.info(f"[R2] Upload start: material_id={material_id}, file={file_name}")
+        
+        # R2 にアップロード
+        r2_result = upload_uploadedfile(primary_file, material_id, "primary")
+        
+        logger.info(f"[R2] Upload success: material_id={material_id}, r2_key={r2_result.get('r2_key')}, public_url={r2_result.get('public_url')}")
+        
+        # images テーブルへ upsert
+        db = SessionLocal()
+        try:
+            upsert_image(
+                db=db,
+                material_id=material_id,
+                kind="primary",
+                r2_key=r2_result["r2_key"],
+                public_url=r2_result["public_url"],
+                bytes=r2_result["bytes"],
+                mime=r2_result["mime"],
+                sha256=r2_result["sha256"],
+            )
+            db.commit()
+            logger.info(f"[R2] Image saved to DB: material_id={material_id}, public_url={r2_result['public_url']}")
+            st.success(f"✅ 画像をR2にアップロードしました: {r2_result.get('public_url', 'N/A')}")
+        finally:
+            db.close()
+            
+    except Exception as r2_error:
+        # R2 アップロード失敗はログとUI警告のみ（材料保存は成功させる）
+        logger.exception(f"[R2] Upload failed: material_id={material_id}, error={r2_error}")
+        st.warning(f"⚠️ R2アップロードに失敗しました: {str(r2_error)[:100]}")
+
+
 def save_material(form_data):
     """材料データを保存（upsert対応）"""
     db = SessionLocal()
@@ -1006,62 +1151,30 @@ def save_material(form_data):
         db.commit()
         
         # R2 アップロード処理（material.id 確定後）
+        # submitted 時は st.session_state から確実に取得（rerunで消えるのを防ぐ）
         uploaded_files = form_data.get('images', [])
-        if uploaded_files and material.id:
-            import utils.settings as settings
-            
-            # 画像アップロードはフラグで制御（import 前にチェックして起動安定化）
-            # get_flag が無い場合に備えた二重化
-            flag_fn = getattr(settings, "get_flag", None)
-            if not callable(flag_fn):
-                # フォールバック: os.getenv のみで判定
-                def flag_fn(key, default=False):
-                    value = os.getenv(key)
-                    if value is None:
-                        return default
-                    value_str = str(value).lower().strip()
-                    return value_str in ("1", "true", "yes", "y", "on")
-            
-            enable_r2_upload = flag_fn("ENABLE_R2_UPLOAD", True)
-            # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES の時は必ず False 扱い（安全）
-            if flag_fn("INIT_SAMPLE_DATA", False) or flag_fn("SEED_SKIP_IMAGES", False):
-                enable_r2_upload = False
-            
-            if enable_r2_upload:
-                try:
-                    # R2 関連の import は enable_r2_upload=True の時だけ（起動安定化）
-                    from utils.r2_storage import upload_uploadedfile
-                    from utils.image_repo import upsert_image
-                    
-                    # 最初のファイルを primary として扱う
-                    if len(uploaded_files) > 0:
-                        primary_file = uploaded_files[0]
-                        print(f"[R2] Starting upload for material_id={material.id}, file={primary_file.name}")
-                        r2_result = upload_uploadedfile(primary_file, material.id, "primary")
-                        print(f"[R2] Upload completed: r2_key={r2_result.get('r2_key')}, public_url={r2_result.get('public_url')}")
-                        upsert_image(
-                            db=db,
-                            material_id=material.id,
-                            kind="primary",
-                            r2_key=r2_result["r2_key"],
-                            public_url=r2_result["public_url"],
-                            bytes=r2_result["bytes"],
-                            mime=r2_result["mime"],
-                            sha256=r2_result["sha256"],
-                        )
-                        db.commit()
-                except Exception as e:
-                    # R2 アップロード失敗はログだけ（材料保存は成功させる）
-                    error_msg = f"R2 upload failed: {e}"
-                    print(f"[MATERIAL] ERROR: {error_msg}")
-                    import traceback
-                    traceback.print_exc()
-                    # Streamlit が利用可能な場合は警告を表示
-                    try:
-                        import streamlit as st
-                        st.warning(f"⚠️ R2 upload failed: {str(e)[:100]}")
-                    except Exception:
-                        pass
+        if not uploaded_files:
+            # session_state からも取得を試みる
+            uploaded_files = st.session_state.get("primary_image", [])
+            if not isinstance(uploaded_files, list):
+                uploaded_files = [uploaded_files] if uploaded_files else []
+        
+        # 画像枚数をログ出力
+        image_count = len(uploaded_files) if uploaded_files else 0
+        logger.info(f"[SAVE MATERIAL] image_count={image_count}, material_id={material.id if material else None}")
+        
+        if image_count > 0:
+            st.info(f"📸 保存する画像: {image_count} 枚")
+            for idx, img in enumerate(uploaded_files):
+                if hasattr(img, 'name'):
+                    logger.info(f"[SAVE MATERIAL] Image {idx+1}: {img.name}")
+        else:
+            logger.info("[SAVE MATERIAL] No images to upload - skipping R2 upload")
+            st.info("ℹ️ 画像が選択されていないため、R2アップロードをスキップします")
+        
+        # 共通関数でR2アップロード処理（material.id が確定している場合のみ）
+        if material.id:
+            handle_primary_image(material.id, uploaded_files)
         
         # 成功時はdictを返す
         return {
@@ -1107,6 +1220,25 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
             # 念のため再度除去（_normalize_required で再追加された可能性）
             form_data.pop('images', None)
         
+        # submitted 時は st.session_state から確実に取得（rerunで消えるのを防ぐ）
+        if not uploaded_files:
+            uploaded_files = st.session_state.get("primary_image", [])
+            if not isinstance(uploaded_files, list):
+                uploaded_files = [uploaded_files] if uploaded_files else []
+        
+        # 画像枚数をログ出力
+        image_count = len(uploaded_files) if uploaded_files else 0
+        logger.info(f"[SAVE SUBMISSION] image_count={image_count}, submission_uuid={submission_uuid}")
+        
+        if image_count > 0:
+            st.info(f"📸 保存する画像: {image_count} 枚")
+            for idx, img in enumerate(uploaded_files):
+                if hasattr(img, 'name'):
+                    logger.info(f"[SAVE SUBMISSION] Image {idx+1}: {img.name}")
+        else:
+            logger.info("[SAVE SUBMISSION] No images to upload - skipping R2 upload")
+            st.info("ℹ️ 画像が選択されていないため、R2アップロードをスキップします")
+        
         uploaded_images = []
         
         # 必須フィールドの補完（None/空文字列をデフォルト値で埋める）
@@ -1136,44 +1268,45 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
         if flag_fn("INIT_SAMPLE_DATA", False) or flag_fn("SEED_SKIP_IMAGES", False):
             enable_r2_upload = False
         
-        if enable_r2_upload and uploaded_files:
+        if enable_r2_upload and uploaded_files and len(uploaded_files) > 0:
             try:
                 # R2 関連の import は enable_r2_upload=True の時だけ（起動安定化）
                 from utils.r2_storage import upload_uploadedfile_to_prefix
                 
                 # プレフィックスを決定
                 prefix = f"submissions/{submission_uuid}"
-                print(f"[R2] Starting submission upload: prefix={prefix}, files={len(uploaded_files)}")
+                logger.info(f"[R2] Starting submission upload: prefix={prefix}, files={len(uploaded_files)}")
                 
                 # 各ファイルをアップロード（最初を primary、2番目を space、3番目を product として扱う）
                 kind_map = ["primary", "space", "product"]
                 for idx, uploaded_file in enumerate(uploaded_files[:3]):  # 最大3ファイル
+                    if uploaded_file is None:
+                        logger.warning(f"[R2] uploaded_file[{idx}] is None, skipping")
+                        continue
                     kind = kind_map[idx] if idx < len(kind_map) else "primary"
-                    print(f"[R2] Uploading file {idx+1}/{min(len(uploaded_files), 3)}: {uploaded_file.name}, kind={kind}")
-                    r2_result = upload_uploadedfile_to_prefix(uploaded_file, prefix, kind)
-                    uploaded_images.append({
-                        "kind": kind,
-                        "r2_key": r2_result["r2_key"],
-                        "public_url": r2_result["public_url"],
-                        "bytes": r2_result["bytes"],
-                        "mime": r2_result["mime"],
-                        "sha256": r2_result["sha256"],
-                    })
-                    print(f"[R2] Upload completed: r2_key={r2_result.get('r2_key')}, public_url={r2_result.get('public_url')}")
+                    file_name = getattr(uploaded_file, 'name', 'unknown')
+                    logger.info(f"[R2] Uploading file {idx+1}/{min(len(uploaded_files), 3)}: {file_name}, kind={kind}")
+                    try:
+                        r2_result = upload_uploadedfile_to_prefix(uploaded_file, prefix, kind)
+                        uploaded_images.append({
+                            "kind": kind,
+                            "r2_key": r2_result["r2_key"],
+                            "public_url": r2_result["public_url"],
+                            "bytes": r2_result["bytes"],
+                            "mime": r2_result["mime"],
+                            "sha256": r2_result["sha256"],
+                        })
+                        logger.info(f"[R2] Upload success: r2_key={r2_result.get('r2_key')}, public_url={r2_result.get('public_url')}")
+                    except Exception as r2_error:
+                        logger.exception(f"[R2] Upload failed for file {idx+1}: {r2_error}")
+                        st.warning(f"⚠️ 画像 {idx+1} のR2アップロードに失敗しました: {str(r2_error)[:100]}")
                 
-                print(f"[R2] Submission upload completed: {len(uploaded_images)} files uploaded")
+                logger.info(f"[R2] Submission upload completed: {len(uploaded_images)} files uploaded")
             except Exception as e:
-                # R2 アップロード失敗はログだけ（投稿保存は成功させる）
-                error_msg = f"R2 upload failed: {e}"
-                print(f"[SUBMISSION] ERROR: {error_msg}")
-                import traceback
-                traceback.print_exc()
-                # Streamlit が利用可能な場合は警告を表示
-                try:
-                    import streamlit as st
-                    st.warning(f"⚠️ R2 upload failed: {str(e)[:100]}")
-                except Exception:
-                    pass
+                # R2 アップロード失敗はログとUI警告のみ（投稿保存は成功させる）
+                logger.exception(f"[R2] Submission upload failed: {e}")
+                st.warning(f"⚠️ R2アップロードに失敗しました: {str(e)[:100]}")
+                # R2 アップロード失敗は警告のみ（submission は保存する）
         
         # payload_json に uploaded_images を追加
         if uploaded_images:
