@@ -1778,6 +1778,40 @@ def main():
                     debug_info["utils.r2_storage"]["prefix_callable"] = False
             except Exception as e:
                 debug_info["utils.r2_storage"] = {"error": str(e)}
+            
+            # 実行中ファイルの内容を確認する診断（ファイルプローブ）
+            def _file_probe(path: str, needles: list[str], head_chars: int = 1200):
+                """ファイルの内容を確認する診断関数"""
+                import hashlib
+                try:
+                    with open(path, "rb") as f:
+                        data = f.read()
+                    text = data.decode("utf-8", errors="replace")
+                    return {
+                        "path": path,
+                        "sha256": hashlib.sha256(data).hexdigest()[:12],
+                        "contains": {n: (n in text) for n in needles},
+                        "head": text[:head_chars],
+                    }
+                except Exception as e:
+                    return {"path": path, "error": str(e)}
+            
+            # utils.settings と utils.r2_storage の実行中ファイルをプローブ
+            try:
+                import utils.settings as settings
+                import utils.r2_storage as r2
+                debug_info["runtime_file_probe"] = {
+                    "utils.settings": _file_probe(
+                        getattr(settings, "__file__", ""),
+                        needles=["def get_flag", "SETTINGS_VERSION"]
+                    ),
+                    "utils.r2_storage": _file_probe(
+                        getattr(r2, "__file__", ""),
+                        needles=["def upload_uploadedfile_to_prefix", "R2_STORAGE_VERSION"]
+                    ),
+                }
+            except Exception as e:
+                debug_info["runtime_file_probe"] = {"error": str(e)}
         except Exception as e:
             debug_info["DB_ERROR"] = str(e)
         
