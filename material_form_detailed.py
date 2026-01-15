@@ -20,6 +20,22 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 
+def normalize_uploaded_files(v) -> list:
+    """
+    UploadedFile のリストを正規化（型揺れに強い）
+    
+    Args:
+        v: None, 単一の UploadedFile, または list[UploadedFile]
+    
+    Returns:
+        list[UploadedFile]: name属性を持つもののみを含むリスト
+    """
+    if v is None:
+        return []
+    items = v if isinstance(v, list) else [v]
+    return [x for x in items if x is not None and getattr(x, "name", None) is not None]
+
+
 # 選択肢の定義
 SUPPLIER_TYPES = [
     "企業", "大学/研究機関", "スタートアップ", "個人/アーティスト",
@@ -235,7 +251,25 @@ def show_detailed_material_form(material_id: int = None):
     else:
         form_data = {}
     
-    # フォーム全体を st.form で囲む（画像アップロードを確実に保持）
+    # 画像アップロード（st.form の外に配置して、submit時に値が消えないようにする）
+    PRIMARY_KEY = "primary_image"
+    CACHE_KEY = "primary_image_cached"
+    
+    st.markdown("**1-5 画像（材料/サンプル/用途例）**")
+    uploaded_files = st.file_uploader(
+        "画像をアップロード（複数可）",
+        type=['png', 'jpg', 'jpeg'],
+        accept_multiple_files=True,
+        key=PRIMARY_KEY,
+        help="ドラッグ&ドロップで複数ファイルをアップロードできます"
+    )
+    # session_state にキャッシュ（submit時に値が消えないように）
+    if uploaded_files:
+        st.session_state[CACHE_KEY] = uploaded_files
+    elif CACHE_KEY not in st.session_state:
+        st.session_state[CACHE_KEY] = []
+    
+    # フォーム全体を st.form で囲む
     with st.form("material_form", clear_on_submit=False):
         # タブでレイヤー①とレイヤー②を分ける
         tab1, tab2 = st.tabs(["📋 レイヤー①：必須情報", "✨ レイヤー②：任意情報"])
@@ -411,17 +445,24 @@ def show_detailed_material_form(material_id: int = None):
             form_data.pop('_new_ex_url', None)
             form_data.pop('_new_ex_desc', None)
         
-        # 画像を st.session_state から取得（file_uploader の key を使用）
-        uploaded_files_from_state = st.session_state.get("primary_image", [])
-        if not uploaded_files_from_state:
-            # 複数ファイル対応の key も試す
-            uploaded_files_from_state = st.session_state.get("images", [])
+        # 画像を session_state のキャッシュから取得（submit時に確実に保持される）
+        CACHE_KEY = "primary_image_cached"
+        cached_files = st.session_state.get(CACHE_KEY, [])
+        uploaded_files = normalize_uploaded_files(cached_files)
         
-        # form_data の images を上書き（確実に取得）
-        if uploaded_files_from_state:
-            form_data['images'] = uploaded_files_from_state if isinstance(uploaded_files_from_state, list) else [uploaded_files_from_state]
-        else:
-            form_data['images'] = []
+        # 画像枚数をログ出力
+        cached_image_count = len(uploaded_files)
+        logger.info(f"[MATERIAL FORM] cached_image_count={cached_image_count}")
+        
+        # DEBUG=1 のときは UI にも表示
+        if os.getenv("DEBUG", "0") == "1":
+            st.info(f"📸 キャッシュ画像: {cached_image_count} 枚")
+            for idx, img in enumerate(uploaded_files):
+                if hasattr(img, 'name'):
+                    logger.info(f"[MATERIAL FORM] Cached image {idx+1}: {img.name}")
+        
+        # form_data の images を設定（確実に取得）
+        form_data['images'] = uploaded_files
         
         # 画像枚数をログ出力
         image_count = len(form_data.get('images', []))
@@ -625,17 +666,6 @@ def show_layer1_form(existing_material=None):
     form_data['_new_ref_url'] = new_url.strip() if new_url else ""
     form_data['_new_ref_type'] = new_url_type if new_url else ""
     form_data['_new_ref_desc'] = new_url_desc.strip() if new_url_desc else ""
-    
-    # 画像アップロード（st.form 内で確実に保持されるように key を設定）
-    st.markdown("**1-5 画像（材料/サンプル/用途例）**")
-    uploaded_files = st.file_uploader(
-        "画像をアップロード（複数可）",
-        type=['png', 'jpg', 'jpeg'],
-        accept_multiple_files=True,
-        key="primary_image",  # session_state で確実に保持されるように key を設定
-        help="ドラッグ&ドロップで複数ファイルをアップロードできます"
-    )
-    form_data['images'] = uploaded_files
     
     st.markdown("---")
     st.markdown("### 2. 分類")
@@ -1267,25 +1297,26 @@ def save_material(form_data):
         db.commit()
         
         # R2 アップロード処理（material.id 確定後）
-        # submitted 時は st.session_state から確実に取得（rerunで消えるのを防ぐ）
-        uploaded_files = form_data.get('images', [])
+        # submitted 時は session_state のキャッシュから確実に取得
+        CACHE_KEY = "primary_image_cached"
+        cached_files = st.session_state.get(CACHE_KEY, [])
+        uploaded_files = normalize_uploaded_files(cached_files)
+        
+        # form_data からも取得を試みる（フォールバック）
         if not uploaded_files:
-            # session_state からも取得を試みる
-            uploaded_files = st.session_state.get("primary_image", [])
-            if not isinstance(uploaded_files, list):
-                uploaded_files = [uploaded_files] if uploaded_files else []
+            uploaded_files = normalize_uploaded_files(form_data.get('images', []))
         
         # 画像枚数をログ出力
-        image_count = len(uploaded_files) if uploaded_files else 0
-        logger.info(f"[SAVE MATERIAL] image_count={image_count}, material_id={material.id if material else None}")
+        cached_image_count = len(uploaded_files)
+        logger.info(f"[SAVE MATERIAL] cached_image_count={cached_image_count}, material_id={material.id if material else None}")
         
-        if image_count > 0:
-            st.info(f"📸 保存する画像: {image_count} 枚")
+        if cached_image_count > 0:
+            st.info(f"📸 保存する画像: {cached_image_count} 枚")
             for idx, img in enumerate(uploaded_files):
                 if hasattr(img, 'name'):
                     logger.info(f"[SAVE MATERIAL] Image {idx+1}: {img.name}")
         else:
-            logger.info("[SAVE MATERIAL] No images to upload - skipping R2 upload")
+            logger.info(f"[SAVE MATERIAL] No images to upload (cached_image_count=0)")
             st.info("ℹ️ 画像が選択されていないため、R2アップロードをスキップします")
         
         # 共通関数でR2アップロード処理（material.id が確定している場合のみ）
@@ -1331,28 +1362,27 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
         
         # 画像を form_data から pop（UploadedFile は JSON 化できないため）
         # 防御的に複数回 pop して確実に除去（再発防止）
-        uploaded_files = form_data.pop('images', [])
+        form_data.pop('images', None)
         if 'images' in form_data:
             # 念のため再度除去（_normalize_required で再追加された可能性）
             form_data.pop('images', None)
         
-        # submitted 時は st.session_state から確実に取得（rerunで消えるのを防ぐ）
-        if not uploaded_files:
-            uploaded_files = st.session_state.get("primary_image", [])
-            if not isinstance(uploaded_files, list):
-                uploaded_files = [uploaded_files] if uploaded_files else []
+        # submitted 時は session_state のキャッシュから確実に取得
+        CACHE_KEY = "primary_image_cached"
+        cached_files = st.session_state.get(CACHE_KEY, [])
+        uploaded_files = normalize_uploaded_files(cached_files)
         
         # 画像枚数をログ出力
-        image_count = len(uploaded_files) if uploaded_files else 0
-        logger.info(f"[SAVE SUBMISSION] image_count={image_count}, submission_uuid={submission_uuid}")
+        cached_image_count = len(uploaded_files)
+        logger.info(f"[SAVE SUBMISSION] cached_image_count={cached_image_count}, submission_uuid={submission_uuid}")
         
-        if image_count > 0:
-            st.info(f"📸 保存する画像: {image_count} 枚")
+        if cached_image_count > 0:
+            st.info(f"📸 保存する画像: {cached_image_count} 枚")
             for idx, img in enumerate(uploaded_files):
                 if hasattr(img, 'name'):
                     logger.info(f"[SAVE SUBMISSION] Image {idx+1}: {img.name}")
         else:
-            logger.info("[SAVE SUBMISSION] No images to upload - skipping R2 upload")
+            logger.info(f"[SAVE SUBMISSION] No images to upload (cached_image_count=0)")
             st.info("ℹ️ 画像が選択されていないため、R2アップロードをスキップします")
         
         uploaded_images = []
