@@ -1395,6 +1395,63 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
                 prefix = f"submissions/{submission_uuid}"
                 logger.info(f"[R2] Starting submission upload: prefix={prefix}, files={len(uploaded_files)}")
                 
+                # フォールバック関数（upload_uploadedfile_to_prefix が無い場合）
+                def _fallback_upload_to_prefix(uploaded_file, prefix, kind):
+                    """upload_uploadedfile_to_prefix が無い場合のフォールバック実装"""
+                    import hashlib
+                    
+                    # ファイルデータを読み込む
+                    uploaded_file.seek(0)  # ファイルポインタを先頭に戻す
+                    data = uploaded_file.read()
+                    file_size = len(data)
+                    
+                    # SHA256ハッシュを計算
+                    sha256_hash = hashlib.sha256(data).hexdigest()
+                    
+                    # ファイル名から拡張子を取得
+                    filename = getattr(uploaded_file, "name", "upload")
+                    _, ext = os.path.splitext(filename)
+                    if not ext or ext == ".":
+                        # MIMEタイプから拡張子を推定
+                        mime_type = getattr(uploaded_file, "type", None) or "image/jpeg"
+                        if mime_type == "image/png":
+                            ext = ".png"
+                        elif mime_type == "image/webp":
+                            ext = ".webp"
+                        elif mime_type == "image/gif":
+                            ext = ".gif"
+                        else:
+                            ext = ".jpg"
+                    
+                    # R2 キーを生成
+                    prefix = prefix.rstrip("/")
+                    unique_id = uuid.uuid4().hex[:8]
+                    r2_key = f"{prefix}/{kind}/{unique_id}{ext}"
+                    
+                    # MIMEタイプを取得
+                    content_type = getattr(uploaded_file, "type", None) or "image/jpeg"
+                    
+                    # upload_bytes_to_r2 を呼び出す
+                    r2_storage.upload_bytes_to_r2(key=r2_key, body=data, content_type=content_type)
+                    
+                    # 公開URLを生成（make_public_url が存在するかチェック）
+                    make_url_fn = getattr(r2_storage, "make_public_url", None)
+                    if callable(make_url_fn):
+                        public_url = make_url_fn(r2_key)
+                    else:
+                        # make_public_url が無い場合はエラー
+                        raise RuntimeError("make_public_url is not available in r2_storage module")
+                    
+                    logger.info(f"[R2] Fallback upload completed: r2_key={r2_key}, public_url={public_url}")
+                    
+                    return {
+                        "r2_key": r2_key,
+                        "public_url": public_url,
+                        "bytes": file_size,
+                        "mime": content_type,
+                        "sha256": sha256_hash,
+                    }
+                
                 # 各ファイルをアップロード（最初を primary、2番目を space、3番目を product として扱う）
                 kind_map = ["primary", "space", "product"]
                 for idx, uploaded_file in enumerate(uploaded_files[:3]):  # 最大3ファイル
@@ -1405,7 +1462,15 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
                     file_name = getattr(uploaded_file, 'name', 'unknown')
                     logger.info(f"[R2] Uploading file {idx+1}/{min(len(uploaded_files), 3)}: {file_name}, kind={kind}")
                     try:
-                        r2_result = r2_storage.upload_uploadedfile_to_prefix(uploaded_file, prefix, kind)
+                        # upload_uploadedfile_to_prefix が存在するかチェック
+                        upload_fn = getattr(r2_storage, "upload_uploadedfile_to_prefix", None)
+                        if callable(upload_fn):
+                            logger.info(f"[R2] Using upload_uploadedfile_to_prefix for file {idx+1}")
+                            r2_result = upload_fn(uploaded_file, prefix, kind)
+                        else:
+                            logger.info(f"[R2] Using fallback upload function for file {idx+1} (upload_uploadedfile_to_prefix not available)")
+                            r2_result = _fallback_upload_to_prefix(uploaded_file, prefix, kind)
+                        
                         uploaded_images.append({
                             "kind": kind,
                             "r2_key": r2_result["r2_key"],

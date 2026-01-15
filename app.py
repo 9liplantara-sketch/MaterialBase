@@ -1761,6 +1761,23 @@ def main():
                 debug_info["utils.settings"]["test_get_flag_result"] = test_flag
             except Exception as e:
                 debug_info["utils.settings"] = {"error": str(e)}
+            
+            # utils.r2_storage のデバッグ情報（実行されているモジュールを確定）
+            try:
+                import utils.r2_storage as r2
+                debug_info["utils.r2_storage"] = {
+                    "__file__": str(getattr(r2, "__file__", None)),
+                    "has_upload_uploadedfile_to_prefix": hasattr(r2, "upload_uploadedfile_to_prefix"),
+                    "r2_storage_version": getattr(r2, "R2_STORAGE_VERSION", None),
+                    "dir_contains_prefix": "upload_uploadedfile_to_prefix" in dir(r2),
+                }
+                # upload_uploadedfile_to_prefix が呼べるかテスト（callableチェック）
+                if hasattr(r2, "upload_uploadedfile_to_prefix"):
+                    debug_info["utils.r2_storage"]["prefix_callable"] = callable(getattr(r2, "upload_uploadedfile_to_prefix", None))
+                else:
+                    debug_info["utils.r2_storage"]["prefix_callable"] = False
+            except Exception as e:
+                debug_info["utils.r2_storage"] = {"error": str(e)}
         except Exception as e:
             debug_info["DB_ERROR"] = str(e)
         
