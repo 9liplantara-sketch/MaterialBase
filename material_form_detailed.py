@@ -1079,13 +1079,14 @@ def handle_primary_image(material_id: int, uploaded_files: list) -> None:
     
     # R2 アップロード処理
     try:
-        from utils.r2_storage import upload_uploadedfile, get_r2_client
+        # importを安定化（循環/欠落に強い）
+        import utils.r2_storage as r2_storage
         from utils.image_repo import upsert_image
         
         # R2設定の確認（Missing keys を理由付きでUIにも出す）
         try:
             # get_r2_client を呼んで設定不足を検知
-            _ = get_r2_client()
+            _ = r2_storage.get_r2_client()
         except RuntimeError as r2_config_error:
             error_msg = str(r2_config_error)
             logger.warning(f"[R2] Configuration error: {error_msg}")
@@ -1097,7 +1098,7 @@ def handle_primary_image(material_id: int, uploaded_files: list) -> None:
         logger.info(f"[R2] Upload start: material_id={material_id}, file={file_name}")
         
         # R2 にアップロード
-        r2_result = upload_uploadedfile(primary_file, material_id, "primary")
+        r2_result = r2_storage.upload_uploadedfile(primary_file, material_id, "primary")
         
         logger.info(f"[R2] Upload success: material_id={material_id}, r2_key={r2_result.get('r2_key')}, public_url={r2_result.get('public_url')}")
         
@@ -1387,8 +1388,8 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
         
         if enable_r2_upload and uploaded_files and len(uploaded_files) > 0:
             try:
-                # R2 関連の import は enable_r2_upload=True の時だけ（起動安定化）
-                from utils.r2_storage import upload_uploadedfile_to_prefix
+                # R2 関連の import を安定化（循環/欠落に強い）
+                import utils.r2_storage as r2_storage
                 
                 # プレフィックスを決定
                 prefix = f"submissions/{submission_uuid}"
@@ -1404,7 +1405,7 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
                     file_name = getattr(uploaded_file, 'name', 'unknown')
                     logger.info(f"[R2] Uploading file {idx+1}/{min(len(uploaded_files), 3)}: {file_name}, kind={kind}")
                     try:
-                        r2_result = upload_uploadedfile_to_prefix(uploaded_file, prefix, kind)
+                        r2_result = r2_storage.upload_uploadedfile_to_prefix(uploaded_file, prefix, kind)
                         uploaded_images.append({
                             "kind": kind,
                             "r2_key": r2_result["r2_key"],
