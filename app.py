@@ -84,8 +84,17 @@ from datetime import datetime, timedelta
 from collections import Counter
 import json
 import uuid
+import logging
 
 from database import SessionLocal, Material, Property, Image, MaterialMetadata, ReferenceURL, UseExample, ProcessExampleImage, MaterialSubmission, init_db
+
+# ロガーを設定（Cloudで確実に追えるように）
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('[%(name)s] %(levelname)s: %(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 from material_form_detailed import _normalize_required
 from sqlalchemy.orm import selectinload
 from sqlalchemy import select, func
@@ -3470,10 +3479,12 @@ def show_approval_queue():
                         
                         with col1:
                             if st.button("✅ 承認", key=f"approve_{submission.id}", type="primary"):
-                                result = approve_submission(submission.id, editor_note=submission.editor_note, db=db)
+                                result = approve_submission(submission.id, editor_note=submission.editor_note, db=None)
                                 if result.get("ok"):
                                     st.success("✅ 承認しました！（非公開状態で保存されました）")
                                     st.info("💡 承認後、材料一覧で公開トグルをONにしてください。")
+                                    if result.get("image_warning"):
+                                        st.warning(f"⚠️ {result['image_warning']}")
                                     st.cache_data.clear()  # キャッシュをクリア
                                     st.rerun()
                                 else:
@@ -3528,25 +3539,35 @@ def show_approval_queue():
 
 def approve_submission(submission_id: int, editor_note: str = None, db=None):
     """
-    投稿を承認してmaterialsテーブルに反映
+    投稿を承認してmaterialsテーブルに反映（トランザクション分離版）
     
     Args:
         submission_id: MaterialSubmissionのID
         editor_note: 承認メモ（任意）
-        db: データベースセッション（Noneの場合は新規作成）
+        db: データベースセッション（Noneの場合は新規作成、使用しない）
     
     Returns:
         dict: {"ok": True/False, "material_id": int, "error": str, "traceback": str}
+    
+    Note:
+        トランザクションを3つに分離:
+        - Tx1: materials反映（commit）
+        - Tx2: images upsert（失敗しても rollback、全体は落とさない）
+        - Tx3: submissions更新（commit）
     """
-    if db is None:
-        db = SessionLocal()
-        should_close = True
-    else:
-        should_close = False
+    import traceback as tb
+    
+    # セッションは都度生成（使い回さない）
+    db_tx1 = SessionLocal()
+    db_tx2 = SessionLocal()
+    db_tx3 = SessionLocal()
+    
+    material_id = None
+    image_upsert_error = None
     
     try:
-        # submissionを取得
-        submission = db.query(MaterialSubmission).filter(
+        # ===== Tx1: submission取得とpayloadパース =====
+        submission = db_tx1.query(MaterialSubmission).filter(
             MaterialSubmission.id == submission_id
         ).first()
         
@@ -3560,191 +3581,227 @@ def approve_submission(submission_id: int, editor_note: str = None, db=None):
         try:
             form_data = json.loads(submission.payload_json)
         except json.JSONDecodeError as e:
+            logger.exception(f"[APPROVE] Failed to parse payload_json: {e}")
             return {"ok": False, "error": f"Failed to parse payload_json: {e}"}
         
         # 必須フィールドの補完
         form_data = _normalize_required(form_data, existing=None)
         
         # payload をサニタイズ：Material カラムだけに絞る（relationship キーを除去）
-        # Material.__table__.columns の名前だけを許可し、それ以外は捨てる
         allowed_columns = {c.name for c in Material.__table__.columns}
-        # relationship キーも明示的に除外（安全のため）
         relationship_keys = {"images", "uploaded_images", "reference_urls", "use_examples", "properties", "metadata_items", "process_example_images"}
         payload_for_material = {
             k: v for k, v in form_data.items()
             if k in allowed_columns and k not in relationship_keys and v is not None
         }
         
-        # 既存の「images」キー互換を完全無視（ログ出力だけ）
-        if "images" in form_data:
-            if os.getenv("DEBUG", "0") == "1":
-                print(f"[APPROVE] WARNING: payload contains 'images' key (ignored): {type(form_data['images'])}")
-        
-        # materialsテーブルにupsert（name_officialで既存チェック）
-        existing_material = db.query(Material).filter(
-            Material.name_official == payload_for_material.get('name_official')
-        ).first()
-        
-        if existing_material:
-            # 既存レコードを更新
-            material = existing_material
-            action = 'updated'
-        else:
-            # 新規レコードを作成
-            material_uuid = str(uuid.uuid4())
-            material = Material(uuid=material_uuid)
-            db.add(material)
-            action = 'created'
-        
-        # Material カラムのみを設定（relationship は除外済み）
-        for k, v in payload_for_material.items():
-            setattr(material, k, v)
-        
-        # 承認時は削除されていない状態にする（公開は後でトグルON）
-        material.is_published = 0  # 承認後、編集者が確認してから公開
-        material.is_deleted = 0
-        
-        # Materialデータを設定（新規の場合）
-        if action == 'created':
-            material.name_official = form_data['name_official']
-            material.name_aliases = json.dumps(form_data.get('name_aliases', []), ensure_ascii=False)
-            material.supplier_org = form_data['supplier_org']
-            material.supplier_type = form_data['supplier_type']
-            material.supplier_other = form_data.get('supplier_other')
-            material.category_main = form_data['category_main']
-            material.category_other = form_data.get('category_other')
-            material.material_forms = json.dumps(form_data['material_forms'], ensure_ascii=False)
-            material.material_forms_other = form_data.get('material_forms_other')
-            material.origin_type = form_data['origin_type']
-            material.origin_other = form_data.get('origin_other')
-            material.origin_detail = form_data['origin_detail']
-            material.recycle_bio_rate = form_data.get('recycle_bio_rate')
-            material.recycle_bio_basis = form_data.get('recycle_bio_basis')
-            material.color_tags = json.dumps(form_data.get('color_tags', []), ensure_ascii=False)
-            material.transparency = form_data['transparency']
-            material.hardness_qualitative = form_data['hardness_qualitative']
-            material.hardness_value = form_data.get('hardness_value')
-            material.weight_qualitative = form_data['weight_qualitative']
-            material.specific_gravity = form_data.get('specific_gravity')
-            material.water_resistance = form_data['water_resistance']
-            material.heat_resistance_temp = form_data.get('heat_resistance_temp')
-            material.heat_resistance_range = form_data['heat_resistance_range']
-            material.weather_resistance = form_data['weather_resistance']
-            material.processing_methods = json.dumps(form_data['processing_methods'], ensure_ascii=False)
-            material.processing_other = form_data.get('processing_other')
-            material.equipment_level = form_data['equipment_level']
-            material.prototyping_difficulty = form_data['prototyping_difficulty']
-            material.use_categories = json.dumps(form_data['use_categories'], ensure_ascii=False)
-            material.use_other = form_data.get('use_other')
-            material.procurement_status = form_data['procurement_status']
-            material.cost_level = form_data['cost_level']
-            material.cost_value = form_data.get('cost_value')
-            material.cost_unit = form_data.get('cost_unit')
-            material.safety_tags = json.dumps(form_data['safety_tags'], ensure_ascii=False)
-            material.safety_other = form_data.get('safety_other')
-            material.restrictions = form_data.get('restrictions')
-            material.visibility = form_data['visibility']
-            material.is_published = 0  # 承認後、編集者が確認してから公開
+        # ===== Tx1: materialsテーブルにupsert（commit） =====
+        try:
+            existing_material = db_tx1.query(Material).filter(
+                Material.name_official == payload_for_material.get('name_official')
+            ).first()
+            
+            if existing_material:
+                material = existing_material
+                action = 'updated'
+            else:
+                material_uuid = str(uuid.uuid4())
+                material = Material(uuid=material_uuid)
+                db_tx1.add(material)
+                action = 'created'
+            
+            # Material カラムのみを設定
+            for k, v in payload_for_material.items():
+                setattr(material, k, v)
+            
+            material.is_published = 0
             material.is_deleted = 0
-            # レイヤー②
-            material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
-            material.development_motive_other = form_data.get('development_motive_other')
-            material.development_background_short = form_data.get('development_background_short')
-            material.development_story = form_data.get('development_story')
-            material.tactile_tags = json.dumps(form_data.get('tactile_tags', []), ensure_ascii=False)
-            material.tactile_other = form_data.get('tactile_other')
-            material.visual_tags = json.dumps(form_data.get('visual_tags', []), ensure_ascii=False)
-            material.visual_other = form_data.get('visual_other')
-            material.sound_smell = form_data.get('sound_smell')
-            material.circularity = form_data.get('circularity')
-            material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
-            material.certifications_other = form_data.get('certifications_other')
-            material.main_elements = form_data.get('main_elements')
-            # 後方互換性
-            material.name = form_data['name_official']
-            material.category = form_data['category_main']
+            
+            # Materialデータを設定（新規の場合）
+            if action == 'created':
+                material.name_official = form_data['name_official']
+                material.name_aliases = json.dumps(form_data.get('name_aliases', []), ensure_ascii=False)
+                material.supplier_org = form_data['supplier_org']
+                material.supplier_type = form_data['supplier_type']
+                material.supplier_other = form_data.get('supplier_other')
+                material.category_main = form_data['category_main']
+                material.category_other = form_data.get('category_other')
+                material.material_forms = json.dumps(form_data['material_forms'], ensure_ascii=False)
+                material.material_forms_other = form_data.get('material_forms_other')
+                material.origin_type = form_data['origin_type']
+                material.origin_other = form_data.get('origin_other')
+                material.origin_detail = form_data['origin_detail']
+                material.recycle_bio_rate = form_data.get('recycle_bio_rate')
+                material.recycle_bio_basis = form_data.get('recycle_bio_basis')
+                material.color_tags = json.dumps(form_data.get('color_tags', []), ensure_ascii=False)
+                material.transparency = form_data['transparency']
+                material.hardness_qualitative = form_data['hardness_qualitative']
+                material.hardness_value = form_data.get('hardness_value')
+                material.weight_qualitative = form_data['weight_qualitative']
+                material.specific_gravity = form_data.get('specific_gravity')
+                material.water_resistance = form_data['water_resistance']
+                material.heat_resistance_temp = form_data.get('heat_resistance_temp')
+                material.heat_resistance_range = form_data['heat_resistance_range']
+                material.weather_resistance = form_data['weather_resistance']
+                material.processing_methods = json.dumps(form_data['processing_methods'], ensure_ascii=False)
+                material.processing_other = form_data.get('processing_other')
+                material.equipment_level = form_data['equipment_level']
+                material.prototyping_difficulty = form_data['prototyping_difficulty']
+                material.use_categories = json.dumps(form_data['use_categories'], ensure_ascii=False)
+                material.use_other = form_data.get('use_other')
+                material.procurement_status = form_data['procurement_status']
+                material.cost_level = form_data['cost_level']
+                material.cost_value = form_data.get('cost_value')
+                material.cost_unit = form_data.get('cost_unit')
+                material.safety_tags = json.dumps(form_data['safety_tags'], ensure_ascii=False)
+                material.safety_other = form_data.get('safety_other')
+                material.restrictions = form_data.get('restrictions')
+                material.visibility = form_data['visibility']
+                material.is_published = 0
+                material.is_deleted = 0
+                material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
+                material.development_motive_other = form_data.get('development_motive_other')
+                material.development_background_short = form_data.get('development_background_short')
+                material.development_story = form_data.get('development_story')
+                material.tactile_tags = json.dumps(form_data.get('tactile_tags', []), ensure_ascii=False)
+                material.tactile_other = form_data.get('tactile_other')
+                material.visual_tags = json.dumps(form_data.get('visual_tags', []), ensure_ascii=False)
+                material.visual_other = form_data.get('visual_other')
+                material.sound_smell = form_data.get('sound_smell')
+                material.circularity = form_data.get('circularity')
+                material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
+                material.certifications_other = form_data.get('certifications_other')
+                material.main_elements = form_data.get('main_elements')
+                material.name = form_data['name_official']
+                material.category = form_data['category_main']
+            
+            db_tx1.flush()
+            
+            # 参照URL保存
+            if action == 'updated':
+                db_tx1.query(ReferenceURL).filter(ReferenceURL.material_id == material.id).delete()
+            for ref in form_data.get('reference_urls', []):
+                if ref.get('url'):
+                    ref_url = ReferenceURL(
+                        material_id=material.id,
+                        url=ref['url'],
+                        url_type=ref.get('type'),
+                        description=ref.get('desc')
+                    )
+                    db_tx1.add(ref_url)
+            
+            # 使用例保存
+            if action == 'updated':
+                db_tx1.query(UseExample).filter(UseExample.material_id == material.id).delete()
+            for ex in form_data.get('use_examples', []):
+                if ex.get('name'):
+                    use_ex = UseExample(
+                        material_id=material.id,
+                        example_name=ex['name'],
+                        example_url=ex.get('url'),
+                        description=ex.get('desc')
+                    )
+                    db_tx1.add(use_ex)
+            
+            db_tx1.flush()
+            material_id = material.id
+            db_tx1.commit()
+            logger.info(f"[APPROVE] Tx1 success: material_id={material_id}, action={action}")
+            
+        except Exception as e:
+            db_tx1.rollback()
+            logger.exception(f"[APPROVE] Tx1 failed (materials upsert): {e}")
+            return {
+                "ok": False,
+                "error": f"Failed to create/update material: {e}",
+                "traceback": tb.format_exc(),
+            }
+        finally:
+            db_tx1.close()
         
-        db.flush()
-        
-        # 参照URL保存
-        if action == 'updated':
-            db.query(ReferenceURL).filter(ReferenceURL.material_id == material.id).delete()
-        for ref in form_data.get('reference_urls', []):
-            if ref.get('url'):
-                ref_url = ReferenceURL(
-                    material_id=material.id,
-                    url=ref['url'],
-                    url_type=ref.get('type'),
-                    description=ref.get('desc')
-                )
-                db.add(ref_url)
-        
-        # 使用例保存
-        if action == 'updated':
-            db.query(UseExample).filter(UseExample.material_id == material.id).delete()
-        for ex in form_data.get('use_examples', []):
-            if ex.get('name'):
-                use_ex = UseExample(
-                    material_id=material.id,
-                    example_name=ex['name'],
-                    example_url=ex.get('url'),
-                    description=ex.get('desc')
-                )
-                db.add(use_ex)
-        
-        # material.id を確実にするため、flush を実行
-        db.flush()
-        
-        # 画像情報を materials/images に反映（submission の uploaded_images のみを使用）
+        # ===== Tx2: images upsert（失敗しても rollback、全体は落とさない） =====
         uploaded_images = form_data.get('uploaded_images', [])
-        if uploaded_images:
+        if uploaded_images and material_id:
             try:
                 from utils.image_repo import upsert_image
                 
                 for img_info in uploaded_images:
                     kind = img_info.get('kind', 'primary')
+                    # Phase1: bytes列には書かない（BYTEA型の可能性があるため）
+                    # ファイルサイズを保存したい場合は size_bytes(BIGINT)列を新設予定
+                    
                     upsert_image(
-                        db=db,
-                        material_id=material.id,
+                        db=db_tx2,
+                        material_id=material_id,
                         kind=kind,
                         r2_key=img_info.get('r2_key'),
                         public_url=img_info.get('public_url'),
-                        bytes=img_info.get('bytes'),
+                        bytes=None,  # Phase1: bytes列には書かない（常にNone）
                         mime=img_info.get('mime'),
                         sha256=img_info.get('sha256'),
                     )
+                
+                db_tx2.commit()
+                logger.info(f"[APPROVE] Tx2 success: images upserted for material_id={material_id}")
+                
             except Exception as e:
-                # 画像反映失敗はログだけ（承認は成功させる）
-                if os.getenv("DEBUG", "0") == "1":
-                    import traceback
-                    print(f"[APPROVE] Image upsert failed (material_id={material.id}): {e}")
-                    traceback.print_exc()
+                db_tx2.rollback()
+                image_upsert_error = str(e)
+                logger.exception(f"[APPROVE] Tx2 failed (images upsert): {e}")
+                # 画像保存失敗は警告のみ（承認は成功させる）
+            finally:
+                db_tx2.close()
         
-        # submissionを更新
-        submission.status = "approved"
-        submission.approved_material_id = material.id
-        if editor_note and editor_note.strip():
-            submission.editor_note = editor_note.strip()
+        # ===== Tx3: submissionを更新（commit） =====
+        try:
+            # submissionを再取得（Tx1とは別セッション）
+            submission_tx3 = db_tx3.query(MaterialSubmission).filter(
+                MaterialSubmission.id == submission_id
+            ).first()
+            
+            if not submission_tx3:
+                logger.error(f"[APPROVE] Submission {submission_id} not found in Tx3")
+                return {"ok": False, "error": "Submission not found in Tx3"}
+            
+            submission_tx3.status = "approved"
+            submission_tx3.approved_material_id = material_id
+            if editor_note and editor_note.strip():
+                submission_tx3.editor_note = editor_note.strip()
+            
+            db_tx3.commit()
+            logger.info(f"[APPROVE] Tx3 success: submission_id={submission_id}, approved_material_id={material_id}")
+            
+        except Exception as e:
+            db_tx3.rollback()
+            logger.exception(f"[APPROVE] Tx3 failed (submission update): {e}")
+            return {
+                "ok": False,
+                "error": f"Failed to update submission: {e}",
+                "traceback": tb.format_exc(),
+            }
+        finally:
+            db_tx3.close()
         
-        db.commit()
-        
-        return {
+        # 成功（画像保存失敗があっても承認は成功）
+        result = {
             "ok": True,
-            "material_id": material.id,
+            "material_id": material_id,
             "action": action,
+            "uuid": material.uuid if 'material' in locals() else None,
         }
         
+        if image_upsert_error:
+            result["image_warning"] = f"画像保存に失敗しましたが、承認は完了しました: {image_upsert_error}"
+        
+        return result
+        
     except Exception as e:
-        db.rollback()
-        import traceback
+        logger.exception(f"[APPROVE] Unexpected error: {e}")
         return {
             "ok": False,
             "error": str(e),
-            "traceback": traceback.format_exc(),
+            "traceback": tb.format_exc(),
         }
-    finally:
-        if should_close:
-            db.close()
 
 
 def calculate_submission_diff(existing_material: Material, payload: dict) -> dict:

@@ -31,7 +31,7 @@ def upsert_image(
         kind: 画像種別（primary/space/product）（必須）
         r2_key: R2 内のキー（パス）
         public_url: R2 公開URL（優先）
-        bytes: ファイルサイズ（バイト）
+        bytes: ファイルサイズ（バイト）（Phase1: 使用しない、常にNone）
         mime: MIMEタイプ
         sha256: SHA256ハッシュ
         file_path: ローカルパス（後方互換）
@@ -43,6 +43,10 @@ def upsert_image(
     
     Raises:
         ValueError: material_id が None の場合
+    
+    Note:
+        Phase1: bytes列には書かない（BYTEA型の可能性があるため）
+        ファイルサイズを保存したい場合は size_bytes(BIGINT)列を新設予定
     """
     # material_id が None の時は絶対にINSERTしない（即return）
     if not material_id:
@@ -60,8 +64,9 @@ def upsert_image(
             existing.r2_key = r2_key
         if public_url is not None:
             existing.public_url = public_url
-        if bytes is not None:
-            existing.bytes = bytes
+        # Phase1: bytes列には書かない（BYTEA型の可能性があるため）
+        # if bytes is not None:
+        #     existing.bytes = bytes
         if mime is not None:
             existing.mime = mime
         if sha256 is not None:
@@ -83,7 +88,7 @@ def upsert_image(
             kind=kind,
             r2_key=r2_key,
             public_url=public_url,
-            bytes=bytes,
+            bytes=None,  # Phase1: bytes列には書かない（常にNone）
             mime=mime,
             sha256=sha256,
             file_path=file_path,

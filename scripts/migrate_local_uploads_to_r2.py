@@ -187,7 +187,7 @@ def migrate_uploads_to_r2(
                                 kind=kind,
                                 r2_key=r2_result["r2_key"],
                                 public_url=r2_result["public_url"],
-                                bytes=r2_result["bytes"],
+                                bytes=None,  # Phase1: bytes列には書かない（BYTEA型の可能性があるため）
                                 mime=r2_result["mime"],
                                 sha256=r2_result["sha256"],
                             )
@@ -230,7 +230,7 @@ def migrate_uploads_to_r2(
                                 kind=kind,
                                 r2_key=r2_result["r2_key"],
                                 public_url=r2_result["public_url"],
-                                bytes=r2_result["bytes"],
+                                bytes=None,  # Phase1: bytes列には書かない（BYTEA型の可能性があるため）
                                 mime=r2_result["mime"],
                                 sha256=r2_result["sha256"],
                             )
