@@ -3587,99 +3587,96 @@ def approve_submission(submission_id: int, editor_note: str = None, db=None):
         # 必須フィールドの補完
         form_data = _normalize_required(form_data, existing=None)
         
-        # payload をサニタイズ：Material カラムだけに絞る（relationship キーを除去）
+        # payload をサニタイズ：Material カラムだけに絞る（relationship キーとシステム列を除去）
         allowed_columns = {c.name for c in Material.__table__.columns}
         relationship_keys = {"images", "uploaded_images", "reference_urls", "use_examples", "properties", "metadata_items", "process_example_images"}
+        # システム列を明示的に除外（id混入を防ぐ）
+        system_keys = {"id", "created_at", "updated_at", "deleted_at", "uuid"}
         payload_for_material = {
             k: v for k, v in form_data.items()
-            if k in allowed_columns and k not in relationship_keys and v is not None
+            if k in allowed_columns 
+            and k not in relationship_keys 
+            and k not in system_keys
+            and v is not None
         }
         
-        # ===== Tx1: materialsテーブルにupsert（commit） =====
+        # ===== Tx1: materialsテーブルに新規作成（commit） =====
         try:
-            existing_material = db_tx1.query(Material).filter(
-                Material.name_official == payload_for_material.get('name_official')
-            ).first()
+            # 承認時は原則「新規作成」（既存更新は行わない）
+            material_uuid = str(uuid.uuid4())
+            material = Material(uuid=material_uuid)
+            db_tx1.add(material)
+            action = 'created'
             
-            if existing_material:
-                material = existing_material
-                action = 'updated'
-            else:
-                material_uuid = str(uuid.uuid4())
-                material = Material(uuid=material_uuid)
-                db_tx1.add(material)
-                action = 'created'
-            
-            # Material カラムのみを設定
+            # Material カラムのみを設定（システム列は除外済み）
             for k, v in payload_for_material.items():
-                setattr(material, k, v)
+                # 念のため再度システム列チェック（二重防御）
+                if k not in system_keys:
+                    setattr(material, k, v)
             
             material.is_published = 0
             material.is_deleted = 0
             
-            # Materialデータを設定（新規の場合）
-            if action == 'created':
-                material.name_official = form_data['name_official']
-                material.name_aliases = json.dumps(form_data.get('name_aliases', []), ensure_ascii=False)
-                material.supplier_org = form_data['supplier_org']
-                material.supplier_type = form_data['supplier_type']
-                material.supplier_other = form_data.get('supplier_other')
-                material.category_main = form_data['category_main']
-                material.category_other = form_data.get('category_other')
-                material.material_forms = json.dumps(form_data['material_forms'], ensure_ascii=False)
-                material.material_forms_other = form_data.get('material_forms_other')
-                material.origin_type = form_data['origin_type']
-                material.origin_other = form_data.get('origin_other')
-                material.origin_detail = form_data['origin_detail']
-                material.recycle_bio_rate = form_data.get('recycle_bio_rate')
-                material.recycle_bio_basis = form_data.get('recycle_bio_basis')
-                material.color_tags = json.dumps(form_data.get('color_tags', []), ensure_ascii=False)
-                material.transparency = form_data['transparency']
-                material.hardness_qualitative = form_data['hardness_qualitative']
-                material.hardness_value = form_data.get('hardness_value')
-                material.weight_qualitative = form_data['weight_qualitative']
-                material.specific_gravity = form_data.get('specific_gravity')
-                material.water_resistance = form_data['water_resistance']
-                material.heat_resistance_temp = form_data.get('heat_resistance_temp')
-                material.heat_resistance_range = form_data['heat_resistance_range']
-                material.weather_resistance = form_data['weather_resistance']
-                material.processing_methods = json.dumps(form_data['processing_methods'], ensure_ascii=False)
-                material.processing_other = form_data.get('processing_other')
-                material.equipment_level = form_data['equipment_level']
-                material.prototyping_difficulty = form_data['prototyping_difficulty']
-                material.use_categories = json.dumps(form_data['use_categories'], ensure_ascii=False)
-                material.use_other = form_data.get('use_other')
-                material.procurement_status = form_data['procurement_status']
-                material.cost_level = form_data['cost_level']
-                material.cost_value = form_data.get('cost_value')
-                material.cost_unit = form_data.get('cost_unit')
-                material.safety_tags = json.dumps(form_data['safety_tags'], ensure_ascii=False)
-                material.safety_other = form_data.get('safety_other')
-                material.restrictions = form_data.get('restrictions')
-                material.visibility = form_data['visibility']
-                material.is_published = 0
-                material.is_deleted = 0
-                material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
-                material.development_motive_other = form_data.get('development_motive_other')
-                material.development_background_short = form_data.get('development_background_short')
-                material.development_story = form_data.get('development_story')
-                material.tactile_tags = json.dumps(form_data.get('tactile_tags', []), ensure_ascii=False)
-                material.tactile_other = form_data.get('tactile_other')
-                material.visual_tags = json.dumps(form_data.get('visual_tags', []), ensure_ascii=False)
-                material.visual_other = form_data.get('visual_other')
-                material.sound_smell = form_data.get('sound_smell')
-                material.circularity = form_data.get('circularity')
-                material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
-                material.certifications_other = form_data.get('certifications_other')
-                material.main_elements = form_data.get('main_elements')
-                material.name = form_data['name_official']
-                material.category = form_data['category_main']
+            # Materialデータを設定（新規作成時）
+            material.name_official = form_data['name_official']
+            material.name_aliases = json.dumps(form_data.get('name_aliases', []), ensure_ascii=False)
+            material.supplier_org = form_data['supplier_org']
+            material.supplier_type = form_data['supplier_type']
+            material.supplier_other = form_data.get('supplier_other')
+            material.category_main = form_data['category_main']
+            material.category_other = form_data.get('category_other')
+            material.material_forms = json.dumps(form_data['material_forms'], ensure_ascii=False)
+            material.material_forms_other = form_data.get('material_forms_other')
+            material.origin_type = form_data['origin_type']
+            material.origin_other = form_data.get('origin_other')
+            material.origin_detail = form_data['origin_detail']
+            material.recycle_bio_rate = form_data.get('recycle_bio_rate')
+            material.recycle_bio_basis = form_data.get('recycle_bio_basis')
+            material.color_tags = json.dumps(form_data.get('color_tags', []), ensure_ascii=False)
+            material.transparency = form_data['transparency']
+            material.hardness_qualitative = form_data['hardness_qualitative']
+            material.hardness_value = form_data.get('hardness_value')
+            material.weight_qualitative = form_data['weight_qualitative']
+            material.specific_gravity = form_data.get('specific_gravity')
+            material.water_resistance = form_data['water_resistance']
+            material.heat_resistance_temp = form_data.get('heat_resistance_temp')
+            material.heat_resistance_range = form_data['heat_resistance_range']
+            material.weather_resistance = form_data['weather_resistance']
+            material.processing_methods = json.dumps(form_data['processing_methods'], ensure_ascii=False)
+            material.processing_other = form_data.get('processing_other')
+            material.equipment_level = form_data['equipment_level']
+            material.prototyping_difficulty = form_data['prototyping_difficulty']
+            material.use_categories = json.dumps(form_data['use_categories'], ensure_ascii=False)
+            material.use_other = form_data.get('use_other')
+            material.procurement_status = form_data['procurement_status']
+            material.cost_level = form_data['cost_level']
+            material.cost_value = form_data.get('cost_value')
+            material.cost_unit = form_data.get('cost_unit')
+            material.safety_tags = json.dumps(form_data['safety_tags'], ensure_ascii=False)
+            material.safety_other = form_data.get('safety_other')
+            material.restrictions = form_data.get('restrictions')
+            material.visibility = form_data['visibility']
+            material.is_published = 0
+            material.is_deleted = 0
+            material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
+            material.development_motive_other = form_data.get('development_motive_other')
+            material.development_background_short = form_data.get('development_background_short')
+            material.development_story = form_data.get('development_story')
+            material.tactile_tags = json.dumps(form_data.get('tactile_tags', []), ensure_ascii=False)
+            material.tactile_other = form_data.get('tactile_other')
+            material.visual_tags = json.dumps(form_data.get('visual_tags', []), ensure_ascii=False)
+            material.visual_other = form_data.get('visual_other')
+            material.sound_smell = form_data.get('sound_smell')
+            material.circularity = form_data.get('circularity')
+            material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
+            material.certifications_other = form_data.get('certifications_other')
+            material.main_elements = form_data.get('main_elements')
+            material.name = form_data['name_official']
+            material.category = form_data['category_main']
             
             db_tx1.flush()
             
-            # 参照URL保存
-            if action == 'updated':
-                db_tx1.query(ReferenceURL).filter(ReferenceURL.material_id == material.id).delete()
+            # 参照URL保存（新規作成時は削除不要）
             for ref in form_data.get('reference_urls', []):
                 if ref.get('url'):
                     ref_url = ReferenceURL(
@@ -3690,9 +3687,7 @@ def approve_submission(submission_id: int, editor_note: str = None, db=None):
                     )
                     db_tx1.add(ref_url)
             
-            # 使用例保存
-            if action == 'updated':
-                db_tx1.query(UseExample).filter(UseExample.material_id == material.id).delete()
+            # 使用例保存（新規作成時は削除不要）
             for ex in form_data.get('use_examples', []):
                 if ex.get('name'):
                     use_ex = UseExample(
@@ -3703,10 +3698,14 @@ def approve_submission(submission_id: int, editor_note: str = None, db=None):
                     )
                     db_tx1.add(use_ex)
             
+            # material.id を確定（flush してから取得）
             db_tx1.flush()
             material_id = material.id
+            if not material_id:
+                raise ValueError("material.id is None after flush")
+            
             db_tx1.commit()
-            logger.info(f"[APPROVE] Tx1 success: material_id={material_id}, action={action}")
+            logger.info(f"[APPROVE] Tx1 success: material_id={material_id}, action={action}, uuid={material.uuid}")
             
         except Exception as e:
             db_tx1.rollback()
@@ -3764,6 +3763,10 @@ def approve_submission(submission_id: int, editor_note: str = None, db=None):
                 return {"ok": False, "error": "Submission not found in Tx3"}
             
             submission_tx3.status = "approved"
+            # approved_material_id を Tx1 で確定した material_id に設定（確実に設定）
+            if not material_id:
+                logger.error(f"[APPROVE] material_id is None in Tx3, cannot set approved_material_id")
+                return {"ok": False, "error": "material_id is None in Tx3"}
             submission_tx3.approved_material_id = material_id
             if editor_note and editor_note.strip():
                 submission_tx3.editor_note = editor_note.strip()
@@ -3783,11 +3786,20 @@ def approve_submission(submission_id: int, editor_note: str = None, db=None):
             db_tx3.close()
         
         # 成功（画像保存失敗があっても承認は成功）
+        # material_id は Tx1 で確定した値を使用（関数ローカル変数）
+        if not material_id:
+            logger.error(f"[APPROVE] material_id is None after Tx1")
+            return {
+                "ok": False,
+                "error": "material_id is None after material creation",
+                "traceback": tb.format_exc(),
+            }
+        
         result = {
             "ok": True,
-            "material_id": material_id,
+            "material_id": material_id,  # Tx1 で確定した material.id
             "action": action,
-            "uuid": material.uuid if 'material' in locals() else None,
+            "uuid": material_uuid if 'material_uuid' in locals() else None,
         }
         
         if image_upsert_error:
