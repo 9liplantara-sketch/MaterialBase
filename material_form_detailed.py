@@ -349,6 +349,68 @@ def show_detailed_material_form(material_id: int = None):
     
     # submitted 時は、必ず st.session_state から画像を取得（rerunで消えるのを防ぐ）
     if submitted:
+        # 通称の削除/追加処理（submitted 時に実行）
+        if '_alias_del_flags' in form_data:
+            # 削除フラグが True のものを除外
+            aliases_filtered = []
+            for i, alias in enumerate(form_data.get('name_aliases', [])):
+                if not form_data['_alias_del_flags'].get(i, False):
+                    aliases_filtered.append(alias)
+            form_data['name_aliases'] = aliases_filtered
+            
+            # 新しい通称を追加（重複チェック）
+            new_alias = form_data.get('_new_alias', '').strip()
+            if new_alias and new_alias not in form_data['name_aliases']:
+                form_data['name_aliases'].append(new_alias)
+            
+            # 一時的なキーを削除
+            form_data.pop('_alias_del_flags', None)
+            form_data.pop('_new_alias', None)
+        
+        # 参照URLの削除/追加処理（同様）
+        if '_ref_del_flags' in form_data:
+            ref_urls_filtered = []
+            for i, ref in enumerate(form_data.get('reference_urls', [])):
+                if not form_data['_ref_del_flags'].get(i, False):
+                    ref_urls_filtered.append(ref)
+            form_data['reference_urls'] = ref_urls_filtered
+            form_data.pop('_ref_del_flags', None)
+        
+        # 使用例の削除/追加処理（同様）
+        if '_ex_del_flags' in form_data:
+            use_examples_filtered = []
+            for i, ex in enumerate(form_data.get('use_examples', [])):
+                if not form_data['_ex_del_flags'].get(i, False):
+                    use_examples_filtered.append(ex)
+            form_data['use_examples'] = use_examples_filtered
+            form_data.pop('_ex_del_flags', None)
+        
+        # 参照URLの追加処理
+        if '_new_ref_url' in form_data and form_data['_new_ref_url']:
+            new_ref = {
+                "url": form_data['_new_ref_url'],
+                "type": form_data.get('_new_ref_type', ''),
+                "desc": form_data.get('_new_ref_desc', '')
+            }
+            if new_ref['url'] not in [r.get('url', '') for r in form_data.get('reference_urls', [])]:
+                form_data['reference_urls'].append(new_ref)
+            form_data.pop('_new_ref_url', None)
+            form_data.pop('_new_ref_type', None)
+            form_data.pop('_new_ref_desc', None)
+        
+        # 使用例の追加処理
+        if '_new_ex_name' in form_data and form_data['_new_ex_name']:
+            new_ex = {
+                "name": form_data['_new_ex_name'],
+                "url": form_data.get('_new_ex_url', ''),
+                "desc": form_data.get('_new_ex_desc', '')
+            }
+            if new_ex['name'] not in [e.get('name', '') for e in form_data.get('use_examples', [])]:
+                form_data['use_examples'].append(new_ex)
+            form_data.pop('_new_ex_name', None)
+            form_data.pop('_new_ex_url', None)
+            form_data.pop('_new_ex_desc', None)
+        
         # 画像を st.session_state から取得（file_uploader の key を使用）
         uploaded_files_from_state = st.session_state.get("primary_image", [])
         if not uploaded_files_from_state:
@@ -363,15 +425,15 @@ def show_detailed_material_form(material_id: int = None):
         
         # 画像枚数をログ出力
         image_count = len(form_data.get('images', []))
-        print(f"[MATERIAL FORM] Submitted: image_count={image_count}")
+        logger.info(f"[MATERIAL FORM] Submitted: image_count={image_count}")
         if image_count > 0:
             st.info(f"📸 選択された画像: {image_count} 枚")
             for idx, img in enumerate(form_data['images']):
                 if hasattr(img, 'name'):
-                    print(f"[MATERIAL FORM] Image {idx+1}: {img.name}")
+                    logger.info(f"[MATERIAL FORM] Image {idx+1}: {img.name}")
         else:
             st.info("ℹ️ 画像は選択されていません")
-            print("[MATERIAL FORM] No images selected")
+            logger.info("[MATERIAL FORM] No images selected")
         
         # フォーム送信処理
         if is_edit_mode or is_admin:
@@ -388,7 +450,7 @@ def show_detailed_material_form(material_id: int = None):
                     # 編集モードの場合は編集完了フラグを設定
                     if is_edit_mode:
                         st.session_state.edit_completed = True
-                        # 編集ページから一覧に戻る
+                        # 編集ページから一覧に戻る（フォーム外なので st.button を使用可能）
                         if st.button("← 一覧に戻る", key="back_after_edit"):
                             st.session_state.edit_material_id = None
                             st.session_state.page = "材料一覧"
@@ -462,11 +524,26 @@ def show_layer1_form(existing_material=None):
         st.markdown("<br>", unsafe_allow_html=True)
         st.caption("材料IDは自動採番されます")
     
-    # 材料名（通称・略称）複数
+    # 材料名（通称・略称）複数（st.form内で完結）
     st.markdown("**1-2 材料名（通称・略称）**")
-    if 'aliases' not in st.session_state:
-        st.session_state.aliases = [""]
     
+    # session_state の初期化（初回のみ）
+    if 'aliases' not in st.session_state:
+        if existing_material:
+            # 編集モード：既存値を初期化
+            existing_aliases = getattr(existing_material, 'name_aliases', None)
+            if existing_aliases:
+                try:
+                    import json
+                    st.session_state.aliases = json.loads(existing_aliases) if isinstance(existing_aliases, str) else existing_aliases
+                except:
+                    st.session_state.aliases = [""]
+            else:
+                st.session_state.aliases = [""]
+        else:
+            st.session_state.aliases = [""]
+    
+    # 既存の通称を表示（削除チェックボックス付き）
     aliases = []
     for i, alias in enumerate(st.session_state.aliases):
         col1, col2 = st.columns([5, 1])
@@ -475,15 +552,20 @@ def show_layer1_form(existing_material=None):
             if alias_val:
                 aliases.append(alias_val)
         with col2:
-            if st.button("削除", key=f"del_alias_{i}"):
-                st.session_state.aliases.pop(i)
-                st.rerun()
+            # 削除チェックボックス（フォーム内で使用可能）
+            del_flag = st.checkbox("削除", key=f"del_alias_{i}", help="チェックして保存すると削除されます")
+            if del_flag:
+                # チェックされたものは除外（送信時に処理）
+                pass
     
-    if st.button("➕ 通称を追加"):
-        st.session_state.aliases.append("")
-        st.rerun()
+    # 追加する通称の入力
+    new_alias = st.text_input("➕ 追加する通称（入力して保存すると追加されます）", key="new_alias", placeholder="新しい通称を入力")
     
+    # 送信時に処理（ここでは form_data に反映するだけ）
+    # 実際の削除/追加処理は submitted 時に実行
     form_data['name_aliases'] = [a for a in aliases if a]
+    form_data['_alias_del_flags'] = {i: st.session_state.get(f"del_alias_{i}", False) for i in range(len(st.session_state.aliases))}
+    form_data['_new_alias'] = new_alias.strip() if new_alias else ""
     
     # 供給元・開発主体
     st.markdown("**1-3 供給元・開発主体***")
@@ -501,10 +583,19 @@ def show_layer1_form(existing_material=None):
             default_supplier_other = getattr(existing_material, 'supplier_other', '') if existing_material else ''
             form_data['supplier_other'] = st.text_input("その他（詳細）", value=default_supplier_other, key=f"supplier_other_{existing_material.id if existing_material else 'new'}")
     
-    # 参照URL（複数）
+    # 参照URL（複数）（st.form内で完結）
     st.markdown("**1-4 参照URL（公式/製品/論文/プレス等）**")
+    
+    # session_state の初期化（初回のみ）
     if 'ref_urls' not in st.session_state:
-        st.session_state.ref_urls = [{"url": "", "type": "", "desc": ""}]
+        if existing_material and existing_material.reference_urls:
+            # 編集モード：既存値を初期化
+            st.session_state.ref_urls = [
+                {"url": ref.url, "type": ref.url_type or "", "desc": ref.description or ""}
+                for ref in existing_material.reference_urls
+            ]
+        else:
+            st.session_state.ref_urls = [{"url": "", "type": "", "desc": ""}]
     
     ref_urls = []
     for i, ref in enumerate(st.session_state.ref_urls):
@@ -513,19 +604,27 @@ def show_layer1_form(existing_material=None):
             with col1:
                 url_val = st.text_input("URL", value=ref['url'], key=f"ref_url_{i}")
             with col2:
-                url_type = st.selectbox("種別", ["公式", "製品", "論文", "プレス", "その他"], key=f"ref_type_{i}")
+                url_type = st.selectbox("種別", ["公式", "製品", "論文", "プレス", "その他"], 
+                                       index=["公式", "製品", "論文", "プレス", "その他"].index(ref.get('type', '公式')) if ref.get('type') in ["公式", "製品", "論文", "プレス", "その他"] else 0,
+                                       key=f"ref_type_{i}")
             desc = st.text_input("メモ", value=ref.get('desc', ''), key=f"ref_desc_{i}")
             if url_val:
                 ref_urls.append({"url": url_val, "type": url_type, "desc": desc})
-            if st.button("削除", key=f"del_ref_{i}"):
-                st.session_state.ref_urls.pop(i)
-                st.rerun()
+            # 削除チェックボックス（フォーム内で使用可能）
+            del_flag = st.checkbox("削除", key=f"del_ref_{i}", help="チェックして保存すると削除されます")
     
-    if st.button("➕ URLを追加"):
-        st.session_state.ref_urls.append({"url": "", "type": "", "desc": ""})
-        st.rerun()
+    # 追加するURLの入力
+    st.markdown("**➕ 新しいURLを追加**")
+    new_url = st.text_input("URL", key="new_ref_url", placeholder="新しいURLを入力")
+    new_url_type = st.selectbox("種別", ["公式", "製品", "論文", "プレス", "その他"], key="new_ref_type")
+    new_url_desc = st.text_input("メモ", key="new_ref_desc", placeholder="メモ（任意）")
     
+    # 送信時に処理（ここでは form_data に反映するだけ）
     form_data['reference_urls'] = ref_urls
+    form_data['_ref_del_flags'] = {i: st.session_state.get(f"del_ref_{i}", False) for i in range(len(st.session_state.ref_urls))}
+    form_data['_new_ref_url'] = new_url.strip() if new_url else ""
+    form_data['_new_ref_type'] = new_url_type if new_url else ""
+    form_data['_new_ref_desc'] = new_url_desc.strip() if new_url_desc else ""
     
     # 画像アップロード（st.form 内で確実に保持されるように key を設定）
     st.markdown("**1-5 画像（材料/サンプル/用途例）**")
@@ -703,10 +802,19 @@ def show_layer1_form(existing_material=None):
     if "その他（自由記述）" in form_data['use_categories']:
         form_data['use_other'] = st.text_input("その他（詳細）", key="use_other")
     
-    # 代表的使用例（複数）
+    # 代表的使用例（複数）（st.form内で完結）
     st.markdown("**6-2 代表的使用例**")
+    
+    # session_state の初期化（初回のみ）
     if 'use_examples' not in st.session_state:
-        st.session_state.use_examples = [{"name": "", "url": "", "desc": ""}]
+        if existing_material and existing_material.use_examples:
+            # 編集モード：既存値を初期化
+            st.session_state.use_examples = [
+                {"name": ex.example_name, "url": ex.example_url or "", "desc": ex.description or ""}
+                for ex in existing_material.use_examples
+            ]
+        else:
+            st.session_state.use_examples = [{"name": "", "url": "", "desc": ""}]
     
     use_examples = []
     for i, ex in enumerate(st.session_state.use_examples):
@@ -716,15 +824,21 @@ def show_layer1_form(existing_material=None):
             desc = st.text_area("説明", value=ex.get('desc', ''), key=f"ex_desc_{i}")
             if name:
                 use_examples.append({"name": name, "url": url, "desc": desc})
-            if st.button("削除", key=f"del_ex_{i}"):
-                st.session_state.use_examples.pop(i)
-                st.rerun()
+            # 削除チェックボックス（フォーム内で使用可能）
+            del_flag = st.checkbox("削除", key=f"del_ex_{i}", help="チェックして保存すると削除されます")
     
-    if st.button("➕ 使用例を追加"):
-        st.session_state.use_examples.append({"name": "", "url": "", "desc": ""})
-        st.rerun()
+    # 追加する使用例の入力
+    st.markdown("**➕ 新しい使用例を追加**")
+    new_ex_name = st.text_input("製品名/事例名", key="new_ex_name", placeholder="新しい使用例名を入力")
+    new_ex_url = st.text_input("リンク", key="new_ex_url", placeholder="リンク（任意）")
+    new_ex_desc = st.text_area("説明", key="new_ex_desc", placeholder="説明（任意）")
     
+    # 送信時に処理（ここでは form_data に反映するだけ）
     form_data['use_examples'] = use_examples
+    form_data['_ex_del_flags'] = {i: st.session_state.get(f"del_ex_{i}", False) for i in range(len(st.session_state.use_examples))}
+    form_data['_new_ex_name'] = new_ex_name.strip() if new_ex_name else ""
+    form_data['_new_ex_url'] = new_ex_url.strip() if new_ex_url else ""
+    form_data['_new_ex_desc'] = new_ex_desc.strip() if new_ex_desc else ""
     
     form_data['procurement_status'] = st.selectbox(
         "6-3 調達性（入手しやすさ）*",
