@@ -104,7 +104,36 @@ def get_material_image_ref(
         except Exception as e:
             debug_info["base_dir_error"] = str(e)
     
-    # A. DBの明示URL（http/httpsのみ）
+    # A. DBの images テーブルから public_url を取得（最優先）
+    material_id = getattr(material, 'id', None)
+    if material_id:
+        try:
+            from database import SessionLocal, Image
+            db = SessionLocal()
+            try:
+                db_image = db.query(Image).filter(
+                    Image.material_id == material_id,
+                    Image.kind == kind
+                ).first()
+                if db_image and db_image.public_url:
+                    url = db_image.public_url
+                    if url and url.startswith(('http://', 'https://')):
+                        debug_info["candidate_urls"].append(url)
+                        separator = "&" if "?" in url else "?"
+                        image_version = os.getenv("IMAGE_VERSION") or APP_VERSION or "dev"
+                        url_with_cache = f"{url}{separator}v={image_version}"
+                        debug_info["chosen_branch"] = "db_images_public_url"
+                        debug_info["image_version_value"] = image_version
+                        debug_info["final_src_type"] = "url"
+                        debug_info["final_url"] = url_with_cache
+                        return url_with_cache, debug_info
+            finally:
+                db.close()
+        except Exception as e:
+            if os.getenv("DEBUG", "0") == "1":
+                debug_info["db_query_error"] = str(e)
+    
+    # B. 既存のDB URL（texture_image_url / use_examples.image_url）をチェック（後方互換）
     url = None
     
     if kind == "primary":
@@ -126,13 +155,13 @@ def get_material_image_ref(
         separator = "&" if "?" in url else "?"
         image_version = os.getenv("IMAGE_VERSION") or APP_VERSION or "dev"
         url_with_cache = f"{url}{separator}v={image_version}"
-        debug_info["chosen_branch"] = "db_url"
+        debug_info["chosen_branch"] = "db_url_legacy"
         debug_info["image_version_value"] = image_version
         debug_info["final_src_type"] = "url"
         debug_info["final_url"] = url_with_cache
         return url_with_cache, debug_info
     
-    # B. IMAGE_BASE_URL が設定されていれば規約URLを組み立てて採用
+    # C. IMAGE_BASE_URL が設定されていれば規約URLを組み立てて採用
     image_base_url = os.getenv("IMAGE_BASE_URL")
     if image_base_url and relative_path:
         base_url_clean = image_base_url.rstrip('/')
@@ -147,7 +176,7 @@ def get_material_image_ref(
         debug_info["final_url"] = url_with_cache
         return url_with_cache, debug_info
     
-    # C. ローカルファイル fallback（リポジトリ内）
+    # D. ローカルファイル fallback（リポジトリ内）
     if relative_path:
         local_path = project_root / "static" / "images" / relative_path
         
@@ -173,7 +202,7 @@ def get_material_image_ref(
                 "is_file": local_path.is_file() if local_path.exists() else False
             })
     
-    # D. 旧互換 fallback（日本語ディレクトリ）※ただし C が無い場合のみ
+    # E. 旧互換 fallback（日本語ディレクトリ）※ただし D が無い場合のみ
     if base_dir.exists():
         # material.name_official / material.name / aliases で一致するフォルダを探す
         candidates_raw = []

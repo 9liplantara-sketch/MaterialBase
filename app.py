@@ -91,6 +91,9 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import select, func
 from utils.logo import render_site_header, render_logo_mark, show_logo_debug_info, get_logo_debug_info, get_project_root
 
+# デプロイバージョン（Streamlit Cloudのデプロイ確認用）
+DEPLOY_VERSION = "2026-01-15T15:05:00"
+
 # card_generatorとschemasのimportは削除（起動時クラッシュを避けるため）
 # これらのモジュールは使用する関数内でlazy importする
 
@@ -1730,6 +1733,8 @@ def main():
     # DEBUG判定とデバッグ情報表示
     if is_debug_flag():
         debug_info = {
+            "DEPLOY_VERSION": DEPLOY_VERSION,
+            "APP_FILE": __file__,
             "DEBUG_ENV": os.getenv("DEBUG"),
             "DEBUG_SECRET": None,
             "DB_URL": None,

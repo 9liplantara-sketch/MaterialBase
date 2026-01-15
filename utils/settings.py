@@ -1,73 +1,104 @@
-"""
-設定管理モジュール
-st.secrets / os.environ から設定を読み取る（優先順位付き）
-"""
+# --- settings primitives (must be defined at top; safe against partial imports) ---
+SETTINGS_VERSION = "2026-01-15T14:40:00"
+
 import os
+
+_ST = None
+def _get_st():
+    global _ST
+    if _ST is not None:
+        return _ST
+    try:
+        import streamlit as st
+        _ST = st
+    except Exception:
+        _ST = None
+    return _ST
+
+_TRUE = {"1", "true", "yes", "y", "on"}
+_FALSE = {"0", "false", "no", "n", "off", ""}
+
+def get_flag(key: str, default: bool = False) -> bool:
+    st = _get_st()
+    if st is not None:
+        try:
+            v = st.secrets.get(key, None)
+            if v is not None:
+                if isinstance(v, bool):
+                    return v
+                if isinstance(v, int):
+                    return v != 0
+                s = str(v).strip().lower()
+                if s in _TRUE:
+                    return True
+                if s in _FALSE:
+                    return False
+        except Exception:
+            pass
+
+    v = os.getenv(key)
+    if v is not None:
+        s = str(v).strip().lower()
+        if s in _TRUE:
+            return True
+        if s in _FALSE:
+            return False
+
+    return default
+
+def get_secret_str(key: str, default: str = "") -> str:
+    st = _get_st()
+    if st is not None:
+        try:
+            v = st.secrets.get(key, None)
+            if v is not None:
+                return str(v)
+        except Exception:
+            pass
+    v = os.getenv(key)
+    if v is not None:
+        return str(v)
+    return default
+# --- end primitives ---
+
+"""
+アプリケーション設定の読み取り（Secrets + 環境変数対応）
+循環importに強い最小モジュール（プロジェクト内の他モジュールを一切importしない）
+
+重要: get_flag をファイル最上部で定義し、定義前に落ちないようにする
+"""
 from pathlib import Path
 from typing import Optional
 
 
 def is_cloud() -> bool:
-    """
-    Streamlit Cloud環境かどうかを判定
-    
-    Returns:
-        Cloud環境ならTrue、ローカル環境ならFalse
-    """
-    # Streamlit Cloudの環境変数をチェック
+    """Streamlit Cloud環境かどうかを判定"""
     if os.getenv("STREAMLIT_CLOUD") == "1":
         return True
-    
-    # その他のCloud判定（HOSTNAMEや/mount/srcの存在など）
     if os.getenv("HOSTNAME") and "streamlit" in os.getenv("HOSTNAME", "").lower():
         return True
-    
-    # /mount/src の存在をチェック（Streamlit Cloudの特徴的なパス）
     if Path("/mount/src").exists():
         return True
-    
     return False
 
 
 def get_database_url() -> str:
-    """
-    データベースURLを取得（優先順位付き）
-    
-    優先順位:
-    1. st.secrets["connections"]["materialbase_db"]["url"] （推奨）
-    2. st.secrets["DATABASE_URL"]（簡易）
-    3. os.environ["DATABASE_URL"]（ローカル/CI向け）
-    4. （ローカルのみ）sqlite:///materials.db フォールバック
-    
-    Returns:
-        データベースURL文字列
-    
-    Raises:
-        RuntimeError: Cloud環境でDATABASE_URLが設定されていない場合
-    """
+    """データベースURLを取得（優先順位付き）"""
     # st.secretsから取得を試みる
-    try:
-        import streamlit as st
-        secrets = st.secrets
-        
-        # 推奨: connections.materialbase_db.url
+    st = _get_st()
+    if st is not None:
         try:
-            url = secrets.get("connections", {}).get("materialbase_db", {}).get("url")
+            url = st.secrets.get("connections", {}).get("materialbase_db", {}).get("url")
             if url:
                 return str(url)
         except Exception:
             pass
-        
-        # 簡易: DATABASE_URL
         try:
-            url = secrets.get("DATABASE_URL")
+            url = st.secrets.get("DATABASE_URL")
             if url:
                 return str(url)
         except Exception:
             pass
-    except Exception:
-        # streamlitがimportできない場合（スクリプト実行時など）は無視
-        pass
     
     # os.environから取得
     url = os.getenv("DATABASE_URL")
@@ -78,7 +109,6 @@ def get_database_url() -> str:
     if not is_cloud():
         return "sqlite:///./materials.db"
     
-    # Cloud環境でDATABASE_URLが無い場合は例外
     raise RuntimeError(
         "DATABASE_URL is required on Streamlit Cloud. "
         "Please set it in Streamlit Secrets (connections.materialbase_db.url or DATABASE_URL)."
@@ -86,36 +116,17 @@ def get_database_url() -> str:
 
 
 def get_db_dialect(url: str) -> str:
-    """
-    データベースURLからdialect（postgresql/sqlite）を判定
-    
-    Args:
-        url: データベースURL
-    
-    Returns:
-        'postgresql' または 'sqlite'
-    """
+    """データベースURLからdialect（postgresql/sqlite）を判定"""
     if url.startswith("postgresql://") or url.startswith("postgres://"):
         return "postgresql"
     elif url.startswith("sqlite:///"):
         return "sqlite"
     else:
-        # デフォルトはpostgresqlとみなす
-        return "postgresql"
+        return "postgresql"  # デフォルトはpostgresqlとみなす
 
 
 def mask_db_url(url: str) -> str:
-    """
-    データベースURLをマスク（パスワードを隠す）
-    デバッグ表示用
-    
-    Args:
-        url: データベースURL
-    
-    Returns:
-        パスワードをマスクしたURL
-    """
-    # postgresql://user:password@host:port/dbname
+    """データベースURLをマスク（パスワードを隠す）"""
     if "://" in url and "@" in url:
         parts = url.split("://")
         if len(parts) == 2:
@@ -128,3 +139,17 @@ def mask_db_url(url: str) -> str:
                     masked = f"{scheme}://{user}:***@{host_part}"
                     return masked
     return url
+
+
+
+
+# モジュールの公開APIを明示的に定義
+__all__ = [
+    "is_cloud",
+    "get_database_url",
+    "get_db_dialect",
+    "mask_db_url",
+    "get_secret_str",
+    "get_flag",
+    "SETTINGS_VERSION",
+]

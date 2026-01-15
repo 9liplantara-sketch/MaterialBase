@@ -9,7 +9,7 @@ from database import SessionLocal, Material, Property, Image, MaterialMetadata, 
 from image_generator import ensure_material_image
 from datetime import datetime
 from utils.material_seed import get_or_create_material, get_or_create_property, get_or_create_use_example
-from utils.settings import get_flag
+import utils.settings as settings
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import PendingRollbackError
@@ -101,11 +101,23 @@ def init_sample_data():
     IntegrityErrorが発生してもアプリを落とさない（SAVEPOINT方式で各ブロックを独立管理）
     """
     # フラグを先頭で一度だけ評価（画像処理の完全無効化）
-    SEED_SKIP_IMAGES = get_flag("SEED_SKIP_IMAGES", True)
-    INIT_SAMPLE_DATA_FLAG = get_flag("INIT_SAMPLE_DATA", False)
+    # get_flag が無い場合に備えた二重化
+    flag_fn = getattr(settings, "get_flag", None)
+    if not callable(flag_fn):
+        # フォールバック: os.getenv のみで判定
+        import os
+        def flag_fn(key, default=False):
+            value = os.getenv(key)
+            if value is None:
+                return default
+            value_str = str(value).lower().strip()
+            return value_str in ("1", "true", "yes", "y", "on")
     
-    # ログでフラグ状態を可視化
-    print(f"[SEED] SEED_SKIP_IMAGES={SEED_SKIP_IMAGES} INIT_SAMPLE_DATA={INIT_SAMPLE_DATA_FLAG}")
+    SEED_SKIP_IMAGES = flag_fn("SEED_SKIP_IMAGES", True)
+    INIT_SAMPLE_DATA_FLAG = flag_fn("INIT_SAMPLE_DATA", False)
+    
+    # Cloudでの挙動確認ログ（seed開始直後に必ず出す）
+    print(f"[SEED] INIT_SAMPLE_DATA={flag_fn('INIT_SAMPLE_DATA', False)} SEED_SKIP_IMAGES={flag_fn('SEED_SKIP_IMAGES', False)}")
     
     # データベース初期化
     init_db()

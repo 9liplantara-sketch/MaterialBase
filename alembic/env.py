@@ -59,10 +59,54 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-    db_url = os.getenv("DATABASE_URL")
+    # 優先順位1: config.get_main_option("sqlalchemy.url") を使用（database.py から設定済みの場合）
+    # これが「正」として扱う（DATABASE_URL必須を撤廃）
+    db_url = config.get_main_option("sqlalchemy.url")
+    
+    # 優先順位2: DATABASE_URL 環境変数（フォールバック）
     if not db_url:
-        raise RuntimeError("DATABASE_URL is not set. Export it before running alembic.")
-    config.set_main_option("sqlalchemy.url", db_url)
+        db_url = os.getenv("DATABASE_URL")
+    
+    # 優先順位3: st.secrets から取得を試みる（フォールバック）
+    if not db_url:
+        try:
+            import streamlit as st
+            # connections.materialbase_db.url を優先
+            try:
+                db_url = st.secrets.get("connections", {}).get("materialbase_db", {}).get("url")
+            except Exception:
+                pass
+            # それも無ければ DATABASE_URL を試す
+            if not db_url:
+                try:
+                    db_url = st.secrets.get("DATABASE_URL")
+                except Exception:
+                    pass
+        except Exception:
+            pass  # streamlit が import できない場合は無視
+    
+    # 優先順位4: utils.settings を使用（最後のフォールバック）
+    if not db_url:
+        try:
+            import utils.settings as settings
+            db_url = settings.get_database_url()
+        except Exception:
+            pass
+    
+    # sqlalchemy.url が設定されていない場合のみエラー（DATABASE_URL必須を撤廃）
+    if not db_url:
+        raise RuntimeError(
+            "Database URL is not set. "
+            "Please ensure one of the following:\n"
+            "1. database.py sets sqlalchemy.url via alembic_cfg.set_main_option() (recommended)\n"
+            "2. Set DATABASE_URL environment variable\n"
+            "3. Set in Streamlit Secrets (connections.materialbase_db.url or DATABASE_URL)\n"
+            "4. Use utils.settings.get_database_url() (fallback)"
+        )
+    
+    # config に設定（まだ設定されていない場合のみ）
+    if not config.get_main_option("sqlalchemy.url"):
+        config.set_main_option("sqlalchemy.url", db_url)
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

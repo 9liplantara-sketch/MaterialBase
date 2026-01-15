@@ -23,7 +23,7 @@ sys.path.insert(0, str(project_root))
 from database import SessionLocal, Material, Image, init_db
 from utils.r2_storage import upload_local_file
 from utils.image_repo import upsert_image
-from utils.settings import get_database_url, get_flag
+import utils.settings as settings
 
 
 def find_material_by_name(db, material_name: str) -> Optional[Material]:
@@ -122,11 +122,23 @@ def migrate_uploads_to_r2(
     
     try:
         # フラグチェック
-        if get_flag("INIT_SAMPLE_DATA", False) or get_flag("SEED_SKIP_IMAGES", False):
+        # get_flag が無い場合に備えた二重化
+        flag_fn = getattr(settings, "get_flag", None)
+        if not callable(flag_fn):
+            # フォールバック: os.getenv のみで判定
+            import os
+            def flag_fn(key, default=False):
+                value = os.getenv(key)
+                if value is None:
+                    return default
+                value_str = str(value).lower().strip()
+                return value_str in ("1", "true", "yes", "y", "on")
+        
+        if flag_fn("INIT_SAMPLE_DATA", False) or flag_fn("SEED_SKIP_IMAGES", False):
             print("[WARNING] INIT_SAMPLE_DATA or SEED_SKIP_IMAGES is enabled. R2 upload will be skipped.")
             return stats
         
-        enable_r2_upload = get_flag("ENABLE_R2_UPLOAD", True)
+        enable_r2_upload = flag_fn("ENABLE_R2_UPLOAD", True)
         if not enable_r2_upload:
             print("[WARNING] ENABLE_R2_UPLOAD is False. R2 upload will be skipped.")
             return stats

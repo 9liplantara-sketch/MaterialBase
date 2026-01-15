@@ -113,6 +113,28 @@ alembic upgrade head
 
 ## 運用
 
+### 初回データ投入（サンプルデータ）
+
+Streamlit Cloudで初回起動時にサンプルデータを投入する場合：
+
+**推奨設定（Streamlit Secrets）:**
+```toml
+# サンプルデータの投入を有効化（初回のみ）
+INIT_SAMPLE_DATA = "1"
+
+# 画像生成をスキップ（材料データのみ投入、高速化・エラー回避）
+SEED_SKIP_IMAGES = "1"
+```
+
+**重要:**
+- `INIT_SAMPLE_DATA=1` は**一度だけ使用**してください。確認後は必ず `0` に戻すか削除してください。
+- `SEED_SKIP_IMAGES=1` を推奨します（画像生成でエラーが発生する可能性があるため）。画像は後で手動で追加できます。
+- データ投入後、Cloudログで `[SEED] start` と `[SEED] done` を確認してください。
+
+**トラブルシューティング:**
+- `materials` が 0件のまま → `SEED_SKIP_IMAGES=1` を設定して画像処理をスキップしてください
+- `psycopg.errors.NotNullViolation: null value in column "material_id"` → `SEED_SKIP_IMAGES=1` で解決します
+
 ### スキーマ変更の手順
 
 1. **モデル変更**: `database.py`でモデルを修正
@@ -128,9 +150,20 @@ alembic upgrade head
 
 ### アプリ起動時の自動マイグレーション
 
-デフォルトでは自動マイグレーションはOFFです（安全のため）。
+**重要**: デフォルトでは自動マイグレーションは**OFF**です（安全のため）。
 
-自動マイグレーションを有効にする場合：
+**Cloud環境での推奨設定:**
+```toml
+# Streamlit Secrets
+MIGRATE_ON_START = "0"  # デフォルトOFF（推奨）
+```
+
+**理由:**
+- Cloud環境では `alembic/env.py` が `DATABASE_URL` を要求します
+- `DATABASE_URL` が未設定の場合、起動時にエラーでクラッシュします
+- マイグレーションは「デプロイ前に手動で実行」することを推奨します
+
+**自動マイグレーションを有効にする場合（非推奨）:**
 
 ```bash
 # 環境変数で有効化
@@ -144,7 +177,7 @@ streamlit run app.py
 MIGRATE_ON_START = "1"
 ```
 
-**推奨**: 本番環境では「デプロイ前に手動でマイグレーション」を推奨します。
+**注意**: `MIGRATE_ON_START=1` を設定する場合は、必ず `DATABASE_URL` が正しく設定されていることを確認してください。
 
 ### 既存データの移行（SQLite → Postgres）
 

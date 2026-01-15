@@ -8,6 +8,25 @@ import os
 from pathlib import Path
 from typing import Optional, Tuple
 
+# get_flag を安全に import（ImportError でも落ちないようにする）
+try:
+    import utils.settings as settings
+except Exception:
+    # フォールバック: 安全側に倒す実装（画像処理を止める方向、モジュールとして動作）
+    class _FallbackSettings:
+        @staticmethod
+        def get_flag(key: str, default: bool = False) -> bool:
+            # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES は True を返す（画像処理を止める）
+            if key in ("INIT_SAMPLE_DATA", "SEED_SKIP_IMAGES"):
+                return True
+            # ENABLE_IMAGE_DB_WRITE は False を返す（DB書き込みを止める）
+            if key == "ENABLE_IMAGE_DB_WRITE":
+                return False
+            # その他は default を返す
+            return default
+    
+    settings = _FallbackSettings()
+
 
 def generate_wood_texture(name, color_base=(139, 90, 43), size=(800, 600)):
     """木材テクスチャを生成"""
@@ -175,11 +194,25 @@ def ensure_material_image(material_name, category, material_id, db):
     """
     from database import Image as ImageModel
     from utils.image_health import normalize_image_path, resolve_image_path, check_image_health
-    from utils.settings import get_flag
     
     # DB書き込み許可フラグ（デフォルト False = Cloud/seedでは絶対書かない）
-    if not get_flag("ENABLE_IMAGE_DB_WRITE", False):
-        print(f"[IMAGE] skip DB write: ENABLE_IMAGE_DB_WRITE is not enabled (material: {material_name})")
+    # SEED_SKIP_IMAGES または INIT_SAMPLE_DATA が True の場合もスキップ
+    # get_flag が無い場合に備えた二重化
+    flag_fn = getattr(settings, "get_flag", None)
+    if not callable(flag_fn):
+        # フォールバック: os.getenv のみで判定
+        import os
+        def flag_fn(key, default=False):
+            value = os.getenv(key)
+            if value is None:
+                return default
+            value_str = str(value).lower().strip()
+            return value_str in ("1", "true", "yes", "y", "on")
+    
+    if (flag_fn("SEED_SKIP_IMAGES", False) or 
+        flag_fn("INIT_SAMPLE_DATA", False) or 
+        not flag_fn("ENABLE_IMAGE_DB_WRITE", False)):
+        print(f"[IMAGE] skip DB write: flags disabled (material: {material_name})")
         return None
     
     # material_id が None の場合は即 return（ログだけ）
