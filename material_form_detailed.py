@@ -1064,10 +1064,11 @@ def handle_primary_image(material_id: int, uploaded_files: list) -> None:
             return value_str in ("1", "true", "yes", "y", "on")
     
     enable_r2_upload = flag_fn("ENABLE_R2_UPLOAD", True)
-    # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES の時は必ず False 扱い（安全）
-    if flag_fn("INIT_SAMPLE_DATA", False) or flag_fn("SEED_SKIP_IMAGES", False):
+    # INIT_SAMPLE_DATA の時は必ず False 扱い（seed中はR2アップロードしない）
+    # 注意: SEED_SKIP_IMAGES は seed処理（init_sample_data.py等）のみで使用し、通常登録では参照しない
+    if flag_fn("INIT_SAMPLE_DATA", False):
         enable_r2_upload = False
-        logger.info("[R2] skip: INIT_SAMPLE_DATA or SEED_SKIP_IMAGES is True")
+        logger.info("[R2] skip: INIT_SAMPLE_DATA=True (seed mode)")
         st.info("ℹ️ サンプルデータ生成中はR2アップロードをスキップします")
         return
     
@@ -1378,9 +1379,11 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
                 return value_str in ("1", "true", "yes", "y", "on")
         
         enable_r2_upload = flag_fn("ENABLE_R2_UPLOAD", True)
-        # INIT_SAMPLE_DATA / SEED_SKIP_IMAGES の時は必ず False 扱い（安全）
-        if flag_fn("INIT_SAMPLE_DATA", False) or flag_fn("SEED_SKIP_IMAGES", False):
+        # INIT_SAMPLE_DATA の時は必ず False 扱い（seed中はR2アップロードしない）
+        # 注意: SEED_SKIP_IMAGES は seed処理（init_sample_data.py等）のみで使用し、通常登録では参照しない
+        if flag_fn("INIT_SAMPLE_DATA", False):
             enable_r2_upload = False
+            logger.info("[R2] skip: INIT_SAMPLE_DATA=True (seed mode)")
         
         if enable_r2_upload and uploaded_files and len(uploaded_files) > 0:
             try:
