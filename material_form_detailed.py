@@ -251,6 +251,38 @@ def show_detailed_material_form(material_id: int = None):
     else:
         form_data = {}
     
+    # 材料名（正式）を st.form の外に配置して、submit時に値が消えないようにする
+    NAME_KEY = "name_official_input"
+    NAME_CACHE = "name_official_cached"
+    
+    st.markdown("### 1. 基本識別情報")
+    col1, col2 = st.columns(2)
+    with col1:
+        # default_name は分岐OK（input自体は分岐させない）
+        default_name = ""
+        if existing_material:
+            default_name = (getattr(existing_material, "name_official", "") or "").strip()
+        else:
+            default_name = (st.session_state.get(NAME_CACHE, "") or "").strip()
+        
+        # ★ text_input は必ず毎回呼ぶ
+        name_val = st.text_input(
+            "1-1 材料名（正式）*",
+            value=default_name,
+            key=NAME_KEY,
+            help="材料の正式名称を入力してください",
+        )
+        
+        # ★ 空でキャッシュを上書きしない
+        if name_val and name_val.strip():
+            st.session_state[NAME_CACHE] = name_val.strip()
+        elif NAME_CACHE not in st.session_state:
+            st.session_state[NAME_CACHE] = ""
+    
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.caption("材料IDは自動採番されます")
+    
     # 画像アップロード（st.form の外に配置して、submit時に値が消えないようにする）
     PRIMARY_KEY = "primary_image"
     CACHE_KEY = "primary_image_cached"
@@ -277,6 +309,9 @@ def show_detailed_material_form(material_id: int = None):
         with tab1:
             layer1_data = show_layer1_form(existing_material=existing_material)
             if layer1_data:
+                # name_official/name が混ざるなら除去して上書きを防ぐ
+                layer1_data.pop("name_official", None)
+                layer1_data.pop("name", None)
                 form_data.update(layer1_data)
         
         with tab2:
@@ -337,6 +372,9 @@ def show_detailed_material_form(material_id: int = None):
             
             layer2_data = _call_layer2(existing_material)
             if layer2_data:
+                # name_official/name が混ざるなら除去して上書きを防ぐ
+                layer2_data.pop("name_official", None)
+                layer2_data.pop("name", None)
                 form_data.update(layer2_data)
         
         # 掲載可否の設定
@@ -445,6 +483,22 @@ def show_detailed_material_form(material_id: int = None):
             form_data.pop('_new_ex_url', None)
             form_data.pop('_new_ex_desc', None)
         
+        # name_official を session_state のキャッシュから取得（submit時に確実に保持される）
+        NAME_CACHE = "name_official_cached"
+        name_official = st.session_state.get(NAME_CACHE, "").strip()
+        name_official_raw = st.session_state.get("name_official_input", "")
+        
+        # ログ出力（送信時の値を確認）
+        logger.info(f"[FORM] name_official_cached='{name_official}'")
+        logger.info(f"[FORM] name_official_raw='{name_official_raw}'")
+        
+        # DEBUG=1 のときは UI にも表示
+        if os.getenv("DEBUG", "0") == "1":
+            st.info(f"🧾 材料名（送信値）: {name_official or '(EMPTY)'}")
+        
+        # form_data の name_official を設定（確実に取得）
+        form_data['name_official'] = name_official
+        
         # 画像を session_state のキャッシュから取得（submit時に確実に保持される）
         CACHE_KEY = "primary_image_cached"
         cached_files = st.session_state.get(CACHE_KEY, [])
@@ -476,6 +530,18 @@ def show_detailed_material_form(material_id: int = None):
             st.info("ℹ️ 画像は選択されていません")
             logger.info("[MATERIAL FORM] No images selected")
         
+        # 最後の最後に name_official をキャッシュから確実に採用（上書きを防ぐ）
+        NAME_CACHE = "name_official_cached"
+        NAME_INPUT_KEY = "name_official_input"
+        name_official_final = st.session_state.get(NAME_CACHE, "").strip()
+        name_official_raw = st.session_state.get(NAME_INPUT_KEY, "")
+        
+        form_data["name_official"] = name_official_final
+        form_data["name"] = name_official_final  # 画面表示の安定化
+        
+        # save_material_submission() の直前に "最終値" をログに出す（DEBUG=0でも1行出す）
+        logger.info(f"[SUBMIT] final name_official='{form_data.get('name_official')}' raw='{name_official_raw}' cached='{st.session_state.get(NAME_CACHE, '')}'")
+        
         # フォーム送信処理
         if is_edit_mode or is_admin:
             # 管理者モードまたは編集モード：直接materialsに保存
@@ -498,13 +564,19 @@ def show_detailed_material_form(material_id: int = None):
                             st.rerun()
             else:
                 # 失敗時：st.error(result["error"])とst.expanderでtraceback表示
-                st.error(f"❌ エラーが発生しました: {result.get('error', '不明なエラー')}")
+                error_msg = result.get('error', '不明なエラー')
+                st.error(f"❌ エラーが発生しました: {error_msg}")
+                # name_official が空の場合は特別なメッセージを表示
+                if result.get("error_code") == "name_official_empty":
+                    st.info("💡 材料名（正式）を入力してから再度送信してください。")
                 if result.get("traceback"):
                     with st.expander("🔍 エラー詳細（デバッグ用）", expanded=False):
                         st.code(result["traceback"], language="python")
     else:
         # 一般ユーザーモード：submissionsに保存
         if form_data and st.button("📤 投稿を送信（承認待ち）", type="primary", width='stretch'):
+            # save_material_submission() の直前に "最終値" をログに出す（DEBUG=0でも1行出す）
+            logger.info(f"[SUBMIT] final name_official='{form_data.get('name_official')}' raw='{st.session_state.get('name_official_input','')}' cached='{st.session_state.get('name_official_cached','')}'")
             result = save_material_submission(form_data, submitted_by=submitted_by)
             
             # 防御的にresult.get("ok")で分岐
@@ -533,7 +605,11 @@ def show_detailed_material_form(material_id: int = None):
                             st.caption(f"URL: {public_url}")
             else:
                 # 失敗時：st.error(result["error"])とst.expanderでtraceback表示
-                st.error(f"❌ エラーが発生しました: {result.get('error', '不明なエラー')}")
+                error_msg = result.get('error', '不明なエラー')
+                st.error(f"❌ エラーが発生しました: {error_msg}")
+                # name_official が空の場合は特別なメッセージを表示
+                if result.get("error_code") == "name_official_empty":
+                    st.info("💡 材料名（正式）を入力してから再度送信してください。")
                 if result.get("traceback"):
                     with st.expander("🔍 エラー詳細（デバッグ用）", expanded=False):
                         st.code(result["traceback"], language="python")
@@ -548,22 +624,8 @@ def show_layer1_form(existing_material=None):
     """
     form_data = {}
     
-    st.markdown("### 1. 基本識別情報")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        # 編集モードの場合は既存値を初期値に
-        default_name = getattr(existing_material, 'name_official', '') if existing_material else ''
-        form_data['name_official'] = st.text_input(
-            "1-1 材料名（正式）*",
-            value=default_name,
-            key=f"name_official_{existing_material.id if existing_material else 'new'}",
-            help="材料の正式名称を入力してください"
-        )
-    
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.caption("材料IDは自動採番されます")
+    # name_official は st.form の外で処理されるため、ここでは何もしない
+    # （show_detailed_material_form で form_data に設定済み）
     
     # 材料名（通称・略称）複数（st.form内で完結）
     st.markdown("**1-2 材料名（通称・略称）**")
@@ -1386,6 +1448,22 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
             st.info("ℹ️ 画像が選択されていないため、R2アップロードをスキップします")
         
         uploaded_images = []
+        
+        # name_official の必須チェック（UNIQUE制約衝突防止）
+        # 最終 form_data["name_official"] を確認（キャッシュから設定済み）
+        name_official = form_data.get("name_official", "").strip()
+        if not name_official:
+            error_msg = "材料名（正式）が入力されていません。必須項目です。"
+            logger.warning(f"[SAVE SUBMISSION] name_official is empty (form_data['name_official']='{form_data.get('name_official')}'), skipping submission (INSERTしない)")
+            st.error(f"❌ {error_msg}")
+            return {
+                "ok": False,
+                "error": error_msg,
+                "error_code": "name_official_empty",
+            }
+        
+        # ログ出力（送信時の値を確認）
+        logger.info(f"[SAVE SUBMISSION] name_official='{name_official}' (length={len(name_official)})")
         
         # 必須フィールドの補完（None/空文字列をデフォルト値で埋める）
         # images を除去した後に _normalize_required を呼ぶ（images が再追加されないように）
