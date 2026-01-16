@@ -172,19 +172,55 @@ def show_detailed_material_form(material_id: int = None):
     # 編集モードかどうか判定
     is_edit_mode = material_id is not None
     existing_material = None
+    existing_data = {}  # session 内で dict に変換したデータを保存
     
     if is_edit_mode:
-        # 編集モード：既存材料を取得
+        # 編集モード：既存材料を取得（eager load でリレーションを事前ロード）
         db = SessionLocal()
         try:
-            existing_material = db.query(Material).filter(Material.id == material_id).first()
+            from sqlalchemy.orm import selectinload
+            from sqlalchemy import select
+            
+            # selectinload で必要なリレーションを事前ロード
+            stmt = (
+                select(Material)
+                .where(Material.id == material_id)
+                .options(
+                    selectinload(Material.reference_urls),
+                    selectinload(Material.use_examples),
+                    selectinload(Material.images),
+                )
+            )
+            existing_material = db.execute(stmt).scalar_one_or_none()
+            
             if not existing_material:
                 st.error(f"❌ 材料ID {material_id} が見つかりません")
                 return
+            
             st.markdown('<h2 class="gradient-text">✏️ 材料編集</h2>', unsafe_allow_html=True)
             st.info(f"📝 **編集対象**: {existing_material.name_official}")
+            
+            # session を閉じる前に、必要なリレーションにアクセスして dict に変換（DetachedInstanceError 防止）
+            # ここでアクセスすることで、リレーションが確実にロードされる
+            reference_urls_list = list(existing_material.reference_urls or [])
+            use_examples_list = list(existing_material.use_examples or [])
+            images_list = list(existing_material.images or [])
+            
+            # session 内で dict に変換して保存（session を閉じた後でもアクセス可能にする）
+            existing_data = {
+                'reference_urls': [
+                    {'url': ref.url, 'type': ref.url_type, 'desc': ref.description}
+                    for ref in reference_urls_list
+                ],
+                'use_examples': [
+                    {'name': ex.example_name, 'url': ex.example_url, 'desc': ex.description}
+                    for ex in use_examples_list
+                ],
+            }
+            
         finally:
             db.close()
+            # existing_material は detached になるが、必要なデータは既に dict に変換済み
     else:
         st.markdown('<h2 class="gradient-text">➕ 材料登録（詳細版）</h2>', unsafe_allow_html=True)
         st.info("📝 **レイヤー①（必須）**: 約10分で入力可能な基本情報\n\n**レイヤー②（任意）**: 後から追記できる詳細情報")
@@ -192,6 +228,7 @@ def show_detailed_material_form(material_id: int = None):
     # 編集モードの場合は既存値をform_dataに初期化
     if existing_material:
         # 既存値からform_dataを初期化（主要フィールドのみ）
+        # existing_material は detached になる可能性があるため、スカラー属性のみを使用
         form_data = {
             'name_official': getattr(existing_material, 'name_official', ''),
             'name_aliases': json.loads(getattr(existing_material, 'name_aliases', '[]')) if getattr(existing_material, 'name_aliases', None) else [],
@@ -233,21 +270,9 @@ def show_detailed_material_form(material_id: int = None):
             'visibility': getattr(existing_material, 'visibility', ''),
             'is_published': getattr(existing_material, 'is_published', 1),
         }
-        # 参照URLと使用例も取得
-        if existing_material.reference_urls:
-            form_data['reference_urls'] = [
-                {'url': ref.url, 'type': ref.url_type, 'desc': ref.description}
-                for ref in existing_material.reference_urls
-            ]
-        else:
-            form_data['reference_urls'] = []
-        if existing_material.use_examples:
-            form_data['use_examples'] = [
-                {'name': ex.example_name, 'url': ex.example_url, 'desc': ex.description}
-                for ex in existing_material.use_examples
-            ]
-        else:
-            form_data['use_examples'] = []
+        # 参照URLと使用例は session 内で dict に変換済み（DetachedInstanceError 防止）
+        form_data['reference_urls'] = existing_data.get('reference_urls', [])
+        form_data['use_examples'] = existing_data.get('use_examples', [])
     else:
         form_data = {}
     
@@ -575,8 +600,22 @@ def show_detailed_material_form(material_id: int = None):
     else:
         # 一般ユーザーモード：submissionsに保存
         if form_data and st.button("📤 投稿を送信（承認待ち）", type="primary", width='stretch'):
-            # save_material_submission() の直前に "最終値" をログに出す（DEBUG=0でも1行出す）
-            logger.info(f"[SUBMIT] final name_official='{form_data.get('name_official')}' raw='{st.session_state.get('name_official_input','')}' cached='{st.session_state.get('name_official_cached','')}'")
+            # save_material_submission() を呼ぶ "直前" に必ずこれを実行
+            NAME_CACHE = "name_official_cached"
+            NAME_INPUT_KEY = "name_official_input"
+            name = st.session_state.get(NAME_CACHE, "").strip()
+            form_data["name_official"] = name
+            form_data["name"] = name
+            
+            # その直後に、空なら必ず return（INSERTしない）
+            if not form_data["name_official"]:
+                st.error("❌ 材料名（正式）が空です。送信できません。")
+                logger.warning(f"[SUBMIT] blocked: name_official empty, raw='{st.session_state.get(NAME_INPUT_KEY, '')}' cached='{st.session_state.get(NAME_CACHE, '')}'")
+                return
+            
+            # その場でログに必ず出す（DEBUG=0でも1行は残す）
+            logger.info(f"[SUBMIT] final name_official='{form_data['name_official']}' raw='{st.session_state.get(NAME_INPUT_KEY, '')}' cached='{st.session_state.get(NAME_CACHE, '')}'")
+            
             result = save_material_submission(form_data, submitted_by=submitted_by)
             
             # 防御的にresult.get("ok")で分岐
@@ -691,12 +730,9 @@ def show_layer1_form(existing_material=None):
     
     # session_state の初期化（初回のみ）
     if 'ref_urls' not in st.session_state:
-        if existing_material and existing_material.reference_urls:
-            # 編集モード：既存値を初期化
-            st.session_state.ref_urls = [
-                {"url": ref.url, "type": ref.url_type or "", "desc": ref.description or ""}
-                for ref in existing_material.reference_urls
-            ]
+        if existing_material and form_data.get('reference_urls'):
+            # 編集モード：既存値を初期化（dict から取得、DetachedInstanceError 防止）
+            st.session_state.ref_urls = form_data.get('reference_urls', [])
         else:
             st.session_state.ref_urls = [{"url": "", "type": "", "desc": ""}]
     
@@ -899,12 +935,9 @@ def show_layer1_form(existing_material=None):
     
     # session_state の初期化（初回のみ）
     if 'use_examples' not in st.session_state:
-        if existing_material and existing_material.use_examples:
-            # 編集モード：既存値を初期化
-            st.session_state.use_examples = [
-                {"name": ex.example_name, "url": ex.example_url or "", "desc": ex.description or ""}
-                for ex in existing_material.use_examples
-            ]
+        if existing_material and form_data.get('use_examples'):
+            # 編集モード：既存値を初期化（dict から取得、DetachedInstanceError 防止）
+            st.session_state.use_examples = form_data.get('use_examples', [])
         else:
             st.session_state.use_examples = [{"name": "", "url": "", "desc": ""}]
     
