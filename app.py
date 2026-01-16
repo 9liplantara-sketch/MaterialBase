@@ -3488,7 +3488,11 @@ def show_approval_queue():
                                     st.cache_data.clear()  # キャッシュをクリア
                                     st.rerun()
                                 else:
-                                    st.error(f"❌ エラー: {result.get('error', '不明なエラー')}")
+                                    error_msg = result.get('error', '不明なエラー')
+                                    st.error(f"❌ エラー: {error_msg}")
+                                    # name_official が空の場合は特別なメッセージを表示
+                                    if result.get("error_code") == "name_official_empty":
+                                        st.info("💡 投稿内容を編集して材料名（正式）を埋めてから再度承認してください。")
                                     if result.get("traceback"):
                                         with st.expander("🔍 エラー詳細", expanded=False):
                                             st.code(result["traceback"], language="python")
@@ -3577,15 +3581,44 @@ def approve_submission(submission_id: int, editor_note: str = None, db=None):
         if submission.status != "pending":
             return {"ok": False, "error": f"Submission is not pending (status: {submission.status})"}
         
-        # payload_jsonをパース
-        try:
-            form_data = json.loads(submission.payload_json)
-        except json.JSONDecodeError as e:
-            logger.exception(f"[APPROVE] Failed to parse payload_json: {e}")
-            return {"ok": False, "error": f"Failed to parse payload_json: {e}"}
+        # payload_jsonを必ずdictにする（失敗時は uploaded_images=[] として警告、承認は継続）
+        payload_dict = None
+        uploaded_images_fallback = []
+        
+        if isinstance(submission.payload_json, dict):
+            payload_dict = submission.payload_json
+        elif isinstance(submission.payload_json, str):
+            try:
+                payload_dict = json.loads(submission.payload_json)
+            except json.JSONDecodeError as e:
+                logger.warning(f"[APPROVE] Failed to parse payload_json (str): {e}, using empty dict and uploaded_images=[]")
+                logger.exception(f"[APPROVE] payload_json parse error details")
+                payload_dict = {}  # 空dictとして継続
+                uploaded_images_fallback = []  # uploaded_images は空として扱う
+        else:
+            logger.warning(f"[APPROVE] payload_json is neither dict nor str: type={type(submission.payload_json)}, using empty dict")
+            payload_dict = {}  # 空dictとして継続
+            uploaded_images_fallback = []  # uploaded_images は空として扱う
+        
+        if not payload_dict:
+            logger.warning(f"[APPROVE] payload_dict is None or empty, using empty dict")
+            payload_dict = {}
+        
+        form_data = payload_dict
         
         # 必須フィールドの補完
         form_data = _normalize_required(form_data, existing=None)
+        
+        # name_official の必須チェック（UNIQUE制約衝突防止）
+        name_official = form_data.get("name_official")
+        if name_official is None or str(name_official).strip() == "":
+            error_msg = "材料名（正式）が空です。承認できません。投稿内容を編集して埋めてください。"
+            logger.warning(f"[APPROVE] name_official is empty for submission_id={submission_id}")
+            return {
+                "ok": False,
+                "error": error_msg,
+                "error_code": "name_official_empty",
+            }
         
         # payload をサニタイズ：Material カラムだけに絞る（relationship キーとシステム列を除去）
         allowed_columns = {c.name for c in Material.__table__.columns}
@@ -3719,29 +3752,64 @@ def approve_submission(submission_id: int, editor_note: str = None, db=None):
             db_tx1.close()
         
         # ===== Tx2: images upsert（失敗しても rollback、全体は落とさない） =====
-        uploaded_images = form_data.get('uploaded_images', [])
-        if uploaded_images and material_id:
+        # Tx2 の先頭で uploaded_images を確実に取り出す
+        uploaded_images = payload_dict.get("uploaded_images", uploaded_images_fallback)  # KEY固定: "uploaded_images"
+        if not isinstance(uploaded_images, list):
+            logger.warning(f"[APPROVE][Tx2] uploaded_images is not a list: type={type(uploaded_images)}, using empty list")
+            uploaded_images = []
+        
+        uploaded_images_count = len(uploaded_images)
+        logger.info(f"[APPROVE][Tx2] uploaded_images_count={uploaded_images_count} submission_id={submission_id} material_id={material_id}")
+        
+        image_upsert_error = None
+        
+        if uploaded_images_count == 0:
+            # 0件なら、Tx2 は何もしないで終了（ログに残す）
+            logger.info(f"[APPROVE][Tx2] No images to upsert (uploaded_images_count=0), skipping Tx2")
+        elif not material_id:
+            # material_id が確定していない場合はスキップ
+            logger.warning(f"[APPROVE][Tx2] material_id is None, cannot upsert images (uploaded_images_count={uploaded_images_count})")
+        else:
+            # 1件以上なら for で upsert_image を呼ぶ
             try:
                 from utils.image_repo import upsert_image
                 
-                for img_info in uploaded_images:
+                for idx, img_info in enumerate(uploaded_images):
+                    if not isinstance(img_info, dict):
+                        logger.warning(f"[APPROVE][Tx2] Image {idx+1} is not a dict: type={type(img_info)}, skipping")
+                        continue
+                    
                     kind = img_info.get('kind', 'primary')
-                    # Phase1: bytes列には書かない（BYTEA型の可能性があるため）
-                    # ファイルサイズを保存したい場合は size_bytes(BIGINT)列を新設予定
+                    r2_key = img_info.get('r2_key')
+                    public_url = img_info.get('public_url')
+                    mime = img_info.get('mime')
+                    sha256 = img_info.get('sha256')
+                    bytes_value = img_info.get('bytes')  # DBがbigintなら int でOK、使わないなら None 固定でもOK
+                    
+                    # bytes が None でない場合は int に変換（bigint対応）
+                    if bytes_value is not None:
+                        try:
+                            bytes_value = int(bytes_value)
+                        except (ValueError, TypeError):
+                            logger.warning(f"[APPROVE][Tx2] Image {idx+1} bytes value is not int-convertible: {bytes_value}, using None")
+                            bytes_value = None
+                    
+                    logger.info(f"[APPROVE][Tx2] Upserting image {idx+1}/{uploaded_images_count}: kind={kind}, r2_key={r2_key}, public_url={public_url}, mime={mime}, sha256={sha256[:16] if sha256 else None}...")
                     
                     upsert_image(
                         db=db_tx2,
                         material_id=material_id,
                         kind=kind,
-                        r2_key=img_info.get('r2_key'),
-                        public_url=img_info.get('public_url'),
-                        bytes=None,  # Phase1: bytes列には書かない（常にNone）
-                        mime=img_info.get('mime'),
-                        sha256=img_info.get('sha256'),
+                        r2_key=r2_key,
+                        public_url=public_url,
+                        bytes=bytes_value,  # DBがbigintなら int、使わないなら None 固定でもOK
+                        mime=mime,
+                        sha256=sha256,
                     )
                 
+                # Tx2 は最後に必ず commit する
                 db_tx2.commit()
-                logger.info(f"[APPROVE] Tx2 success: images upserted for material_id={material_id}")
+                logger.info(f"[APPROVE] Tx2 success: images upserted for material_id={material_id} (count={uploaded_images_count})")
                 
             except Exception as e:
                 db_tx2.rollback()
