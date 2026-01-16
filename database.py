@@ -2,7 +2,7 @@
 データベース設定とモデル定義（詳細仕様対応版）
 Postgres対応: URL駆動でSQLite/Postgres両対応
 """
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Boolean, UniqueConstraint, Index
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Boolean, UniqueConstraint, Index, BigInteger
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
@@ -259,7 +259,7 @@ class Image(Base):
     url = Column(String(1000))  # S3 URL（後方互換、nullable）
     r2_key = Column(String(500))  # R2内のキー（パス）
     public_url = Column(String(1000))  # R2公開URL（優先）
-    bytes = Column(Integer)  # ファイルサイズ（バイト）
+    bytes = Column(BigInteger, nullable=True)  # ファイルサイズ（バイト）。bigint型（Postgres）/ integer型（SQLite）
     mime = Column(String(100))  # MIMEタイプ（例: "image/jpeg"）
     sha256 = Column(String(64))  # SHA256ハッシュ
     image_type = Column(String(50))  # sample, microscope, etc.（後方互換）
