@@ -2732,17 +2732,21 @@ def show_home():
                     primary_image_url = getattr(material, "primary_image_url", None)
                     
                     # サムネサイズで表示（プレースホルダー付き）
-                    if primary_image_url and primary_image_url.startswith(('http://', 'https://')):
+                    if primary_image_url and primary_image_url.strip() and primary_image_url.startswith(('http://', 'https://')):
                         # R2の公開URLを直接使用（キャッシュバスター追加）
                         try:
                             from material_map_version import APP_VERSION
                         except ImportError:
                             APP_VERSION = get_git_sha()
                         separator = "&" if "?" in primary_image_url else "?"
-                        st.image(f"{primary_image_url}{separator}v={APP_VERSION}", width=120)
+                        image_url = f"{primary_image_url}{separator}v={APP_VERSION}"
+                        if image_url and image_url.strip():
+                            st.image(image_url, width=120)
+                        else:
+                            st.caption("画像なし")
                     else:
                         # プレースホルダーを表示
-                        st.image(None, width=120)
+                        st.caption("画像なし")
                 
                 with col_info:
                     # 材料名
