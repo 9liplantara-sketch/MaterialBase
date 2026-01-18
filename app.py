@@ -211,20 +211,19 @@ def safe_url(url: str) -> str:
         return url
 
 
-def get_material_image_url(material, fallback_kinds: List[str] = None) -> Optional[str]:
+def get_material_image_url(material) -> Optional[str]:
     """
-    materialsテーブルから画像URLを取得（primary優先、フォールバック対応）
+    materialsテーブルから画像URLを取得（primaryのみ）
+    
+    一覧/HOMEのトップ画像はprimaryのみを使用。
+    space/productは用途タブ専用のため、ここでは返さない。
     
     Args:
         material: MaterialオブジェクトまたはMaterialProxy
-        fallback_kinds: primaryが無い場合のフォールバック順（デフォルト: ['space', 'product']）
     
     Returns:
-        画像URL（見つからない場合はNone）
+        primary画像URL（見つからない場合はNone）
     """
-    if fallback_kinds is None:
-        fallback_kinds = ['space', 'product']
-    
     material_id = getattr(material, 'id', None)
     if not material_id:
         return None
@@ -234,25 +233,15 @@ def get_material_image_url(material, fallback_kinds: List[str] = None) -> Option
     if primary_image_url and primary_image_url.strip() and primary_image_url.startswith(('http://', 'https://')):
         return primary_image_url
     
-    # imagesテーブルから直接取得（フォールバック）
+    # imagesテーブルから直接取得（primaryのみ）
     db = SessionLocal()
     try:
-        # primaryを確認
         primary_img = db.query(Image).filter(
             Image.material_id == material_id,
             Image.kind == 'primary'
         ).first()
         if primary_img and primary_img.public_url:
             return primary_img.public_url
-        
-        # フォールバック順に試す
-        for kind in fallback_kinds:
-            img = db.query(Image).filter(
-                Image.material_id == material_id,
-                Image.kind == kind
-            ).first()
-            if img and img.public_url:
-                return img.public_url
     finally:
         db.close()
     
@@ -2800,8 +2789,8 @@ def show_home():
                 
                 with col_img:
                     # サムネ画像を表示（高速化: imagesテーブルのpublic_urlを直接使用、base64化やローカル探索をしない）
-                    # primary優先、無い場合はspace→productをフォールバック
-                    image_url = get_material_image_url(material, fallback_kinds=['space', 'product'])
+                    # primaryのみを使用（space/productは用途タブ専用）
+                    image_url = get_material_image_url(material)
                     
                     # サムネサイズで表示（プレースホルダー付き）
                     if image_url and image_url.strip() and image_url.startswith(('http://', 'https://')):
@@ -3163,8 +3152,8 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                         material_desc = getattr(material, "description", "") or ""
                         
                         # 素材画像を取得（高速化: imagesテーブルのpublic_urlを直接使用、base64化やローカル探索をしない）
-                        # primary優先、無い場合はspace→productをフォールバック
-                        image_url = get_material_image_url(material, fallback_kinds=['space', 'product'])
+                        # primaryのみを使用（space/productは用途タブ専用）
+                        image_url = get_material_image_url(material)
                         
                         # 画像HTML（public_urlがある場合は直接使用、なければプレースホルダー）
                         if image_url and image_url.strip() and image_url.startswith(('http://', 'https://')):
