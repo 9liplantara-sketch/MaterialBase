@@ -76,6 +76,7 @@ import base64
 import pandas as pd
 import plotly.express as px
 from urllib.parse import urlsplit, urlunsplit, quote
+from streamlit_option_menu import option_menu
 
 # グローバル変数の初期化（NameErrorを防ぐ）
 _card_generator_import_error = None
@@ -99,7 +100,7 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 from material_form_detailed import _normalize_required
 from sqlalchemy.orm import selectinload
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from utils.logo import render_site_header, render_logo_mark, show_logo_debug_info, get_logo_debug_info, get_project_root
 
 # デプロイバージョン（Streamlit Cloudのデプロイ確認用）
@@ -2177,14 +2178,8 @@ def main():
         # 詳細ページに遷移する場合は、ページを"材料一覧"に設定（詳細表示モード）
         st.session_state.page = "材料一覧"
     
-    # サイドバー - WOTA風シンプル
+    # サイドバー - ハイライト型メニュー
     with st.sidebar:
-        st.markdown("""
-        <div style="text-align: left; padding: 20px 0 24px 0; border-bottom: 1px solid rgba(0,0,0,0.08);">
-            <h2 style="color: #1a1a1a; margin: 0; font-weight: 600; font-size: 18px; letter-spacing: -0.01em;">メニュー</h2>
-        </div>
-        """, unsafe_allow_html=True)
-        
         # 管理者表示チェック（ADMIN_MODE=1 のときのみ、DEBUGとは分離）
         from utils.settings import is_admin_mode
         is_admin = is_admin_mode()
@@ -2195,18 +2190,75 @@ def main():
             st.session_state.page = "材料一覧"
             page = "材料一覧"
         else:
-            # 管理者の場合は「承認待ち一覧」を追加
-            page_options = ["ホーム", "材料一覧", "材料登録", "ダッシュボード", "検索", "素材カード", "元素周期表"]
-            if is_admin:
-                page_options.append("承認待ち一覧")
+            # 基本メニュー項目
+            menu_items = ["ホーム", "材料一覧", "材料登録", "ダッシュボード", "検索", "素材カード", "元素周期表"]
+            menu_icons = ["house", "grid", "pencil", "bar-chart", "search", "file-earmark", "table"]
             
-            page = st.radio(
-                "ページを選択",
-                page_options,
-                index=page_options.index(st.session_state.page) if st.session_state.page in page_options else 0,
-                label_visibility="collapsed"
+            # 管理者の場合は「承認待ち一覧」を追加
+            if is_admin:
+                menu_items.append("承認待ち一覧")
+                menu_icons.append("clipboard-check")
+            
+            # 現在のページのインデックスを取得
+            current_index = 0
+            if st.session_state.page in menu_items:
+                current_index = menu_items.index(st.session_state.page)
+            
+            # option_menuでメニューを表示
+            page = option_menu(
+                None,
+                menu_items,
+                icons=menu_icons,
+                default_index=current_index,
+                styles={
+                    "container": {"padding": "0.25rem", "background-color": "transparent"},
+                    "nav-link": {
+                        "font-size": "14px",
+                        "padding": "8px 10px",
+                        "border-radius": "10px",
+                        "margin-bottom": "4px",
+                    },
+                    "nav-link-selected": {
+                        "background-color": "#111",
+                        "color": "white",
+                    },
+                }
             )
             st.session_state.page = page
+            
+            # hover効果のCSSを追加 + チェックボックス/ラジオボタンを非表示
+            st.markdown("""
+            <style>
+            /* streamlit-option-menuのhover効果 */
+            div[data-testid="stOptionMenu"] .nav-link:hover {
+                background-color: #f0f0f0 !important;
+                border-radius: 10px;
+            }
+            div[data-testid="stOptionMenu"] .nav-link-selected {
+                background-color: #111 !important;
+                color: white !important;
+            }
+            /* サイドバーのチェックボックス/ラジオボタンを非表示（option_menuのみでページ選択） */
+            section[data-testid="stSidebar"] input[type="checkbox"],
+            section[data-testid="stSidebar"] input[type="radio"],
+            .stSidebar input[type="checkbox"],
+            .stSidebar input[type="radio"] {
+                display: none !important;
+                visibility: hidden !important;
+                opacity: 0 !important;
+                position: absolute !important;
+                width: 0 !important;
+                height: 0 !important;
+            }
+            /* チェックボックス/ラジオボタンのラベルも非表示 */
+            section[data-testid="stSidebar"] label:has(input[type="checkbox"]),
+            section[data-testid="stSidebar"] label:has(input[type="radio"]),
+            .stSidebar label:has(input[type="checkbox"]),
+            .stSidebar label:has(input[type="radio"]) {
+                display: none !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
         
         st.markdown("---")
         
@@ -2916,6 +2968,76 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                 
                 st.markdown("---")
                 st.markdown(f"# {material.name_official or material.name}")
+                
+                # 用途画像（space/product）を表示（材料名の直下）
+                from database import SessionLocal, Image
+                
+                # imagesテーブルから用途画像を取得
+                images = []
+                if hasattr(material, 'images') and material.images:
+                    images = list(material.images)
+                else:
+                    # データベースから直接取得（kind/image_typeの両方に対応）
+                    db_images = SessionLocal()
+                    try:
+                        # kind列またはimage_type列でspace/productを検索
+                        try:
+                            images = db_images.query(Image).filter(
+                                Image.material_id == material.id,
+                                or_(
+                                    Image.kind.in_(['space', 'product']),
+                                    Image.image_type.in_(['space', 'product'])
+                                )
+                            ).all()
+                        except Exception:
+                            # image_type列が存在しない場合はkind列のみで検索
+                            try:
+                                images = db_images.query(Image).filter(
+                                    Image.material_id == material.id,
+                                    Image.kind.in_(['space', 'product'])
+                                ).all()
+                            except Exception:
+                                # どちらも失敗した場合は全画像を取得して後でフィルタ
+                                all_images = db_images.query(Image).filter(
+                                    Image.material_id == material.id
+                                ).all()
+                                images = []
+                                for img in all_images:
+                                    k = getattr(img, "kind", None) or getattr(img, "image_type", None)
+                                    if k in ('space', 'product'):
+                                        images.append(img)
+                    finally:
+                        db_images.close()
+                
+                # images を {kind: public_url} にする（kind名やurl列名の揺れを吸収）
+                images_by_kind: dict[str, str] = {}
+                
+                for img in images:  # material.images でも DBクエリ結果でもOK
+                    k = getattr(img, "kind", None) or getattr(img, "image_type", None) or getattr(img, "type", None)
+                    u = getattr(img, "public_url", None) or getattr(img, "url", None)
+                    if k and u:
+                        images_by_kind[str(k)] = str(u)
+                
+                space_url = images_by_kind.get("space")
+                product_url = images_by_kind.get("product")
+                
+                # 用途画像を2カラムで表示
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.caption("空間写真")
+                    if space_url:
+                        st.image(safe_url(space_url), use_container_width=True)
+                    else:
+                        st.caption("画像なし")
+                
+                with c2:
+                    st.caption("プロダクト写真")
+                    if product_url:
+                        st.image(safe_url(product_url), use_container_width=True)
+                    else:
+                        st.caption("画像なし")
+                
+                st.markdown("---")
                 
                 # 管理者モードの場合は編集・削除ボタンを表示
                 from utils.settings import is_admin_mode
