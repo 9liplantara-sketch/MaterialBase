@@ -85,6 +85,7 @@ from collections import Counter
 import json
 import uuid
 import logging
+import textwrap
 
 from database import SessionLocal, Material, Property, Image, MaterialMetadata, ReferenceURL, UseExample, ProcessExampleImage, MaterialSubmission, init_db
 
@@ -2467,9 +2468,15 @@ def show_home():
                 </style>
                 """, unsafe_allow_html=True)
             
-            st.markdown('<div class="main-visual">', unsafe_allow_html=True)
+            # main-visual div を開く（閉じタグは st.image の後に統合）
+            main_visual_html_raw = f"""
+            <div class="main-visual">
+            """
+            main_visual_html = textwrap.dedent(main_visual_html_raw).strip()
+            st.markdown(main_visual_html, unsafe_allow_html=True)
             # st.imageにbytesを渡して直接表示（相対パス/CWD依存を避ける）
             st.image(main_image_bytes, use_container_width=True)
+            # main-visual div を閉じる
             st.markdown('</div>', unsafe_allow_html=True)
         except Exception as e:
             if is_debug:
@@ -3096,7 +3103,7 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                             category_display = category_name
                             category_title = ""
                         
-                        st.markdown(f"""
+                        card_html_raw = f"""
                         <div class="material-card-container material-texture">
                             {img_html}
                             <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; margin-top: 16px;">
@@ -3116,7 +3123,9 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                                 {f'<small style="color: #999;">{"✅ 公開" if getattr(material, "is_published", 1) == 1 else "🔒 非公開"}</small>' if include_unpublished else ''}
                             </div>
                         </div>
-                        """, unsafe_allow_html=True)
+                        """
+                        card_html = textwrap.dedent(card_html_raw).strip()
+                        st.markdown(card_html, unsafe_allow_html=True)
                         
                         # 管理者表示時は公開/非公開切り替えスイッチを表示
                         if include_unpublished:
@@ -3537,7 +3546,7 @@ def show_search():
                             category_display = category_name
                             category_title = ""
                         
-                        st.markdown(f"""
+                        card_html_raw = f"""
                         <div class="material-card-container material-texture">
                             {img_html}
                             <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px;">
@@ -3549,7 +3558,9 @@ def show_search():
                             <p style="color: #666; margin: 0; line-height: 1.6; font-size: 0.9rem;">{material.description or '説明なし'}</p>
                             {prop_text}
                         </div>
-                        """, unsafe_allow_html=True)
+                        """
+                        card_html = textwrap.dedent(card_html_raw).strip()
+                        st.markdown(card_html, unsafe_allow_html=True)
                         
                         # 詳細を見るボタン（白文字を確実に表示）
                         button_key = f"search_detail_{material.id}"
@@ -4774,11 +4785,15 @@ def show_material_cards():
                     </html>
                     """
             
-            # HTMLを表示
+            # HTMLを表示（st.components.v1.html を優先、失敗時は st.markdown にフォールバック）
             if card_html:
                 try:
+                    # st.components.v1.html でHTMLをレンダリング（推奨）
                     st.components.v1.html(card_html, height=800, scrolling=True)
-                except:
+                except Exception as html_error:
+                    # st.components.v1.html が失敗した場合、st.markdown にフォールバック
+                    # unsafe_allow_html=True を必ず指定してHTMLをレンダリング
+                    logger.warning(f"[CARD] st.components.v1.html failed, fallback to st.markdown: {html_error}")
                     st.markdown(card_html, unsafe_allow_html=True)
             else:
                 # エラーが発生した場合、フォールバックカードが表示されない場合
