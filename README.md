@@ -129,6 +129,33 @@ curl -X POST "http://localhost:8000/api/materials" \
   }'
 ```
 
+## 重複整理（安全運用）
+
+同名（`name_official`）の重複材料を安全に整理するためのスクリプトが用意されています。
+**デフォルトは dry-run** で、破壊的操作は行いません。
+
+### 1) 棚卸し（dry-run）
+```bash
+python3 scripts/dedupe_materials.py --dry-run
+```
+
+出力: `reports/duplicates_report_YYYYMMDD.csv`
+
+### 2) 1件だけ適用（安全な最小単位）
+```bash
+python3 scripts/dedupe_materials.py --apply --only-name "コンクリート"
+```
+
+### 3) 少数だけ適用（テスト用途）
+```bash
+python3 scripts/dedupe_materials.py --apply --limit 3
+```
+
+**注意事項**
+- DROP/TRUNCATE など破壊的操作は行いません
+- 重複側は `is_deleted=1` にして論理削除します
+- 関連テーブルは canonical に付け替え、重複はスキップします
+
 ### 素材カードの表示
 
 材料登録後、以下のURLで素材カードを表示できます：
