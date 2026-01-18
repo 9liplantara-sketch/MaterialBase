@@ -2191,20 +2191,52 @@ def main():
             include_unpublished = False
         
         # 統計情報（画面左下に小さく表示）- 軽量クエリで取得
+        # 変数を初期化（エラー回避）
+        materials = []
+        categories = 0
+        total_properties = 0
+        avg_properties = 0.0
+        material_count = 0
+        
         include_deleted = st.session_state.get("include_deleted", False) if is_admin else False
-        from utils.settings import get_database_url
-        db_url = get_database_url()
-        material_count = get_material_count_cached(db_url, include_unpublished=include_unpublished, include_deleted=include_deleted)
         
-        # SQLで直接カウント（DetachedInstanceError回避）
-        db = get_db()
+        # 統計情報を取得（try/exceptで囲み、失敗時はデフォルト値のまま進む）
         try:
-            total_properties = db.execute(select(func.count(Property.id))).scalar() or 0
-        finally:
-            db.close()
+            from utils.settings import get_database_url
+            db_url = get_database_url()
+            material_count = get_material_count_cached(db_url, include_unpublished=include_unpublished, include_deleted=include_deleted)
+            
+            # materialsリストを取得（カテゴリ数計算用）
+            try:
+                materials = get_all_materials(include_unpublished=include_unpublished, include_deleted=include_deleted)
+                # カテゴリ数を計算
+                if materials:
+                    categories = len(set([m.category for m in materials if m.category]))
+            except Exception as e:
+                # materials取得失敗時はmaterial_countのみ使用
+                materials = []
+                categories = 0
+                if is_debug_flag():
+                    st.caption(f"materials取得エラー（統計表示は続行）: {e}")
+            
+            # SQLで直接カウント（DetachedInstanceError回避）
+            db = get_db()
+            try:
+                total_properties = db.execute(select(func.count(Property.id))).scalar() or 0
+            finally:
+                db.close()
+            
+            # 平均物性数を計算（使用している場合）
+            if materials and len(materials) > 0:
+                avg_properties = total_properties / len(materials)
+        except Exception as e:
+            # 統計情報取得失敗時はデフォルト値のまま進む（PANICさせない）
+            material_count = 0
+            if is_debug_flag():
+                st.caption(f"統計情報取得エラー（表示は続行）: {e}")
         
-        # カテゴリ数も軽量クエリで取得（必要に応じて）
-        categories = 0  # 簡略化のため0に設定（必要なら別途クエリ）
+        # 材料数はmaterial_countを使用（materialsが空でも表示できる）
+        material_display_count = material_count if material_count > 0 else (len(materials) if materials else 0)
         
         # 左下に小さく配置
         st.markdown("""
@@ -2213,7 +2245,7 @@ def main():
             <div>カテゴリ: <strong>{}</strong></div>
             <div>物性データ: <strong>{}</strong></div>
         </div>
-        """.format(len(materials), categories, total_properties), unsafe_allow_html=True)
+        """.format(material_display_count, categories, total_properties), unsafe_allow_html=True)
         
         st.markdown("""
         <div style="text-align: center; padding: 20px 0; color: #666;">
