@@ -2980,320 +2980,324 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
         # 材料カード表示（グリッドレイアウト）
         cols = st.columns(3)
         for idx, material in enumerate(filtered_materials):
-        with cols[idx % 3]:
-            with st.container():
-                properties_text = ""
-                if material.properties:
-                    props = material.properties[:3]
-                    properties_text = "<br>".join([
-                        f"<small style='color: #666;'>• {p.property_name}: <strong style='color: #667eea;'>{p.value} {p.unit or ''}</strong></small>"
-                        for p in props
-                    ])
-                
-                material_name = material.name_official or material.name or "名称不明"
-                material_desc = material.description or ""
-                
-                # 素材画像を取得（キャッシュ対策: Base64エンコードで直接表示）
-                from utils.image_display import get_material_image_ref, display_image_unified
-                import hashlib
-                import time
-                
-                image_source = None
-                image_debug = None
-                # get_material_image_refを使用（常に呼び出す、material.imagesガードを削除）
-                from utils.logo import get_project_root
-                image_src, image_debug = get_material_image_ref(material, "primary", get_project_root())
-                image_source = image_src
-                
-                # DEBUG=1の時だけ画像探索結果を表示
-                if os.getenv("DEBUG", "0") == "1" and image_debug:
-                    with st.expander(f"🔍 画像探索デバッグ: {material_name}", expanded=False):
-                        st.json(image_debug)
-                
-                # 画像HTML（プレースホルダー含む、キャッシュ回避）
-                if image_source:
-                    if isinstance(image_source, str):
-                        # URLの場合はhttp/httpsのみキャッシュバスターを追加
-                        if image_source.startswith(('http://', 'https://')):
-                            try:
-                                from material_map_version import APP_VERSION
-                            except ImportError:
-                                APP_VERSION = get_git_sha()
-                            separator = "&" if "?" in image_source else "?"
-                            img_html = f'<img src="{image_source}{separator}v={APP_VERSION}" class="material-hero-image" alt="{material_name}" />'
-                        elif image_source.startswith('data:'):
-                            # data:URLの場合はそのまま
-                            img_html = f'<img src="{image_source}" class="material-hero-image" alt="{material_name}" />'
-                        else:
-                            # ローカルパスの場合はdata URLに変換
-                            path = Path(image_source)
-                            if path.exists() and path.is_file():
-                                with open(path, 'rb') as f:
-                                    img_bytes = f.read()
-                                    img_base64 = base64.b64encode(img_bytes).decode()
-                                    # 拡張子からMIMEタイプを判定
-                                    ext = path.suffix.lower()
-                                    mime_type = {
-                                        '.jpg': 'image/jpeg',
-                                        '.jpeg': 'image/jpeg',
-                                        '.png': 'image/png',
-                                        '.webp': 'image/webp',
-                                        '.gif': 'image/gif'
-                                    }.get(ext, 'image/png')
-                                    img_html = f'<img src="data:{mime_type};base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
-                            else:
-                                img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
-                    elif isinstance(image_source, Path):
-                        # Pathの場合はto_data_url()またはto_png_bytes()でdata URLに変換
-                        from utils.image_display import to_data_url, to_png_bytes
-                        data_url = to_data_url(image_source)
-                        if data_url:
-                            img_html = f'<img src="{data_url}" class="material-hero-image" alt="{material_name}" />'
-                        else:
-                            # to_data_urlが失敗した場合はto_png_bytesでPNG bytes化
-                            png_bytes = to_png_bytes(image_source)
-                            if png_bytes:
-                                img_base64 = base64.b64encode(png_bytes).decode()
-                                img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
-                            else:
-                                img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
-                    else:
-                        # PILImageの場合はto_png_bytes()でPNG bytes化
-                        from utils.image_display import to_png_bytes
-                        png_bytes = to_png_bytes(image_source)
-                        if png_bytes:
-                            img_base64 = base64.b64encode(png_bytes).decode()
-                            img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
-                        else:
-                            img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
-                else:
-                    # プレースホルダー
-                    img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
-                
-                # カテゴリ名（長い場合は省略）
-                category_name = material.category_main or material.category or '未分類'
-                if len(category_name) > 20:
-                    category_display = category_name[:17] + "..."
-                    category_title = category_name
-                else:
-                    category_display = category_name
-                    category_title = ""
-                
-                st.markdown(f"""
-                <div class="material-card-container material-texture">
-                    {img_html}
-                    <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; margin-top: 16px;">
-                        <h3 style="color: #1a1a1a; margin: 0; font-size: 1.4rem; font-weight: 700; flex: 1;">{material_name}</h3>
-                    </div>
-                    <div style="margin-bottom: 12px;">
-                        <span class="category-badge" title="{category_title}">{category_display}</span>
-                    </div>
-                    <p style="color: #666; margin: 0; font-size: 0.95rem; line-height: 1.6;">
-                        {material_desc[:80] if material_desc else '説明なし'}...
-                    </p>
-                    <div style="margin: 20px 0;">
-                        {properties_text}
-                    </div>
-                    <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
-                        <small style="color: #999;">ID: {material.id}</small>
-                        {f'<small style="color: #999;">{"✅ 公開" if getattr(material, "is_published", 1) == 1 else "🔒 非公開"}</small>' if include_unpublished else ''}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # 管理者表示時は公開/非公開切り替えスイッチを表示
-                if include_unpublished:
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        pass  # 詳細ボタンのスペース
-                    with col2:
-                        current_status = getattr(material, "is_published", 1)
-                        new_status = st.toggle(
-                            "公開" if current_status == 1 else "非公開",
-                            value=current_status == 1,
-                            key=f"toggle_publish_{material.id}"
-                        )
-                        if new_status != (current_status == 1):
-                            # ステータス変更
-                            from database import SessionLocal
-                            db = SessionLocal()
-                            try:
-                                # データベースから再取得して更新
-                                from database import Material
-                                db_material = db.query(Material).filter(Material.id == material.id).first()
-                                if db_material:
-                                    db_material.is_published = 1 if new_status else 0
-                                    db.commit()
-                                    st.rerun()
-                            except Exception as e:
-                                st.error(f"更新エラー: {e}")
-                                import traceback
-                                st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
-                                db.rollback()
-                            finally:
-                                db.close()
-                
-                # 管理者モードの場合は編集・削除ボタンを表示
-                is_admin = os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1"
-                admin_buttons_html = ""
-                if is_admin:
-                    admin_buttons_html = f"""
-                    <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-                        <button onclick="window.streamlitEdit_{material.id}()" style="background: #4a90e2; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">✏️ 編集</button>
-                        <button onclick="window.streamlitDelete_{material.id}()" style="background: #e74c3c; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">🗑️ 削除</button>
-                    </div>
-                    """
-                
-                # 管理者モードの場合は編集・削除ボタンを表示
-                if is_admin:
-                    col1, col2, col3 = st.columns([1, 1, 8])
-                    with col1:
-                        if st.button("✏️ 編集", key=f"edit_list_{material.id}"):
-                            st.session_state.edit_material_id = material.id
-                            st.session_state.page = "材料登録"
-                            st.rerun()
-                    with col2:
-                        if st.button("🗑️ 削除", key=f"delete_list_{material.id}"):
-                            st.session_state.delete_material_id = material.id
-                            st.rerun()
-                    with col3:
-                        pass
-                
-                # 削除確認（2段階確認）
-                if st.session_state.get("delete_material_id") == material.id:
-                    st.warning("⚠️ この材料を削除しますか？")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("✅ 削除を実行", key=f"confirm_delete_list_{material.id}", type="primary"):
-                            # 論理削除を実行
-                            from database import SessionLocal, Material
-                            db = SessionLocal()
-                            try:
-                                db_material = db.query(Material).filter(Material.id == material.id).first()
-                                if db_material:
-                                    db_material.is_deleted = 1
-                                    db_material.deleted_at = datetime.utcnow()
-                                    db.commit()
-                                    clear_material_cache()  # キャッシュをクリア
-                                    st.success("✅ 材料を削除しました")
-                                    st.session_state.delete_material_id = None
-                                    st.rerun()
-                            except Exception as e:
-                                logger.exception(f"[DELETE] Failed to delete material {material.id}: {e}")
-                                st.error(f"❌ 削除エラー: {e}")
-                                db.rollback()
-                            finally:
-                                db.close()
-                    with col2:
-                        if st.button("❌ キャンセル", key=f"cancel_delete_list_{material.id}"):
-                            st.session_state.delete_material_id = None
-                            st.rerun()
-                
-                # 復活確認（is_deleted=1 の場合のみ表示）
-                if material.is_deleted == 1 and st.session_state.get("restore_material_id") == material.id:
-                    # 復活前に active同名がいないかチェック
-                    db_check = SessionLocal()
-                    try:
-                        from sqlalchemy import select
-                        active_check_stmt = (
-                            select(Material.id)
-                            .where(Material.name_official == material.name_official)
-                            .where(Material.is_deleted == 0)
-                            .limit(1)
-                        )
-                        active_existing = db_check.execute(active_check_stmt).scalar_one_or_none()
+            with cols[idx % 3]:
+                try:
+                    with st.container():
+                        properties_text = ""
+                        if material.properties:
+                            props = material.properties[:3]
+                            properties_text = "<br>".join([
+                                f"<small style='color: #666;'>• {p.property_name}: <strong style='color: #667eea;'>{p.value} {p.unit or ''}</strong></small>"
+                                for p in props
+                            ])
                         
-                        if active_existing is not None:
-                            st.error(f"❌ 同名の材料が既に存在します（ID: {active_existing}）。復活するには材料名を変更してください。")
-                            new_name = st.text_input("新しい材料名（正式）", key=f"restore_rename_list_{material.id}", value=material.name_official)
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                if st.button("✅ リネームして復活", key=f"confirm_restore_rename_list_{material.id}", type="primary"):
-                                    if new_name and new_name.strip() and new_name.strip() != material.name_official:
-                                        db_restore = SessionLocal()
-                                        try:
-                                            db_material_restore = db_restore.query(Material).filter(Material.id == material.id).first()
-                                            if db_material_restore:
-                                                db_material_restore.is_deleted = 0
-                                                db_material_restore.deleted_at = None
-                                                db_material_restore.name_official = new_name.strip()
-                                                db_restore.commit()
-                                                st.success(f"✅ 材料を復活しました（名称変更: {material.name_official} → {new_name.strip()}）")
-                                                st.session_state.restore_material_id = None
-                                                st.rerun()
-                                        except Exception as e:
-                                            st.error(f"❌ 復活エラー: {e}")
-                                            db_restore.rollback()
-                                        finally:
-                                            db_restore.close()
-                                    else:
-                                        st.warning("⚠️ 新しい材料名を入力してください（現在の名前と異なる必要があります）")
-                            with col2:
-                                if st.button("❌ キャンセル", key=f"cancel_restore_list_{material.id}"):
-                                    st.session_state.restore_material_id = None
-                                    st.rerun()
-                        else:
-                            # 同名が存在しない場合はそのまま復活
-                            st.warning("⚠️ この材料を復活しますか？")
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                if st.button("✅ 復活を実行", key=f"confirm_restore_list_{material.id}", type="primary"):
-                                    db_restore = SessionLocal()
+                        material_name = material.name_official or material.name or "名称不明"
+                        material_desc = material.description or ""
+                        
+                        # 素材画像を取得（キャッシュ対策: Base64エンコードで直接表示）
+                        from utils.image_display import get_material_image_ref, display_image_unified
+                        import hashlib
+                        import time
+                        
+                        image_source = None
+                        image_debug = None
+                        # get_material_image_refを使用（常に呼び出す、material.imagesガードを削除）
+                        from utils.logo import get_project_root
+                        image_src, image_debug = get_material_image_ref(material, "primary", get_project_root())
+                        image_source = image_src
+                        
+                        # DEBUG=1の時だけ画像探索結果を表示
+                        if os.getenv("DEBUG", "0") == "1" and image_debug:
+                            with st.expander(f"🔍 画像探索デバッグ: {material_name}", expanded=False):
+                                st.json(image_debug)
+                        
+                        # 画像HTML（プレースホルダー含む、キャッシュ回避）
+                        if image_source:
+                            if isinstance(image_source, str):
+                                # URLの場合はhttp/httpsのみキャッシュバスターを追加
+                                if image_source.startswith(('http://', 'https://')):
                                     try:
-                                        db_material_restore = db_restore.query(Material).filter(Material.id == material.id).first()
-                                        if db_material_restore:
-                                            db_material_restore.is_deleted = 0
-                                            db_material_restore.deleted_at = None
-                                            db_restore.commit()
-                                            st.success("✅ 材料を復活しました")
-                                            st.session_state.restore_material_id = None
+                                        from material_map_version import APP_VERSION
+                                    except ImportError:
+                                        APP_VERSION = get_git_sha()
+                                    separator = "&" if "?" in image_source else "?"
+                                    img_html = f'<img src="{image_source}{separator}v={APP_VERSION}" class="material-hero-image" alt="{material_name}" />'
+                                elif image_source.startswith('data:'):
+                                    # data:URLの場合はそのまま
+                                    img_html = f'<img src="{image_source}" class="material-hero-image" alt="{material_name}" />'
+                                else:
+                                    # ローカルパスの場合はdata URLに変換
+                                    path = Path(image_source)
+                                    if path.exists() and path.is_file():
+                                        with open(path, 'rb') as f:
+                                            img_bytes = f.read()
+                                            img_base64 = base64.b64encode(img_bytes).decode()
+                                            # 拡張子からMIMEタイプを判定
+                                            ext = path.suffix.lower()
+                                            mime_type = {
+                                                '.jpg': 'image/jpeg',
+                                                '.jpeg': 'image/jpeg',
+                                                '.png': 'image/png',
+                                                '.webp': 'image/webp',
+                                                '.gif': 'image/gif'
+                                            }.get(ext, 'image/png')
+                                            img_html = f'<img src="data:{mime_type};base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
+                                    else:
+                                        img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
+                            elif isinstance(image_source, Path):
+                                # Pathの場合はto_data_url()またはto_png_bytes()でdata URLに変換
+                                from utils.image_display import to_data_url, to_png_bytes
+                                data_url = to_data_url(image_source)
+                                if data_url:
+                                    img_html = f'<img src="{data_url}" class="material-hero-image" alt="{material_name}" />'
+                                else:
+                                    # to_data_urlが失敗した場合はto_png_bytesでPNG bytes化
+                                    png_bytes = to_png_bytes(image_source)
+                                    if png_bytes:
+                                        img_base64 = base64.b64encode(png_bytes).decode()
+                                        img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
+                                    else:
+                                        img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
+                            else:
+                                # PILImageの場合はto_png_bytes()でPNG bytes化
+                                from utils.image_display import to_png_bytes
+                                png_bytes = to_png_bytes(image_source)
+                                if png_bytes:
+                                    img_base64 = base64.b64encode(png_bytes).decode()
+                                    img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
+                                else:
+                                    img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
+                        else:
+                            # プレースホルダー
+                            img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
+                        
+                        # カテゴリ名（長い場合は省略）
+                        category_name = material.category_main or material.category or '未分類'
+                        if len(category_name) > 20:
+                            category_display = category_name[:17] + "..."
+                            category_title = category_name
+                        else:
+                            category_display = category_name
+                            category_title = ""
+                        
+                        st.markdown(f"""
+                        <div class="material-card-container material-texture">
+                            {img_html}
+                            <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; margin-top: 16px;">
+                                <h3 style="color: #1a1a1a; margin: 0; font-size: 1.4rem; font-weight: 700; flex: 1;">{material_name}</h3>
+                            </div>
+                            <div style="margin-bottom: 12px;">
+                                <span class="category-badge" title="{category_title}">{category_display}</span>
+                            </div>
+                            <p style="color: #666; margin: 0; font-size: 0.95rem; line-height: 1.6;">
+                                {material_desc[:80] if material_desc else '説明なし'}...
+                            </p>
+                            <div style="margin: 20px 0;">
+                                {properties_text}
+                            </div>
+                            <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
+                                <small style="color: #999;">ID: {material.id}</small>
+                                {f'<small style="color: #999;">{"✅ 公開" if getattr(material, "is_published", 1) == 1 else "🔒 非公開"}</small>' if include_unpublished else ''}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # 管理者表示時は公開/非公開切り替えスイッチを表示
+                        if include_unpublished:
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                pass  # 詳細ボタンのスペース
+                            with col2:
+                                current_status = getattr(material, "is_published", 1)
+                                new_status = st.toggle(
+                                    "公開" if current_status == 1 else "非公開",
+                                    value=current_status == 1,
+                                    key=f"toggle_publish_{material.id}"
+                                )
+                                if new_status != (current_status == 1):
+                                    # ステータス変更
+                                    from database import SessionLocal
+                                    db = SessionLocal()
+                                    try:
+                                        # データベースから再取得して更新
+                                        from database import Material
+                                        db_material = db.query(Material).filter(Material.id == material.id).first()
+                                        if db_material:
+                                            db_material.is_published = 1 if new_status else 0
+                                            db.commit()
                                             st.rerun()
                                     except Exception as e:
-                                        st.error(f"❌ 復活エラー: {e}")
-                                        db_restore.rollback()
+                                        st.error(f"更新エラー: {e}")
+                                        import traceback
+                                        st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
+                                        db.rollback()
                                     finally:
-                                        db_restore.close()
-                            with col2:
-                                if st.button("❌ キャンセル", key=f"cancel_restore_list_{material.id}"):
-                                    st.session_state.restore_material_id = None
+                                        db.close()
+                        
+                        # 管理者モードの場合は編集・削除ボタンを表示
+                        is_admin = os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1"
+                        admin_buttons_html = ""
+                        if is_admin:
+                            admin_buttons_html = f"""
+                            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                                <button onclick="window.streamlitEdit_{material.id}()" style="background: #4a90e2; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">✏️ 編集</button>
+                                <button onclick="window.streamlitDelete_{material.id}()" style="background: #e74c3c; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">🗑️ 削除</button>
+                            </div>
+                            """
+                        
+                        # 管理者モードの場合は編集・削除ボタンを表示
+                        if is_admin:
+                            col1, col2, col3 = st.columns([1, 1, 8])
+                            with col1:
+                                if st.button("✏️ 編集", key=f"edit_list_{material.id}"):
+                                    st.session_state.edit_material_id = material.id
+                                    st.session_state.page = "材料登録"
                                     st.rerun()
-                    finally:
-                        db_check.close()
-                
-                # 削除済み材料の場合は復活ボタンを表示
-                if material.is_deleted == 1:
-                    if st.button("🔄 復活", key=f"restore_list_{material.id}"):
-                        st.session_state.restore_material_id = material.id
-                        st.rerun()
-                
-                # ボタンのスタイルを明示的に設定（白文字を確実に表示、上に15px移動）
-                button_key = f"detail_{material.id}"
-                st.markdown(f"""
-                <div class="material-card-actions" style="margin-top: -15px;">
-                    <style>
-                        .material-card-actions button[key="{button_key}"],
-                        .material-card-actions button[data-testid*="{button_key}"] {{
-                            background-color: #1a1a1a !important;
-                            color: #ffffff !important;
-                            border: 1px solid #1a1a1a !important;
-                        }}
-                        .material-card-actions button[key="{button_key}"]:hover,
-                        .material-card-actions button[data-testid*="{button_key}"]:hover {{
-                            background-color: #333333 !important;
-                            color: #ffffff !important;
-                        }}
-                        .material-card-actions button[key="{button_key}"] *,
-                        .material-card-actions button[data-testid*="{button_key}"] * {{
-                            color: #ffffff !important;
-                        }}
-                    </style>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                if st.button(f"詳細を見る", key=button_key, width='stretch'):
-                    st.session_state.selected_material_id = material.id
-                    st.session_state.page = "材料一覧"  # 一覧ページの詳細表示モード
-                    st.rerun()
+                            with col2:
+                                if st.button("🗑️ 削除", key=f"delete_list_{material.id}"):
+                                    st.session_state.delete_material_id = material.id
+                                    st.rerun()
+                            with col3:
+                                pass
+                        
+                        # 削除確認（2段階確認）
+                        if st.session_state.get("delete_material_id") == material.id:
+                            st.warning("⚠️ この材料を削除しますか？")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.button("✅ 削除を実行", key=f"confirm_delete_list_{material.id}", type="primary"):
+                                    # 論理削除を実行
+                                    from database import SessionLocal, Material
+                                    db = SessionLocal()
+                                    try:
+                                        db_material = db.query(Material).filter(Material.id == material.id).first()
+                                        if db_material:
+                                            db_material.is_deleted = 1
+                                            db_material.deleted_at = datetime.utcnow()
+                                            db.commit()
+                                            clear_material_cache()  # キャッシュをクリア
+                                            st.success("✅ 材料を削除しました")
+                                            st.session_state.delete_material_id = None
+                                            st.rerun()
+                                    except Exception as e:
+                                        logger.exception(f"[DELETE] Failed to delete material {material.id}: {e}")
+                                        st.error(f"❌ 削除エラー: {e}")
+                                        db.rollback()
+                                    finally:
+                                        db.close()
+                            with col2:
+                                if st.button("❌ キャンセル", key=f"cancel_delete_list_{material.id}"):
+                                    st.session_state.delete_material_id = None
+                                    st.rerun()
+                        
+                        # 復活確認（is_deleted=1 の場合のみ表示）
+                        if material.is_deleted == 1 and st.session_state.get("restore_material_id") == material.id:
+                            # 復活前に active同名がいないかチェック
+                            db_check = SessionLocal()
+                            try:
+                                from sqlalchemy import select
+                                active_check_stmt = (
+                                    select(Material.id)
+                                    .where(Material.name_official == material.name_official)
+                                    .where(Material.is_deleted == 0)
+                                    .limit(1)
+                                )
+                                active_existing = db_check.execute(active_check_stmt).scalar_one_or_none()
+                                
+                                if active_existing is not None:
+                                    st.error(f"❌ 同名の材料が既に存在します（ID: {active_existing}）。復活するには材料名を変更してください。")
+                                    new_name = st.text_input("新しい材料名（正式）", key=f"restore_rename_list_{material.id}", value=material.name_official)
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        if st.button("✅ リネームして復活", key=f"confirm_restore_rename_list_{material.id}", type="primary"):
+                                            if new_name and new_name.strip() and new_name.strip() != material.name_official:
+                                                db_restore = SessionLocal()
+                                                try:
+                                                    db_material_restore = db_restore.query(Material).filter(Material.id == material.id).first()
+                                                    if db_material_restore:
+                                                        db_material_restore.is_deleted = 0
+                                                        db_material_restore.deleted_at = None
+                                                        db_material_restore.name_official = new_name.strip()
+                                                        db_restore.commit()
+                                                        st.success(f"✅ 材料を復活しました（名称変更: {material.name_official} → {new_name.strip()}）")
+                                                        st.session_state.restore_material_id = None
+                                                        st.rerun()
+                                                except Exception as e:
+                                                    st.error(f"❌ 復活エラー: {e}")
+                                                    db_restore.rollback()
+                                                finally:
+                                                    db_restore.close()
+                                            else:
+                                                st.warning("⚠️ 新しい材料名を入力してください（現在の名前と異なる必要があります）")
+                                    with col2:
+                                        if st.button("❌ キャンセル", key=f"cancel_restore_list_{material.id}"):
+                                            st.session_state.restore_material_id = None
+                                            st.rerun()
+                                else:
+                                    # 同名が存在しない場合はそのまま復活
+                                    st.warning("⚠️ この材料を復活しますか？")
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        if st.button("✅ 復活を実行", key=f"confirm_restore_list_{material.id}", type="primary"):
+                                            db_restore = SessionLocal()
+                                            try:
+                                                db_material_restore = db_restore.query(Material).filter(Material.id == material.id).first()
+                                                if db_material_restore:
+                                                    db_material_restore.is_deleted = 0
+                                                    db_material_restore.deleted_at = None
+                                                    db_restore.commit()
+                                                    st.success("✅ 材料を復活しました")
+                                                    st.session_state.restore_material_id = None
+                                                    st.rerun()
+                                            except Exception as e:
+                                                st.error(f"❌ 復活エラー: {e}")
+                                                db_restore.rollback()
+                                            finally:
+                                                db_restore.close()
+                                    with col2:
+                                        if st.button("❌ キャンセル", key=f"cancel_restore_list_{material.id}"):
+                                            st.session_state.restore_material_id = None
+                                            st.rerun()
+                            finally:
+                                db_check.close()
+                        
+                        # 削除済み材料の場合は復活ボタンを表示
+                        if material.is_deleted == 1:
+                            if st.button("🔄 復活", key=f"restore_list_{material.id}"):
+                                st.session_state.restore_material_id = material.id
+                                st.rerun()
+                        
+                        # ボタンのスタイルを明示的に設定（白文字を確実に表示、上に15px移動）
+                        button_key = f"detail_{material.id}"
+                        st.markdown(f"""
+                        <div class="material-card-actions" style="margin-top: -15px;">
+                            <style>
+                                .material-card-actions button[key="{button_key}"],
+                                .material-card-actions button[data-testid*="{button_key}"] {{
+                                    background-color: #1a1a1a !important;
+                                    color: #ffffff !important;
+                                    border: 1px solid #1a1a1a !important;
+                                }}
+                                .material-card-actions button[key="{button_key}"]:hover,
+                                .material-card-actions button[data-testid*="{button_key}"]:hover {{
+                                    background-color: #333333 !important;
+                                    color: #ffffff !important;
+                                }}
+                                .material-card-actions button[key="{button_key}"] *,
+                                .material-card-actions button[data-testid*="{button_key}"] * {{
+                                    color: #ffffff !important;
+                                }}
+                            </style>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        if st.button(f"詳細を見る", key=button_key, width='stretch'):
+                            st.session_state.selected_material_id = material.id
+                            st.session_state.page = "材料一覧"  # 一覧ページの詳細表示モード
+                            st.rerun()
+                except Exception as e:
+                    logger.exception(f"[LIST] card render failed: id={getattr(material,'id',None)} err={e}")
+                    st.warning("⚠️ このカードは表示できませんでした（スキップ）")
         
         # パフォーマンス計測（DEBUG=1のみ）
         if debug_enabled and t0 is not None:
@@ -4402,95 +4406,95 @@ def show_submission_status():
         st.markdown(render_site_header(debug=is_debug), unsafe_allow_html=True)
         st.markdown('<h2 class="section-title">📋 投稿ステータス確認</h2>', unsafe_allow_html=True)
         st.info("💡 投稿時に表示された投稿IDまたはUUIDを入力してください。")
-    
-    submission_id_input = st.text_input(
-        "投稿ID または UUID",
-        placeholder="例: 1 または abc123-def456-...",
-        key="submission_status_id"
-    )
-    
-    if submission_id_input and submission_id_input.strip():
-        db = SessionLocal()
-        try:
-            # IDまたはUUIDで検索
-            submission = None
-            if submission_id_input.strip().isdigit():
-                submission = db.query(MaterialSubmission).filter(
-                    MaterialSubmission.id == int(submission_id_input.strip())
-                ).first()
-            else:
-                submission = db.query(MaterialSubmission).filter(
-                    MaterialSubmission.uuid == submission_id_input.strip()
-                ).first()
-            
-            if submission:
-                st.markdown("---")
-                st.markdown("### 📄 投稿情報")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write(f"**投稿ID**: {submission.id}")
-                    st.write(f"**UUID**: {submission.uuid}")
-                    st.write(f"**投稿者**: {submission.submitted_by or '匿名'}")
-                    st.write(f"**投稿日時**: {submission.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
-                
-                with col2:
-                    status_icon = {
-                        "pending": "⏳",
-                        "approved": "✅",
-                        "rejected": "❌"
-                    }.get(submission.status, "📄")
-                    
-                    status_color = {
-                        "pending": "#FFA500",
-                        "approved": "#28A745",
-                        "rejected": "#DC3545"
-                    }.get(submission.status, "#666")
-                    
-                    st.markdown(f"**ステータス**: <span style='color: {status_color}; font-size: 1.2em'>{status_icon} {submission.status}</span>", unsafe_allow_html=True)
-                    st.write(f"**更新日時**: {submission.updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
-                    if submission.approved_material_id:
-                        st.write(f"**承認済み材料ID**: {submission.approved_material_id}")
-                
-                # payload_jsonをパースして表示
-                try:
-                    payload = json.loads(submission.payload_json)
-                    st.markdown("---")
-                    st.markdown("### 📝 投稿内容")
-                    st.write(f"**材料名（正式）**: {payload.get('name_official', 'N/A')}")
-                    st.write(f"**カテゴリ**: {payload.get('category_main', 'N/A')}")
-                    st.write(f"**供給元**: {payload.get('supplier_org', 'N/A')}")
-                except:
-                    pass
-                
-                # ステータス別のメッセージ
-                if submission.status == "pending":
-                    st.info("⏳ 承認待ちです。管理者の承認をお待ちください。")
-                elif submission.status == "approved":
-                    st.success("✅ 承認されました！")
-                    if submission.approved_material_id:
-                        material = db.query(Material).filter(Material.id == submission.approved_material_id).first()
-                        if material:
-                            st.info(f"📝 材料名: {material.name_official} (ID: {material.id})")
-                            st.info(f"📢 公開状態: {'公開' if material.is_published == 1 else '非公開（管理者が公開するまでお待ちください）'}")
-                elif submission.status == "rejected":
-                    st.warning("❌ 却下されました。")
-                    if submission.reject_reason:
-                        st.markdown("### 却下理由")
-                        st.error(submission.reject_reason)
-                
-                # 編集者メモ（あれば）
-                if submission.editor_note:
-                    st.markdown("---")
-                    st.markdown("### 📝 編集者メモ")
-                    st.info(submission.editor_note)
-            else:
-                st.error("❌ 投稿が見つかりませんでした。投稿IDまたはUUIDを確認してください。")
         
-        finally:
-            db.close()
-    else:
-        st.info("💡 投稿IDまたはUUIDを入力してください。")
+        submission_id_input = st.text_input(
+            "投稿ID または UUID",
+            placeholder="例: 1 または abc123-def456-...",
+            key="submission_status_id"
+        )
+        
+        if submission_id_input and submission_id_input.strip():
+            db = SessionLocal()
+            try:
+                # IDまたはUUIDで検索
+                submission = None
+                if submission_id_input.strip().isdigit():
+                    submission = db.query(MaterialSubmission).filter(
+                        MaterialSubmission.id == int(submission_id_input.strip())
+                    ).first()
+                else:
+                    submission = db.query(MaterialSubmission).filter(
+                        MaterialSubmission.uuid == submission_id_input.strip()
+                    ).first()
+                
+                if submission:
+                    st.markdown("---")
+                    st.markdown("### 📄 投稿情報")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**投稿ID**: {submission.id}")
+                        st.write(f"**UUID**: {submission.uuid}")
+                        st.write(f"**投稿者**: {submission.submitted_by or '匿名'}")
+                        st.write(f"**投稿日時**: {submission.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+                    
+                    with col2:
+                        status_icon = {
+                            "pending": "⏳",
+                            "approved": "✅",
+                            "rejected": "❌"
+                        }.get(submission.status, "📄")
+                        
+                        status_color = {
+                            "pending": "#FFA500",
+                            "approved": "#28A745",
+                            "rejected": "#DC3545"
+                        }.get(submission.status, "#666")
+                        
+                        st.markdown(f"**ステータス**: <span style='color: {status_color}; font-size: 1.2em'>{status_icon} {submission.status}</span>", unsafe_allow_html=True)
+                        st.write(f"**更新日時**: {submission.updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
+                        if submission.approved_material_id:
+                            st.write(f"**承認済み材料ID**: {submission.approved_material_id}")
+                    
+                    # payload_jsonをパースして表示
+                    try:
+                        payload = json.loads(submission.payload_json)
+                        st.markdown("---")
+                        st.markdown("### 📝 投稿内容")
+                        st.write(f"**材料名（正式）**: {payload.get('name_official', 'N/A')}")
+                        st.write(f"**カテゴリ**: {payload.get('category_main', 'N/A')}")
+                        st.write(f"**供給元**: {payload.get('supplier_org', 'N/A')}")
+                    except:
+                        pass
+                    
+                    # ステータス別のメッセージ
+                    if submission.status == "pending":
+                        st.info("⏳ 承認待ちです。管理者の承認をお待ちください。")
+                    elif submission.status == "approved":
+                        st.success("✅ 承認されました！")
+                        if submission.approved_material_id:
+                            material = db.query(Material).filter(Material.id == submission.approved_material_id).first()
+                            if material:
+                                st.info(f"📝 材料名: {material.name_official} (ID: {material.id})")
+                                st.info(f"📢 公開状態: {'公開' if material.is_published == 1 else '非公開（管理者が公開するまでお待ちください）'}")
+                    elif submission.status == "rejected":
+                        st.warning("❌ 却下されました。")
+                        if submission.reject_reason:
+                            st.markdown("### 却下理由")
+                            st.error(submission.reject_reason)
+                    
+                    # 編集者メモ（あれば）
+                    if submission.editor_note:
+                        st.markdown("---")
+                        st.markdown("### 📝 編集者メモ")
+                        st.info(submission.editor_note)
+                else:
+                    st.error("❌ 投稿が見つかりませんでした。投稿IDまたはUUIDを確認してください。")
+            
+            finally:
+                db.close()
+        else:
+            st.info("💡 投稿IDまたはUUIDを入力してください。")
     except Exception as e:
         logger.exception(f"[SUBMISSION STATUS] Error: {e}")
         st.error(f"❌ 投稿ステータス確認中にエラーが発生しました: {e}")
@@ -4545,19 +4549,19 @@ def show_material_cards():
         if material_ids:
             db = SessionLocal()
             try:
-            from sqlalchemy import select
-            properties_list = db.execute(
-                select(Property)
-                .where(Property.material_id.in_(material_ids))
-            ).scalars().all()
-            for prop in properties_list:
-                if prop.material_id not in properties_dict:
-                    properties_dict[prop.material_id] = []
-                properties_dict[prop.material_id].append(prop)
-        except Exception as prop_e:
-            logger.warning(f"[CARDS] Failed to fetch properties: {prop_e}")
-        finally:
-            db.close()
+                from sqlalchemy import select
+                properties_list = db.execute(
+                    select(Property)
+                    .where(Property.material_id.in_(material_ids))
+                ).scalars().all()
+                for prop in properties_list:
+                    if prop.material_id not in properties_dict:
+                        properties_dict[prop.material_id] = []
+                    properties_dict[prop.material_id].append(prop)
+            except Exception as prop_e:
+                logger.warning(f"[CARDS] Failed to fetch properties: {prop_e}")
+            finally:
+                db.close()
         
         material = get_material_by_id(material_id)
         
@@ -4567,11 +4571,11 @@ def show_material_cards():
             col1, col2 = st.columns([2, 1])
             
             with col1:
-            st.markdown(f"## {material.name_official or material.name}")
-            if material.category_main or material.category:
-                st.markdown(f"**カテゴリ**: {material.category_main or material.category}")
-            if material.description:
-                st.markdown(f"**説明**: {material.description}")
+                st.markdown(f"## {material.name_official or material.name}")
+                if material.category_main or material.category:
+                    st.markdown(f"**カテゴリ**: {material.category_main or material.category}")
+                if material.description:
+                    st.markdown(f"**説明**: {material.description}")
         
             with col2:
                 # QRコードをPNG bytesとして生成（TypeErrorを防ぐ）
@@ -4597,162 +4601,162 @@ def show_material_cards():
             global _card_generator_import_error, _card_generator_import_traceback
             
             try:
-            # 使用する時だけimportする（lazy import）
-            from schemas import MaterialCardPayload, MaterialCard, PropertyDTO
-            from card_generator import generate_material_card
-            # 成功時はエラー情報をクリア
-            _card_generator_import_error = None
-            _card_generator_import_traceback = None
-            # 主要画像を取得（安全に）
-            primary_image = None
-            primary_image_path = None
-            primary_image_type = None
-            primary_image_description = None
-            
-            # 画像情報の取得（安全モード対応）
-            # 注意: 安全モードでは material.images は noload されているため空のリストになる
-            # そのため、hasattr と len チェックで安全に処理
-            primary_image = None
-            primary_image_path = None
-            primary_image_type = None
-            primary_image_description = None
-            
-            try:
-                # material.images にアクセス（安全モードでは空のリスト）
-                if hasattr(material, 'images') and material.images and len(material.images) > 0:
-                    primary_image = material.images[0]
-                    primary_image_path = getattr(primary_image, 'file_path', None) if primary_image else None
-                    primary_image_type = getattr(primary_image, 'image_type', None) if primary_image else None
-                    primary_image_description = getattr(primary_image, 'description', None) if primary_image else None
-            except Exception as img_e:
-                # 安全モードやスキーマ不整合時は material.images が空またはアクセス不可
-                # エラーは握り潰して続行（画像なしでカード生成）
-                if os.getenv("DEBUG", "0") == "1":
-                    print(f"画像取得エラー（続行、安全モードの可能性）: {img_e}")
-            
-            # 物性データをDTOに変換（一括取得した properties_dict を使用）
-            properties_dto = []
-            try:
-                # 一括取得した properties_dict から取得（N+1問題を回避）
-                material_properties = properties_dict.get(material.id, [])
-                # 表示するキー配列を定義（density, tensile_strength, yield_strength のみ）
-                display_keys = ["density", "tensile_strength", "yield_strength"]
-                display_labels = {
-                    "density": "密度",
-                    "tensile_strength": "引張強度",
-                    "yield_strength": "降伏強度"
-                }
+                # 使用する時だけimportする（lazy import）
+                from schemas import MaterialCardPayload, MaterialCard, PropertyDTO
+                from card_generator import generate_material_card
+                # 成功時はエラー情報をクリア
+                _card_generator_import_error = None
+                _card_generator_import_traceback = None
+                # 主要画像を取得（安全に）
+                primary_image = None
+                primary_image_path = None
+                primary_image_type = None
+                primary_image_description = None
                 
-                for prop in material_properties:
-                    prop_name = getattr(prop, 'property_name', None)
-                    # 表示対象のキーのみ処理
-                    if prop_name in display_keys:
-                        try:
-                            prop_value = getattr(prop, 'value', None)
-                            prop_unit = getattr(prop, 'unit', None)
-                            prop_condition = getattr(prop, 'measurement_condition', None)
-                            
-                            # 表示ラベルを使用（日本語化）
-                            display_name = display_labels.get(prop_name, prop_name)
-                            
-                            prop_dto = PropertyDTO(
-                                property_name=display_name,  # 日本語ラベルを使用
-                                value=float(prop_value) if prop_value is not None else None,
-                                unit=str(prop_unit) if prop_unit else None,
-                                measurement_condition=str(prop_condition) if prop_condition else None
-                            )
-                            properties_dto.append(prop_dto)
-                        except Exception as prop_e:
-                            # 個別の物性データでエラーが発生しても続行
-                            print(f"物性データ変換エラー（スキップ）: {prop_e}")
-                            continue
-            except Exception as props_e:
-                print(f"物性データ取得エラー（続行）: {props_e}")
+                # 画像情報の取得（安全モード対応）
+                # 注意: 安全モードでは material.images は noload されているため空のリストになる
+                # そのため、hasattr と len チェックで安全に処理
+                primary_image = None
+                primary_image_path = None
+                primary_image_type = None
+                primary_image_description = None
+                
+                try:
+                    # material.images にアクセス（安全モードでは空のリスト）
+                    if hasattr(material, 'images') and material.images and len(material.images) > 0:
+                        primary_image = material.images[0]
+                        primary_image_path = getattr(primary_image, 'file_path', None) if primary_image else None
+                        primary_image_type = getattr(primary_image, 'image_type', None) if primary_image else None
+                        primary_image_description = getattr(primary_image, 'description', None) if primary_image else None
+                except Exception as img_e:
+                    # 安全モードやスキーマ不整合時は material.images が空またはアクセス不可
+                    # エラーは握り潰して続行（画像なしでカード生成）
+                    if os.getenv("DEBUG", "0") == "1":
+                        print(f"画像取得エラー（続行、安全モードの可能性）: {img_e}")
             
-            # DTOを作成（欠損はNone/[]に埋める）
-            material_name = material.name or getattr(material, 'name_official', None) or "名称不明"
-            material_name_official = getattr(material, 'name_official', None)
-            material_category = material.category or getattr(material, 'category_main', None)
-            material_category_main = getattr(material, 'category_main', None)
-            material_description = getattr(material, 'description', None)
+                # 物性データをDTOに変換（一括取得した properties_dict を使用）
+                properties_dto = []
+                try:
+                    # 一括取得した properties_dict から取得（N+1問題を回避）
+                    material_properties = properties_dict.get(material.id, [])
+                    # 表示するキー配列を定義（density, tensile_strength, yield_strength のみ）
+                    display_keys = ["density", "tensile_strength", "yield_strength"]
+                    display_labels = {
+                        "density": "密度",
+                        "tensile_strength": "引張強度",
+                        "yield_strength": "降伏強度"
+                    }
+                    
+                    for prop in material_properties:
+                        prop_name = getattr(prop, 'property_name', None)
+                        # 表示対象のキーのみ処理
+                        if prop_name in display_keys:
+                            try:
+                                prop_value = getattr(prop, 'value', None)
+                                prop_unit = getattr(prop, 'unit', None)
+                                prop_condition = getattr(prop, 'measurement_condition', None)
+                                
+                                # 表示ラベルを使用（日本語化）
+                                display_name = display_labels.get(prop_name, prop_name)
+                                
+                                prop_dto = PropertyDTO(
+                                    property_name=display_name,  # 日本語ラベルを使用
+                                    value=float(prop_value) if prop_value is not None else None,
+                                    unit=str(prop_unit) if prop_unit else None,
+                                    measurement_condition=str(prop_condition) if prop_condition else None
+                                )
+                                properties_dto.append(prop_dto)
+                            except Exception as prop_e:
+                                # 個別の物性データでエラーが発生しても続行
+                                print(f"物性データ変換エラー（スキップ）: {prop_e}")
+                                continue
+                except Exception as props_e:
+                    print(f"物性データ取得エラー（続行）: {props_e}")
+                
+                # DTOを作成（欠損はNone/[]に埋める）
+                material_name = material.name or getattr(material, 'name_official', None) or "名称不明"
+                material_name_official = getattr(material, 'name_official', None)
+                material_category = material.category or getattr(material, 'category_main', None)
+                material_category_main = getattr(material, 'category_main', None)
+                material_description = getattr(material, 'description', None)
+                
+                card_payload = MaterialCardPayload(
+                    id=int(material.id),
+                    name=str(material_name),
+                    name_official=str(material_name_official) if material_name_official else None,
+                    category=str(material_category) if material_category else None,
+                    category_main=str(material_category_main) if material_category_main else None,
+                    description=str(material_description) if material_description else None,
+                    properties=properties_dto,
+                    primary_image_path=str(primary_image_path) if primary_image_path else None,
+                    primary_image_type=str(primary_image_type) if primary_image_type else None,
+                    primary_image_description=str(primary_image_description) if primary_image_description else None
+                )
+                
+                card_data = MaterialCard(payload=card_payload)
+                # Materialオブジェクトを直接渡せるようにする（画像URL取得のため）
+                # 重要: material_objを必ず設定する（card_generatorで画像取得に必要）
+                if material is None:
+                    st.warning(f"⚠️ material is None for card generation (ID: {card_payload.id})")
+                else:
+                    card_data.material_obj = material
+                card_html = generate_material_card(card_data)
             
-            card_payload = MaterialCardPayload(
-                id=int(material.id),
-                name=str(material_name),
-                name_official=str(material_name_official) if material_name_official else None,
-                category=str(material_category) if material_category else None,
-                category_main=str(material_category_main) if material_category_main else None,
-                description=str(material_description) if material_description else None,
-                properties=properties_dto,
-                primary_image_path=str(primary_image_path) if primary_image_path else None,
-                primary_image_type=str(primary_image_type) if primary_image_type else None,
-                primary_image_description=str(primary_image_description) if primary_image_description else None
-            )
-            
-            card_data = MaterialCard(payload=card_payload)
-            # Materialオブジェクトを直接渡せるようにする（画像URL取得のため）
-            # 重要: material_objを必ず設定する（card_generatorで画像取得に必要）
-            if material is None:
-                st.warning(f"⚠️ material is None for card generation (ID: {card_payload.id})")
-            else:
-                card_data.material_obj = material
-            card_html = generate_material_card(card_data)
-            
-        except Exception as e:
-            # ImportError/KeyError/その他すべての例外をキャッチ（ホームは必ず表示される）
-            error_message = str(e)
-            import traceback
-            error_traceback = traceback.format_exc()
-            # グローバル変数に記録（render_debug_sidebar_early で表示される）
-            _card_generator_import_error = error_message
-            _card_generator_import_traceback = error_traceback
-            print(f"カード生成エラー: {error_message}")
-            print(error_traceback)
-            
-            # カード画面にエラーを表示（ホームには出さない）
-            st.error(f"⚠️ カード生成中にエラーが発生しました: {error_message}")
-            if os.getenv("DEBUG", "0") == "1":
-                with st.expander("詳細エラー情報", expanded=False):
-                    st.code(error_traceback, language="python")
-            
-            # フォールバック：最低限の情報だけのカード
-            try:
-                material_name = material.name or getattr(material, 'name_official', None) or 'Unknown'
-                material_desc = material.description or 'No description'
-                card_html = f"""
-                <html>
-                <head>
-                    <meta charset="utf-8">
-                    <title>Material Card - {material_name}</title>
-                    <style>
-                        body {{ font-family: Arial, sans-serif; padding: 20px; }}
-                        h1 {{ color: #333; }}
-                        p {{ color: #666; }}
-                    </style>
-                </head>
-                <body>
-                    <h1>{material_name}</h1>
-                    <p><strong>ID:</strong> {material.id}</p>
-                    <p><strong>説明:</strong> {material_desc}</p>
-                    <p style="color: #999; font-size: 12px; margin-top: 20px;">※ 詳細なカード生成に失敗しました。基本情報のみ表示しています。</p>
-                </body>
-                </html>
-                """
-            except Exception as fallback_e:
-                # フォールバックも失敗した場合
-                card_html = f"""
-                <html>
-                <head>
-                    <meta charset="utf-8">
-                    <title>Material Card - Error</title>
-                </head>
-                <body>
-                    <h1>カード生成エラー</h1>
-                    <p>材料ID: {material.id if material else 'N/A'}</p>
-                    <p>エラー: {str(fallback_e)}</p>
-                </body>
-                </html>
-                """
+            except Exception as e:
+                # ImportError/KeyError/その他すべての例外をキャッチ（ホームは必ず表示される）
+                error_message = str(e)
+                import traceback
+                error_traceback = traceback.format_exc()
+                # グローバル変数に記録（render_debug_sidebar_early で表示される）
+                _card_generator_import_error = error_message
+                _card_generator_import_traceback = error_traceback
+                print(f"カード生成エラー: {error_message}")
+                print(error_traceback)
+                
+                # カード画面にエラーを表示（ホームには出さない）
+                st.error(f"⚠️ カード生成中にエラーが発生しました: {error_message}")
+                if os.getenv("DEBUG", "0") == "1":
+                    with st.expander("詳細エラー情報", expanded=False):
+                        st.code(error_traceback, language="python")
+                
+                # フォールバック：最低限の情報だけのカード
+                try:
+                    material_name = material.name or getattr(material, 'name_official', None) or 'Unknown'
+                    material_desc = material.description or 'No description'
+                    card_html = f"""
+                    <html>
+                    <head>
+                        <meta charset="utf-8">
+                        <title>Material Card - {material_name}</title>
+                        <style>
+                            body {{ font-family: Arial, sans-serif; padding: 20px; }}
+                            h1 {{ color: #333; }}
+                            p {{ color: #666; }}
+                        </style>
+                    </head>
+                    <body>
+                        <h1>{material_name}</h1>
+                        <p><strong>ID:</strong> {material.id}</p>
+                        <p><strong>説明:</strong> {material_desc}</p>
+                        <p style="color: #999; font-size: 12px; margin-top: 20px;">※ 詳細なカード生成に失敗しました。基本情報のみ表示しています。</p>
+                    </body>
+                    </html>
+                    """
+                except Exception as fallback_e:
+                    # フォールバックも失敗した場合
+                    card_html = f"""
+                    <html>
+                    <head>
+                        <meta charset="utf-8">
+                        <title>Material Card - Error</title>
+                    </head>
+                    <body>
+                        <h1>カード生成エラー</h1>
+                        <p>材料ID: {material.id if material else 'N/A'}</p>
+                        <p>エラー: {str(fallback_e)}</p>
+                    </body>
+                    </html>
+                    """
             
             # HTMLを表示
             if card_html:
