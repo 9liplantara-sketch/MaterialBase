@@ -20,6 +20,7 @@ import os
 import sys
 import argparse
 import csv
+import re
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
@@ -57,9 +58,62 @@ def normalize_material_name(name: str) -> str:
     return name
 
 
+def generate_material_name_candidates(material_name: str) -> List[str]:
+    """
+    材料名から候補名を複数生成する
+    
+    例: "真鍮（黄銅）" の場合
+    - "真鍮（黄銅）"（元の名前）
+    - "真鍮"（括弧除去）
+    - "真鍮黄銅"（括弧と空白除去）
+    
+    Args:
+        material_name: 材料名（正規化済み）
+    
+    Returns:
+        候補名のリスト（優先順位順）
+    """
+    candidates = []
+    
+    if not material_name:
+        return candidates
+    
+    # 1. 元の名前
+    candidates.append(material_name)
+    
+    # 2. 括弧（全角・半角）を除去した名前
+    # 全角括弧を除去
+    name_no_brackets_full = re.sub(r'[（(].*?[）)]', '', material_name)
+    name_no_brackets_full = name_no_brackets_full.strip()
+    if name_no_brackets_full and name_no_brackets_full != material_name:
+        if name_no_brackets_full not in candidates:
+            candidates.append(name_no_brackets_full)
+    
+    # 半角括弧を除去
+    name_no_brackets_half = re.sub(r'[(].*?[)]', '', material_name)
+    name_no_brackets_half = name_no_brackets_half.strip()
+    if name_no_brackets_half and name_no_brackets_half != material_name:
+        if name_no_brackets_half not in candidates:
+            candidates.append(name_no_brackets_half)
+    
+    # 3. 空白を除去した名前
+    name_no_spaces = material_name.replace(" ", "").replace("　", "")
+    if name_no_spaces and name_no_spaces != material_name:
+        if name_no_spaces not in candidates:
+            candidates.append(name_no_spaces)
+    
+    # 4. 括弧除去 + 空白除去
+    name_no_brackets_no_spaces = name_no_brackets_full.replace(" ", "").replace("　", "")
+    if name_no_brackets_no_spaces and name_no_brackets_no_spaces != material_name:
+        if name_no_brackets_no_spaces not in candidates:
+            candidates.append(name_no_brackets_no_spaces)
+    
+    return candidates
+
+
 def find_use_image_files(material_name: str, upload_dir: Path) -> Dict[str, Optional[Path]]:
     """
-    材料名から用途画像ファイルを探す
+    材料名から用途画像ファイルを探す（複数の候補名を順に試す）
     
     Args:
         material_name: 材料名（正規化済み）
@@ -73,34 +127,50 @@ def find_use_image_files(material_name: str, upload_dir: Path) -> Dict[str, Opti
     if not material_name:
         return result
     
+    # 材料名から候補名を生成
+    name_candidates = generate_material_name_candidates(material_name)
+    
+    if not name_candidates:
+        return result
+    
     # 拡張子候補
     extensions = [".jpg", ".jpeg", ".png", ".webp"]
     
     # kind="space" のファイルを探す（材料名1.jpg など）
-    for ext in extensions:
-        candidates = [
-            upload_dir / f"{material_name}1{ext}",
-            upload_dir / f"{material_name}1.{ext.lstrip('.')}",  # 材料名1.jpg 形式
-        ]
-        for candidate in candidates:
-            if candidate.exists() and candidate.is_file():
-                result["space"] = candidate
-                break
+    # 各候補名を順に試す
+    for candidate_name in name_candidates:
         if result["space"]:
             break
+        
+        for ext in extensions:
+            file_candidates = [
+                upload_dir / f"{candidate_name}1{ext}",
+                upload_dir / f"{candidate_name}1.{ext.lstrip('.')}",  # 材料名1.jpg 形式
+            ]
+            for file_candidate in file_candidates:
+                if file_candidate.exists() and file_candidate.is_file():
+                    result["space"] = file_candidate
+                    break
+            if result["space"]:
+                break
     
     # kind="product" のファイルを探す（材料名2.jpg など）
-    for ext in extensions:
-        candidates = [
-            upload_dir / f"{material_name}2{ext}",
-            upload_dir / f"{material_name}2.{ext.lstrip('.')}",  # 材料名2.jpg 形式
-        ]
-        for candidate in candidates:
-            if candidate.exists() and candidate.is_file():
-                result["product"] = candidate
-                break
+    # 各候補名を順に試す
+    for candidate_name in name_candidates:
         if result["product"]:
             break
+        
+        for ext in extensions:
+            file_candidates = [
+                upload_dir / f"{candidate_name}2{ext}",
+                upload_dir / f"{candidate_name}2.{ext.lstrip('.')}",  # 材料名2.jpg 形式
+            ]
+            for file_candidate in file_candidates:
+                if file_candidate.exists() and file_candidate.is_file():
+                    result["product"] = file_candidate
+                    break
+            if result["product"]:
+                break
     
     return result
 
