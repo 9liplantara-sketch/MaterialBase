@@ -3103,28 +3103,29 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                             category_display = category_name
                             category_title = ""
                         
-                        card_html_raw = f"""
-                        <div class="material-card-container material-texture">
-                            {img_html}
-                            <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; margin-top: 16px;">
-                                <h3 style="color: #1a1a1a; margin: 0; font-size: 1.4rem; font-weight: 700; flex: 1;">{material_name}</h3>
-                            </div>
-                            <div style="margin-bottom: 12px;">
-                                <span class="category-badge" title="{category_title}">{category_display}</span>
-                            </div>
-                            <p style="color: #666; margin: 0; font-size: 0.95rem; line-height: 1.6;">
-                                {material_desc[:80] if material_desc else '説明なし'}...
-                            </p>
-                            <div style="margin: 20px 0;">
-                                {properties_text}
-                            </div>
-                            <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
-                                <small style="color: #999;">ID: {material.id}</small>
-                                {f'<small style="color: #999;">{"✅ 公開" if getattr(material, "is_published", 1) == 1 else "🔒 非公開"}</small>' if include_unpublished else ''}
-                            </div>
-                        </div>
-                        """
-                        card_html = textwrap.dedent(card_html_raw).strip()
+                        # HTMLカードを生成（行頭スペースを強制除去してMarkdownのコードブロック扱いを防ぐ）
+                        card_html_raw = f"""<div class="material-card-container material-texture">
+{img_html}
+<div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; margin-top: 16px;">
+<h3 style="color: #1a1a1a; margin: 0; font-size: 1.4rem; font-weight: 700; flex: 1;">{material_name}</h3>
+</div>
+<div style="margin-bottom: 12px;">
+<span class="category-badge" title="{category_title}">{category_display}</span>
+</div>
+<p style="color: #666; margin: 0; font-size: 0.95rem; line-height: 1.6;">
+{material_desc[:80] if material_desc else '説明なし'}...
+</p>
+<div style="margin: 20px 0;">
+{properties_text}
+</div>
+<div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
+<small style="color: #999;">ID: {material.id}</small>
+{f'<small style="color: #999;">{"✅ 公開" if getattr(material, "is_published", 1) == 1 else "🔒 非公開"}</small>' if include_unpublished else ''}
+</div>
+</div>"""
+                        # 行頭スペースを強制除去（Markdownのコードブロック扱いを防ぐ）
+                        card_html = "\n".join(line.lstrip() for line in card_html_raw.splitlines()).strip()
+                        # st.markdown でHTMLをレンダリング（unsafe_allow_html=True を必ず指定、st.writeは禁止）
                         st.markdown(card_html, unsafe_allow_html=True)
                         
                         # 管理者表示時は公開/非公開切り替えスイッチを表示
