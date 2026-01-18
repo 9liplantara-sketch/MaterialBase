@@ -143,6 +143,11 @@ def mask_db_url(url: str) -> str:
 
 
 
+def is_admin_mode() -> bool:
+    """管理者モードかどうかを判定（DEBUGとは分離）"""
+    return get_flag("ADMIN_MODE", False)
+
+
 # モジュールの公開APIを明示的に定義
 __all__ = [
     "is_cloud",
@@ -151,5 +156,6 @@ __all__ = [
     "mask_db_url",
     "get_secret_str",
     "get_flag",
+    "is_admin_mode",
     "SETTINGS_VERSION",
 ]

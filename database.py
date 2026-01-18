@@ -211,6 +211,9 @@ class MaterialSubmission(Base):
     # ステータス: pending/approved/rejected
     status = Column(String(20), nullable=False, default="pending")  # pending, approved, rejected
     
+    # 材料名（正式）- 重複チェック用（DBには既に追加済み想定）
+    name_official = Column(String(255), nullable=True, index=True)  # 材料名（正式）
+    
     # 投稿内容（JSON形式でmaterial入力内容を丸ごと保存）
     payload_json = Column(Text, nullable=False)  # JSON文字列
     

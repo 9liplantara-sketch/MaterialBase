@@ -1122,6 +1122,49 @@ def show_layer2_form():
     )
     
     st.markdown("---")
+    st.markdown("### D. 物性値（任意）")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        density_value = st.number_input(
+            "密度 (g/cm³)",
+            min_value=0.0,
+            value=None,
+            step=0.01,
+            format="%.2f",
+            key="density",
+            help="材料の密度を入力してください（例: 1.38）"
+        )
+        if density_value is not None and density_value > 0:
+            form_data['density'] = float(density_value)
+    
+    with col2:
+        tensile_strength_value = st.number_input(
+            "引張強度 (MPa)",
+            min_value=0.0,
+            value=None,
+            step=0.1,
+            format="%.1f",
+            key="tensile_strength",
+            help="引張強度を入力してください（例: 50.0）"
+        )
+        if tensile_strength_value is not None and tensile_strength_value > 0:
+            form_data['tensile_strength'] = float(tensile_strength_value)
+    
+    with col3:
+        yield_strength_value = st.number_input(
+            "降伏強度 (MPa)",
+            min_value=0.0,
+            value=None,
+            step=0.1,
+            format="%.1f",
+            key="yield_strength",
+            help="降伏強度を入力してください（例: 45.0）"
+        )
+        if yield_strength_value is not None and yield_strength_value > 0:
+            form_data['yield_strength'] = float(yield_strength_value)
+    
+    st.markdown("---")
     st.markdown("### F. 環境・倫理・未来")
     
     CIRCULARITY_OPTIONS = [
@@ -1482,12 +1525,15 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
         
         uploaded_images = []
         
-        # name_official の必須チェック（UNIQUE制約衝突防止）
-        # 最終 form_data["name_official"] を確認（キャッシュから設定済み）
-        name_official = form_data.get("name_official", "").strip()
+        # name_official を session_state キャッシュから最終確定（空なら送信停止）
+        NAME_CACHE = "name_official_cached"
+        name_official = st.session_state.get(NAME_CACHE, "").strip()
+        form_data["name_official"] = name_official
+        form_data["name"] = name_official
+        
         if not name_official:
             error_msg = "材料名（正式）が入力されていません。必須項目です。"
-            logger.warning(f"[SAVE SUBMISSION] name_official is empty (form_data['name_official']='{form_data.get('name_official')}'), skipping submission (INSERTしない)")
+            logger.warning(f"[SAVE SUBMISSION] name_official is empty (cached='{st.session_state.get(NAME_CACHE, '')}'), skipping submission (INSERTしない)")
             st.error(f"❌ {error_msg}")
             return {
                 "ok": False,
@@ -1495,8 +1541,44 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
                 "error_code": "name_official_empty",
             }
         
+        # 送信前に DB を問い合わせ：pending の同名チェック
+        from sqlalchemy import select
+        existing_pending = db.execute(
+            select(MaterialSubmission.id)
+            .where(MaterialSubmission.status == "pending")
+            .where(MaterialSubmission.name_official == name_official)
+            .limit(1)
+        ).scalar_one_or_none()
+        
+        if existing_pending is not None:
+            st.info(f"ℹ️ すでに承認待ちです（投稿ID: {existing_pending}）")
+            logger.info(f"[SAVE SUBMISSION] Duplicate pending submission detected (id={existing_pending}, name_official='{name_official}'), skipping INSERT")
+            return {
+                "ok": False,
+                "error": f"すでに承認待ちです（投稿ID: {existing_pending}）",
+                "error_code": "duplicate_pending",
+            }
+        
         # ログ出力（送信時の値を確認）
         logger.info(f"[SAVE SUBMISSION] name_official='{name_official}' (length={len(name_official)})")
+        
+        # properties 配列を作成（値があるものだけ）
+        properties_list = []
+        property_mapping = {
+            "density": ("density", "g/cm³"),
+            "tensile_strength": ("tensile_strength", "MPa"),
+            "yield_strength": ("yield_strength", "MPa"),
+        }
+        for form_key, (prop_key, unit) in property_mapping.items():
+            value = form_data.get(form_key)
+            if value is not None and value > 0:
+                properties_list.append({
+                    "key": prop_key,
+                    "value": float(value),
+                    "unit": unit
+                })
+        form_data["properties"] = properties_list
+        logger.info(f"[SAVE SUBMISSION] properties={properties_list}")
         
         # 必須フィールドの補完（None/空文字列をデフォルト値で埋める）
         # images を除去した後に _normalize_required を呼ぶ（images が再追加されないように）
@@ -1639,10 +1721,11 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
         # payload_jsonにform_dataをJSON文字列として保存
         payload_json = json.dumps(form_data, ensure_ascii=False, default=str)
         
-        # MaterialSubmissionを作成
+        # MaterialSubmissionを作成（name_official も保存）
         submission = MaterialSubmission(
             uuid=submission_uuid,
             status="pending",
+            name_official=name_official,  # 重複チェック用
             payload_json=payload_json,
             submitted_by=submitted_by if submitted_by and submitted_by.strip() else None
         )

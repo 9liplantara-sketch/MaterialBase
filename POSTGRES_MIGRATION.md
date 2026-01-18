@@ -226,3 +226,33 @@ Streamlit Community Cloudは**ローカルファイル永続性を保証しま�
 **ローカル開発**: SQLiteの使用は可能（開発環境のみ）
 
 **本番（Cloud）**: Postgres必須（データ永続化のため）
+
+## Partial Unique Index（削除済み材料のUNIQUE制約対応）
+
+削除済み材料（`is_deleted=1`）を無視してUNIQUE制約を適用するため、Postgresでは **partial unique index** を使用します。
+
+### Neonで実行するSQL
+
+```sql
+-- 1. 既存のUNIQUE制約/インデックスを削除
+DROP INDEX IF EXISTS uq_material_name_official;
+ALTER TABLE materials DROP CONSTRAINT IF EXISTS uq_material_name_official;
+
+-- 2. Partial Unique Indexを作成（is_deleted=0 のものだけユニーク）
+CREATE UNIQUE INDEX uq_material_name_official_active 
+ON materials(name_official) 
+WHERE is_deleted = 0;
+
+-- 3. material_submissions に name_official カラムを追加（既に追加済みの場合はスキップ）
+ALTER TABLE material_submissions 
+ADD COLUMN IF NOT EXISTS name_official VARCHAR(255);
+
+-- 4. material_submissions に pending 用のインデックスを作成（重複チェック高速化）
+CREATE INDEX IF NOT EXISTS idx_material_submissions_pending_name 
+ON material_submissions(status, name_official) 
+WHERE status = 'pending';
+```
+
+**注意**:
+- SQLiteでは partial unique index がサポートされていないため、この機能はPostgres専用です
+- SQLite環境では従来のUNIQUE制約が適用されます（削除済み材料もUNIQUE制約の対象になります）
