@@ -2935,6 +2935,7 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                 self.name = d.get("name")
                 self.category_main = d.get("category_main")
                 self.category = d.get("category")
+                self.description = d.get("description")  # 説明（後方互換）
                 self.is_published = d.get("is_published", 1)
                 self.is_deleted = d.get("is_deleted", 0)
                 self.created_at = d.get("created_at")
@@ -2992,7 +2993,7 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                             ])
                         
                         material_name = material.name_official or material.name or "名称不明"
-                        material_desc = material.description or ""
+                        material_desc = getattr(material, "description", "") or ""
                         
                         # 素材画像を取得（キャッシュ対策: Base64エンコードで直接表示）
                         from utils.image_display import get_material_image_ref, display_image_unified
