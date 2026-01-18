@@ -2406,7 +2406,8 @@ def show_home():
         st.caption("BUILD_TAG: APPROVAL_IMG_EDIT_FIX_V1")
     
     # デバッグモードかどうか（ローカル変数名を debug_enabled に統一）
-    debug_enabled = os.getenv("DEBUG", "0") == "1"
+    # is_debug は debug_enabled のエイリアスとして定義（後方互換）
+    is_debug = debug_enabled
     
     # 修正1: DEBUGモードでもロゴ/画像描画は必ず実行（CSS無効化は<style>注入だけ）
     # ロゴマークとタイプロゴを表示（ホームでは常に表示）
@@ -2430,7 +2431,7 @@ def show_home():
         )
     
     # 修正3,4: DEBUG=1のときは診断情報をst.jsonで表示（CSS無効でも読める）
-    if is_debug:
+    if debug_enabled:
         st.markdown("---")
         st.markdown("### 🔍 デバッグ情報（CSS無効でも表示）")
         
@@ -2699,9 +2700,19 @@ def show_home():
                         prop_text = " / ".join([f"{p.property_name}: {p.value} {p.unit or ''}" for p in props])
                         st.markdown(f"<small style='color: #999;'>{prop_text}</small>", unsafe_allow_html=True)
                     
-                    # 登録日
-                    if material.created_at:
-                        st.markdown(f"<small style='color: #999;'>登録日: {material.created_at.strftime('%Y/%m/%d')}</small>", unsafe_allow_html=True)
+                    # 登録日（安全化: created_at が str/datetime/None に対応）
+                    created_at = getattr(material, "created_at", None)
+                    if created_at:
+                        if hasattr(created_at, "strftime"):
+                            # datetime オブジェクトの場合
+                            date_str = created_at.strftime('%Y/%m/%d')
+                        elif isinstance(created_at, str):
+                            # 文字列の場合（先頭10文字を表示）
+                            date_str = created_at[:10] if len(created_at) >= 10 else created_at
+                        else:
+                            date_str = str(created_at)[:10] if created_at else ""
+                        if date_str:
+                            st.markdown(f"<small style='color: #999;'>登録日: {date_str}</small>", unsafe_allow_html=True)
                 
                 st.markdown("---")
     
@@ -2771,15 +2782,17 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                 is_admin = is_admin_mode()
                 if is_admin:
                     col1, col2, col3 = st.columns([1, 1, 8])
-                with col1:
-                    if st.button("✏️ 編集", key=f"edit_{material.id}"):
-                        st.session_state.edit_material_id = material.id
-                        st.session_state.page = "材料登録"
-                        st.rerun()
-                with col2:
-                    if st.button("🗑️ 削除", key=f"delete_{material.id}"):
-                        st.session_state.delete_material_id = material.id
-                        st.rerun()
+                    with col1:
+                        if st.button("✏️ 編集", key=f"edit_{material.id}"):
+                            st.session_state.edit_material_id = material.id
+                            st.session_state.page = "材料登録"
+                            st.rerun()
+                    with col2:
+                        if st.button("🗑️ 削除", key=f"delete_{material.id}"):
+                            st.session_state.delete_material_id = material.id
+                            st.rerun()
+                    with col3:
+                        pass  # スペーサー
             
                 # 削除確認（2段階確認）
                 if st.session_state.get("delete_material_id") == material.id:
