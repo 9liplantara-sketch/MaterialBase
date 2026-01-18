@@ -2505,6 +2505,7 @@ def show_home():
             self.name = d.get("name")
             self.category_main = d.get("category_main")
             self.category = d.get("category")
+            self.description = d.get("description")  # 説明（後方互換）
             self.is_published = d.get("is_published", 1)
             self.is_deleted = d.get("is_deleted", 0)
             self.created_at = d.get("created_at")
@@ -2688,8 +2689,9 @@ def show_home():
                     st.markdown(f'<span class="category-badge" title="{category_title}">{category_display}</span>', unsafe_allow_html=True)
                     
                     # 説明
-                    if material.description:
-                        st.markdown(f"<p style='color: #666; margin-top: 8px; font-size: 0.9rem;'>{material.description[:100]}{'...' if len(material.description) > 100 else ''}</p>", unsafe_allow_html=True)
+                    material_desc = getattr(material, "description", "") or ""
+                    if material_desc:
+                        st.markdown(f"<p style='color: #666; margin-top: 8px; font-size: 0.9rem;'>{material_desc[:100]}{'...' if len(material_desc) > 100 else ''}</p>", unsafe_allow_html=True)
                     
                     # 主要物性（1〜2個）
                     if material.properties:
