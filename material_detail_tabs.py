@@ -3,6 +3,7 @@
 """
 import streamlit as st
 import json
+import os
 from pathlib import Path
 from typing import Optional, List, Dict
 from PIL import Image as PILImage
@@ -324,20 +325,57 @@ def show_procurement_uses_tab(material):
     st.markdown("---")
     st.markdown("### 代表的な使用例（用途写真ギャラリー）")
     
-    # 統一構成の画像を優先表示（get_material_image_refを使用）
-    from utils.image_display import get_material_image_ref, display_image_unified
+    # imagesテーブルから用途画像を取得（kind='space' と kind='product'）
+    from database import SessionLocal, Image
     
-    # space/product画像を取得
-    space_src, space_debug = get_material_image_ref(material, "space", Path.cwd())
-    product_src, product_debug = get_material_image_ref(material, "product", Path.cwd())
+    # 既存のimagesがロードされているか確認
+    use_images = {}
+    if hasattr(material, 'images') and material.images:
+        # material.imagesからkind='space'と'product'を抽出
+        for img in material.images:
+            if img.kind in ('space', 'product') and img.public_url:
+                use_images[img.kind] = img.public_url
+    else:
+        # データベースから直接取得
+        db = SessionLocal()
+        try:
+            images = db.query(Image).filter(
+                Image.material_id == material.id,
+                Image.kind.in_(['space', 'product'])
+            ).all()
+            for img in images:
+                if img.public_url:
+                    use_images[img.kind] = img.public_url
+        finally:
+            db.close()
     
-    # space/product画像がある場合は表示
-    if space_src or product_src:
-        cols = st.columns(2)
-        with cols[0]:
-            display_image_unified(space_src, caption="空間の使用例", width="stretch", debug=space_debug)
-        with cols[1]:
-            display_image_unified(product_src, caption="プロダクトの使用例", width="stretch", debug=product_debug)
+    # 用途画像を表示（空間写真・プロダクト写真）
+    cols = st.columns(2)
+    
+    # cache-buster用のバージョン
+    image_version = os.getenv("IMAGE_VERSION") or "dev"
+    
+    with cols[0]:
+        st.markdown("#### 空間写真")
+        if 'space' in use_images:
+            space_url = use_images['space']
+            # cache-busterを付ける
+            separator = "&" if "?" in space_url else "?"
+            space_url_with_cache = f"{space_url}{separator}v={image_version}"
+            st.image(space_url_with_cache, caption="空間の使用例", use_container_width=True)
+        else:
+            st.info("画像なし")
+    
+    with cols[1]:
+        st.markdown("#### プロダクト写真")
+        if 'product' in use_images:
+            product_url = use_images['product']
+            # cache-busterを付ける
+            separator = "&" if "?" in product_url else "?"
+            product_url_with_cache = f"{product_url}{separator}v={image_version}"
+            st.image(product_url_with_cache, caption="プロダクトの使用例", use_container_width=True)
+        else:
+            st.info("画像なし")
     
     # DBから取得したUseExampleも表示（フォールバック）
     try:

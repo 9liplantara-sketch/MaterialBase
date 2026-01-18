@@ -881,7 +881,7 @@ def get_db():
     return SessionLocal()
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def get_material_count_cached(db_url: str, include_unpublished: bool = False, include_deleted: bool = False) -> int:
     """
     材料件数を取得（キャッシュ付き、30秒TTL）
@@ -927,7 +927,7 @@ def get_material_count_cached(db_url: str, include_unpublished: bool = False, in
         db.close()
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def fetch_materials_page_cached(
     db_url: str,
     include_unpublished: bool = False,
@@ -962,6 +962,8 @@ def fetch_materials_page_cached(
     from utils.material_cache import freeze_material_row
     from sqlalchemy import select
     from sqlalchemy.orm import noload, load_only
+    from database import Image
+    from database import Image
     
     SessionLocal = get_sessionmaker(db_url)
     db = SessionLocal()
@@ -1018,12 +1020,13 @@ def fetch_materials_page_cached(
         result = db.execute(stmt)
         materials = result.unique().scalars().all()
         
-        # material_idsを取得して画像情報を一括取得（N+1問題を回避）
+        # material_idsを取得して画像情報とpropertiesを一括取得（N+1問題を回避）
         material_ids = [m.id for m in materials]
         primary_images_dict = {}  # {material_id: public_url}
+        properties_dict = {}  # {material_id: [Property, ...]}
         
         if material_ids:
-            from database import Image
+            # primary画像を一括取得
             images_stmt = select(Image).filter(
                 Image.material_id.in_(material_ids),
                 Image.kind == "primary"
@@ -1033,13 +1036,33 @@ def fetch_materials_page_cached(
             for img in images:
                 if img.public_url:
                     primary_images_dict[img.material_id] = img.public_url
+            
+            # propertiesを一括取得（表示用、最大3件まで）
+            from database import Property
+            properties_stmt = select(Property).filter(
+                Property.material_id.in_(material_ids)
+            )
+            properties_result = db.execute(properties_stmt)
+            properties_list = properties_result.scalars().all()
+            for prop in properties_list:
+                if prop.material_id not in properties_dict:
+                    properties_dict[prop.material_id] = []
+                # Propertyオブジェクトをdict化（DetachedInstanceErrorを防ぐ）
+                prop_dict = {
+                    "property_name": prop.property_name,
+                    "value": prop.value,
+                    "unit": prop.unit,
+                }
+                properties_dict[prop.material_id].append(prop_dict)
         
-        # dict化（DetachedInstanceErrorを防ぐ、scalar列のみ参照、画像URLも含める）
+        # dict化（DetachedInstanceErrorを防ぐ、scalar列のみ参照、画像URLとpropertiesも含める）
         material_dicts = []
         for m in materials:
             d = freeze_material_row(m)
             # primary画像のpublic_urlを追加
             d["primary_image_url"] = primary_images_dict.get(m.id)
+            # propertiesを追加（表示用、最大3件まで）
+            d["properties"] = properties_dict.get(m.id, [])[:3]
             material_dicts.append(d)
         
         if t0 is not None:
@@ -1346,11 +1369,17 @@ def show_materials_duplicate_diagnostics():
             ui_count = db_count
             unique_names_count = 0
         
-        # Duplicate name list（同名の材料を検出）
-        from collections import Counter
-        name_counter = Counter([m.name_official or m.name for m in materials if m.name_official or m.name])
-        duplicates = {name: count for name, count in name_counter.items() if count > 1}
-        duplicate_list = sorted(duplicates.items(), key=lambda x: x[1], reverse=True)[:20]
+        # Duplicate name list（同名の材料を検出、DEBUG=0の時はスキップ）
+        duplicate_list = []
+        if debug_enabled:
+            from collections import Counter
+            # DEBUG時のみ重複チェック（軽量クエリで取得）
+            name_stmt = select(Material.name_official, func.count(Material.id)).filter(
+                Material.is_deleted == 0,
+                Material.is_published == 1
+            ).group_by(Material.name_official).having(func.count(Material.id) > 1).limit(20)
+            name_results = db.execute(name_stmt).all()
+            duplicate_list = [(name, count) for name, count in name_results if name]
         
         # 統計表示
         col1, col2, col3, col4 = st.columns(4)
@@ -1361,23 +1390,29 @@ def show_materials_duplicate_diagnostics():
         with col3:
             st.metric("Unique names count", unique_names_count)
         with col4:
-            st.metric("Duplicate names", len(duplicates))
+            st.metric("Duplicate names", len(duplicate_list))
         
-        # 重複チェック結果
-        if ui_count == unique_names_count:
-            st.success("✅ 重複なし: UI materials count == Unique names count")
-        else:
-            st.warning(f"⚠️ 重複あり: UI materials count ({ui_count}) != Unique names count ({unique_names_count})")
-        
-        # 重複リスト表示
-        if duplicate_list:
-            st.markdown("### 重複材料名（上位20件）")
-            for name, count in duplicate_list:
-                st.markdown(f"- **{name}**: {count}件")
-                
-                # 重複している材料のIDを表示
-                duplicate_materials = [m for m in materials if (m.name_official or m.name) == name]
-                ids = [str(m.id) for m in duplicate_materials]
+        # 重複チェック結果（DEBUG=0の時はスキップ）
+        if debug_enabled:
+            if ui_count == unique_names_count:
+                st.success("✅ 重複なし: UI materials count == Unique names count")
+            else:
+                st.warning(f"⚠️ 重複あり: UI materials count ({ui_count}) != Unique names count ({unique_names_count})")
+            
+            # 重複リスト表示
+            if duplicate_list:
+                st.markdown("### 重複材料名（上位20件）")
+                for name, count in duplicate_list:
+                    st.markdown(f"- **{name}**: {count}件")
+                    
+                    # 重複している材料のIDを表示（軽量クエリで取得）
+                    duplicate_ids_stmt = select(Material.id).filter(
+                        Material.name_official == name,
+                        Material.is_deleted == 0,
+                        Material.is_published == 1
+                    ).limit(10)
+                    duplicate_ids = db.execute(duplicate_ids_stmt).scalars().all()
+                    ids = [str(mid) for mid in duplicate_ids]
                 st.caption(f"  ID: {', '.join(ids)}")
         else:
             st.info("重複している材料名はありません。")
@@ -1695,53 +1730,53 @@ def render_debug_sidebar_early():
                                 st.write("**素材ごとの探索結果（先頭30件）:**")
                                 
                                 for m in materials[:30]:  # 先頭30件のみ
-                                try:
-                                    # get_material_image_refを使用して画像参照を取得
-                                    # project_rootはbaseの親の親の親（static/images/materials -> static/images -> static -> プロジェクトルート）
-                                    project_root = base.parent.parent.parent
-                                    primary_src, primary_debug = get_material_image_ref(m, "primary", project_root)
-                                    space_src, space_debug = get_material_image_ref(m, "space", project_root)
-                                    product_src, product_debug = get_material_image_ref(m, "product", project_root)
-                                    
-                                    material_display_name = getattr(m, 'name_official', None) or getattr(m, 'name', None) or "N/A"
-                                    
-                                    with st.expander(f"📦 {material_display_name}", expanded=False):
-                                        # safe_slugとbase_dir_sampleを表示
-                                        safe_slug = primary_debug.get('safe_slug', 'N/A')
-                                        base_dir_sample = primary_debug.get('base_dir_sample', [])
-                                        chosen_branch = primary_debug.get('chosen_branch', 'unknown')
-                                        final_src_type = primary_debug.get('final_src_type', 'unknown')
-                                        final_path_exists = primary_debug.get('final_path_exists', False)
+                                    try:
+                                        # get_material_image_refを使用して画像参照を取得
+                                        # project_rootはbaseの親の親の親（static/images/materials -> static/images -> static -> プロジェクトルート）
+                                        project_root = base.parent.parent.parent
+                                        primary_src, primary_debug = get_material_image_ref(m, "primary", project_root)
+                                        space_src, space_debug = get_material_image_ref(m, "space", project_root)
+                                        product_src, product_debug = get_material_image_ref(m, "product", project_root)
                                         
-                                        st.write(f"**safe_slug:** {safe_slug}")
-                                        st.write(f"**base_dir_sample:** {', '.join(base_dir_sample[:10])}..." if len(base_dir_sample) > 10 else f"**base_dir_sample:** {', '.join(base_dir_sample)}")
-                                        st.write(f"**chosen_branch:** {chosen_branch}")
-                                        st.write(f"**final_src_type:** {final_src_type}")
-                                        st.write(f"**final_path_exists:** {final_path_exists}")
+                                        material_display_name = getattr(m, 'name_official', None) or getattr(m, 'name', None) or "N/A"
                                         
-                                        if primary_src:
-                                            if isinstance(primary_src, str):
-                                                st.write(f"**final_url:** {primary_src[:80]}..." if len(primary_src) > 80 else f"**final_url:** {primary_src}")
-                                            elif isinstance(primary_src, Path):
-                                                st.write(f"**final_path:** {primary_src.resolve()}")
-                                        else:
-                                            st.warning("⚠️ primary.jpg not found")
-                                        
-                                        # candidate_pathsとfailed_pathsを表示
-                                        candidate_paths = primary_debug.get('candidate_paths', [])
-                                        failed_paths = primary_debug.get('failed_paths', [])
-                                        if candidate_paths:
-                                            st.write(f"**candidate_paths:** {len(candidate_paths)}件")
-                                        if failed_paths:
-                                            st.write(f"**failed_paths:** {len(failed_paths)}件")
-                                        
-                                        # 詳細情報はexpanderへ
-                                        with st.expander("🔍 詳細デバッグ情報", expanded=False):
-                                            st.json(primary_debug)
-                                except Exception as e:
-                                    st.write(f"❌ {getattr(m, 'name_official', None) or 'N/A'}: {e}")
-                                    with st.expander("詳細", expanded=False):
-                                        st.code(traceback.format_exc())
+                                        with st.expander(f"📦 {material_display_name}", expanded=False):
+                                            # safe_slugとbase_dir_sampleを表示
+                                            safe_slug = primary_debug.get('safe_slug', 'N/A')
+                                            base_dir_sample = primary_debug.get('base_dir_sample', [])
+                                            chosen_branch = primary_debug.get('chosen_branch', 'unknown')
+                                            final_src_type = primary_debug.get('final_src_type', 'unknown')
+                                            final_path_exists = primary_debug.get('final_path_exists', False)
+                                            
+                                            st.write(f"**safe_slug:** {safe_slug}")
+                                            st.write(f"**base_dir_sample:** {', '.join(base_dir_sample[:10])}..." if len(base_dir_sample) > 10 else f"**base_dir_sample:** {', '.join(base_dir_sample)}")
+                                            st.write(f"**chosen_branch:** {chosen_branch}")
+                                            st.write(f"**final_src_type:** {final_src_type}")
+                                            st.write(f"**final_path_exists:** {final_path_exists}")
+                                            
+                                            if primary_src:
+                                                if isinstance(primary_src, str):
+                                                    st.write(f"**final_url:** {primary_src[:80]}..." if len(primary_src) > 80 else f"**final_url:** {primary_src}")
+                                                elif isinstance(primary_src, Path):
+                                                    st.write(f"**final_path:** {primary_src.resolve()}")
+                                            else:
+                                                st.warning("⚠️ primary.jpg not found")
+                                            
+                                            # candidate_pathsとfailed_pathsを表示
+                                            candidate_paths = primary_debug.get('candidate_paths', [])
+                                            failed_paths = primary_debug.get('failed_paths', [])
+                                            if candidate_paths:
+                                                st.write(f"**candidate_paths:** {len(candidate_paths)}件")
+                                            if failed_paths:
+                                                st.write(f"**failed_paths:** {len(failed_paths)}件")
+                                            
+                                            # 詳細情報はexpanderへ
+                                            with st.expander("🔍 詳細デバッグ情報", expanded=False):
+                                                st.json(primary_debug)
+                                    except Exception as e:
+                                        st.write(f"❌ {getattr(m, 'name_official', None) or 'N/A'}: {e}")
+                                        with st.expander("詳細", expanded=False):
+                                            st.code(traceback.format_exc())
                                 else:
                                     st.write("- **materials:** 0件（DBが空）")
                         except Exception as e:
@@ -2191,8 +2226,9 @@ def main():
         show_asset_diagnostics(asset_stats)
         return  # 診断モード時は他のページを表示しない
     
-    # 画像診断モード（デバッグ時のみ表示）
-    if debug_images:
+    # 画像診断モード（デバッグ時のみ表示、DEBUG=0の時はスキップ）
+    debug_enabled = os.getenv("DEBUG", "0") == "1"
+    if debug_images and debug_enabled:
         from utils.image_diagnostics import show_image_diagnostics
         materials = get_all_materials()
         show_image_diagnostics(materials, Path.cwd())
@@ -2556,7 +2592,7 @@ def show_home():
             self.is_deleted = d.get("is_deleted", 0)
             self.created_at = d.get("created_at")
             self.updated_at = d.get("updated_at")
-            self.properties = []  # 一覧ではロードしない
+            self.properties = d.get("properties", [])  # 一覧では一括取得したpropertiesを使用
             self.images = []  # 一覧ではロードしない
             self.primary_image_url = d.get("primary_image_url")  # imagesテーブルから取得したpublic_url
     
@@ -2660,66 +2696,21 @@ def show_home():
                 col_img, col_info = st.columns([1, 3])
                 
                 with col_img:
-                    # サムネ画像を表示（キャッシュ対策: Base64エンコードで直接表示）
-                    from utils.image_display import get_material_image_ref, display_image_unified
-                    import hashlib
-                    import time
-                    
-                    # 材料の主画像を取得（get_material_image_refを使用）
-                    # get_material_image_refを使用
-                    from utils.logo import get_project_root
-                    image_src, image_debug = get_material_image_ref(material, "primary", get_project_root())
-                    image_source = image_src
+                    # サムネ画像を表示（高速化: imagesテーブルのpublic_urlを直接使用、base64化やローカル探索をしない）
+                    primary_image_url = getattr(material, "primary_image_url", None)
                     
                     # サムネサイズで表示（プレースホルダー付き）
-                    if image_source:
-                        # ローカルパス（Pathまたはstrでファイルがexists）の場合はPILImageとして扱う
-                        if isinstance(image_source, (Path, str)) and not str(image_source).startswith(('http://', 'https://', 'data:')):
-                            # ローカルファイルパスの場合
-                            path = Path(image_source) if isinstance(image_source, str) else image_source
-                            if path.exists() and path.is_file():
-                                # PILImageとして開いて表示（キャッシュバスター不要）
-                                pil_img = PILImage.open(path)
-                                if pil_img.mode != 'RGB':
-                                    if pil_img.mode in ('RGBA', 'LA', 'P'):
-                                        rgb_img = PILImage.new('RGB', pil_img.size, (255, 255, 255))
-                                        if pil_img.mode == 'RGBA':
-                                            rgb_img.paste(pil_img, mask=pil_img.split()[3])
-                                        elif pil_img.mode == 'LA':
-                                            rgb_img.paste(pil_img.convert('RGB'), mask=pil_img.split()[1])
-                                        else:
-                                            rgb_img = pil_img.convert('RGB')
-                                        pil_img = rgb_img
-                                    else:
-                                        pil_img = pil_img.convert('RGB')
-                                thumb_size = (120, 120)
-                                pil_img.thumbnail(thumb_size, PILImage.Resampling.LANCZOS)
-                                st.image(pil_img, width=120)
-                            else:
-                                display_image_unified(None, width=120, placeholder_size=(120, 120))
-                        elif isinstance(image_source, str) and image_source.startswith(('http://', 'https://')):
-                            # http/https URLの場合はキャッシュバスターを追加
-                            try:
-                                from material_map_version import APP_VERSION
-                            except ImportError:
-                                APP_VERSION = get_git_sha()
-                            separator = "&" if "?" in image_source else "?"
-                            st.image(f"{image_source}{separator}v={APP_VERSION}", width=120)
-                        else:
-                            # Path/PILImageの場合はto_png_bytes()で統一処理（サムネイルサイズ指定）
-                            from utils.image_display import to_png_bytes
-                            png_bytes = to_png_bytes(image_source, max_size=(120, 120))
-                            if png_bytes:
-                                img_base64 = base64.b64encode(png_bytes).decode()
-                                # 画像のハッシュをキーとして使用（キャッシュ対策）
-                                img_hash = hashlib.md5(png_bytes).hexdigest()[:8]
-                                st.image(f"data:image/png;base64,{img_base64}", width=120)
-                            else:
-                                # プレースホルダーを表示
-                                display_image_unified(None, width=120)
+                    if primary_image_url and primary_image_url.startswith(('http://', 'https://')):
+                        # R2の公開URLを直接使用（キャッシュバスター追加）
+                        try:
+                            from material_map_version import APP_VERSION
+                        except ImportError:
+                            APP_VERSION = get_git_sha()
+                        separator = "&" if "?" in primary_image_url else "?"
+                        st.image(f"{primary_image_url}{separator}v={APP_VERSION}", width=120)
                     else:
                         # プレースホルダーを表示
-                        display_image_unified(None, width=120, placeholder_size=(120, 120))
+                        st.image(None, width=120)
                 
                 with col_info:
                     # 材料名
@@ -2743,8 +2734,12 @@ def show_home():
                     # 主要物性（1〜2個）
                     if material.properties:
                         props = material.properties[:2]
-                        prop_text = " / ".join([f"{p.property_name}: {p.value} {p.unit or ''}" for p in props])
-                        st.markdown(f"<small style='color: #999;'>{prop_text}</small>", unsafe_allow_html=True)
+                        prop_text = " / ".join([
+                            f"{p.get('property_name', '')}: {p.get('value', '')} {p.get('unit', '') or ''}"
+                            for p in props if isinstance(p, dict)
+                        ])
+                        if prop_text:
+                            st.markdown(f"<small style='color: #999;'>{prop_text}</small>", unsafe_allow_html=True)
                     
                     # 登録日（安全化: created_at が str/datetime/None に対応）
                     created_at = getattr(material, "created_at", None)
@@ -3001,8 +2996,9 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                 self.is_deleted = d.get("is_deleted", 0)
                 self.created_at = d.get("created_at")
                 self.updated_at = d.get("updated_at")
-                self.properties = []  # 一覧ではロードしない
+                self.properties = d.get("properties", [])  # 一覧では一括取得したpropertiesを使用
                 self.images = []  # 一覧ではロードしない
+                self.primary_image_url = d.get("primary_image_url")  # imagesテーブルから取得したpublic_url
         
         materials = [MaterialProxy(d) for d in materials_dicts]
         
@@ -3049,88 +3045,27 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                         if material.properties:
                             props = material.properties[:3]
                             properties_text = "<br>".join([
-                                f"<small style='color: #666;'>• {p.property_name}: <strong style='color: #667eea;'>{p.value} {p.unit or ''}</strong></small>"
-                                for p in props
+                                f"<small style='color: #666;'>• {p.get('property_name', '')}: <strong style='color: #667eea;'>{p.get('value', '')} {p.get('unit', '') or ''}</strong></small>"
+                                for p in props if isinstance(p, dict)
                             ])
                         
                         material_name = material.name_official or material.name or "名称不明"
                         material_desc = getattr(material, "description", "") or ""
                         
-                        # 素材画像を取得（キャッシュ対策: Base64エンコードで直接表示）
-                        from utils.image_display import get_material_image_ref, display_image_unified
-                        import hashlib
-                        import time
+                        # 素材画像を取得（高速化: imagesテーブルのpublic_urlを直接使用、base64化やローカル探索をしない）
+                        primary_image_url = getattr(material, "primary_image_url", None)
                         
-                        image_source = None
-                        image_debug = None
-                        # get_material_image_refを使用（常に呼び出す、material.imagesガードを削除）
-                        from utils.logo import get_project_root
-                        image_src, image_debug = get_material_image_ref(material, "primary", get_project_root())
-                        image_source = image_src
-                        
-                        # DEBUG=1の時だけ画像探索結果を表示
-                        if os.getenv("DEBUG", "0") == "1" and image_debug:
-                            with st.expander(f"🔍 画像探索デバッグ: {material_name}", expanded=False):
-                                st.json(image_debug)
-                        
-                        # 画像HTML（プレースホルダー含む、キャッシュ回避）
-                        if image_source:
-                            if isinstance(image_source, str):
-                                # URLの場合はhttp/httpsのみキャッシュバスターを追加
-                                if image_source.startswith(('http://', 'https://')):
-                                    try:
-                                        from material_map_version import APP_VERSION
-                                    except ImportError:
-                                        APP_VERSION = get_git_sha()
-                                    separator = "&" if "?" in image_source else "?"
-                                    img_html = f'<img src="{image_source}{separator}v={APP_VERSION}" class="material-hero-image" alt="{material_name}" />'
-                                elif image_source.startswith('data:'):
-                                    # data:URLの場合はそのまま
-                                    img_html = f'<img src="{image_source}" class="material-hero-image" alt="{material_name}" />'
-                                else:
-                                    # ローカルパスの場合はdata URLに変換
-                                    path = Path(image_source)
-                                    if path.exists() and path.is_file():
-                                        with open(path, 'rb') as f:
-                                            img_bytes = f.read()
-                                            img_base64 = base64.b64encode(img_bytes).decode()
-                                            # 拡張子からMIMEタイプを判定
-                                            ext = path.suffix.lower()
-                                            mime_type = {
-                                                '.jpg': 'image/jpeg',
-                                                '.jpeg': 'image/jpeg',
-                                                '.png': 'image/png',
-                                                '.webp': 'image/webp',
-                                                '.gif': 'image/gif'
-                                            }.get(ext, 'image/png')
-                                            img_html = f'<img src="data:{mime_type};base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
-                                    else:
-                                        img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
-                            elif isinstance(image_source, Path):
-                                # Pathの場合はto_data_url()またはto_png_bytes()でdata URLに変換
-                                from utils.image_display import to_data_url, to_png_bytes
-                                data_url = to_data_url(image_source)
-                                if data_url:
-                                    img_html = f'<img src="{data_url}" class="material-hero-image" alt="{material_name}" />'
-                                else:
-                                    # to_data_urlが失敗した場合はto_png_bytesでPNG bytes化
-                                    png_bytes = to_png_bytes(image_source)
-                                    if png_bytes:
-                                        img_base64 = base64.b64encode(png_bytes).decode()
-                                        img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
-                                    else:
-                                        img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
-                            else:
-                                # PILImageの場合はto_png_bytes()でPNG bytes化
-                                from utils.image_display import to_png_bytes
-                                png_bytes = to_png_bytes(image_source)
-                                if png_bytes:
-                                    img_base64 = base64.b64encode(png_bytes).decode()
-                                    img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material_name}" />'
-                                else:
-                                    img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
+                        # 画像HTML（public_urlがある場合は直接使用、なければプレースホルダー）
+                        if primary_image_url and primary_image_url.startswith(('http://', 'https://')):
+                            # R2の公開URLを直接使用（キャッシュバスター追加）
+                            try:
+                                from material_map_version import APP_VERSION
+                            except ImportError:
+                                APP_VERSION = get_git_sha()
+                            separator = "&" if "?" in primary_image_url else "?"
+                            img_html = f'<img src="{primary_image_url}{separator}v={APP_VERSION}" class="material-hero-image" alt="{material_name}" />'
                         else:
-                            # プレースホルダー
+                            # 画像なし（プレースホルダー）
                             img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
                         
                         # カテゴリ名（長い場合は省略）
