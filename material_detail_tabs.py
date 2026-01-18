@@ -9,6 +9,29 @@ from typing import Optional, List, Dict
 from PIL import Image as PILImage
 from io import BytesIO
 import base64
+from urllib.parse import urlsplit, urlunsplit, quote
+
+
+def safe_url(url: str) -> str:
+    """
+    URLのpath部分をエンコード（日本語ファイル名対応）
+    
+    Args:
+        url: 元のURL
+    
+    Returns:
+        エンコードされたURL
+    """
+    if not url:
+        return url
+    try:
+        p = urlsplit(url)
+        # path部分をエンコード（/と%はそのまま）
+        encoded_path = quote(p.path, safe="/%")
+        return urlunsplit((p.scheme, p.netloc, encoded_path, p.query, p.fragment))
+    except Exception:
+        # エンコードに失敗した場合は元のURLを返す
+        return url
 
 
 def get_image_path(filename: str) -> Optional[str]:
@@ -357,25 +380,35 @@ def show_procurement_uses_tab(material):
     
     with cols[0]:
         st.markdown("#### 空間写真")
-        if 'space' in use_images:
-            space_url = use_images['space']
+        space_url = use_images.get('space')
+        if space_url and space_url.strip():
             # cache-busterを付ける
             separator = "&" if "?" in space_url else "?"
             space_url_with_cache = f"{space_url}{separator}v={image_version}"
-            st.image(space_url_with_cache, caption="空間の使用例", use_container_width=True)
+            # URLエンコード（日本語ファイル名対応）
+            safe_space_url = safe_url(space_url_with_cache)
+            st.image(safe_space_url, caption="空間の使用例", use_container_width=True)
         else:
             st.info("画像なし")
+            # デバッグ用：画像が無い場合のみURLを表示
+            if space_url:
+                st.caption(f"space_url={space_url}")
     
     with cols[1]:
         st.markdown("#### プロダクト写真")
-        if 'product' in use_images:
-            product_url = use_images['product']
+        product_url = use_images.get('product')
+        if product_url and product_url.strip():
             # cache-busterを付ける
             separator = "&" if "?" in product_url else "?"
             product_url_with_cache = f"{product_url}{separator}v={image_version}"
-            st.image(product_url_with_cache, caption="プロダクトの使用例", use_container_width=True)
+            # URLエンコード（日本語ファイル名対応）
+            safe_product_url = safe_url(product_url_with_cache)
+            st.image(safe_product_url, caption="プロダクトの使用例", use_container_width=True)
         else:
             st.info("画像なし")
+            # デバッグ用：画像が無い場合のみURLを表示
+            if product_url:
+                st.caption(f"product_url={product_url}")
     
     # DBから取得したUseExampleも表示（フォールバック）
     try:

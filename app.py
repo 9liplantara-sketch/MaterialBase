@@ -75,6 +75,7 @@ from io import BytesIO
 import base64
 import pandas as pd
 import plotly.express as px
+from urllib.parse import urlsplit, urlunsplit, quote
 
 # グローバル変数の初期化（NameErrorを防ぐ）
 _card_generator_import_error = None
@@ -188,6 +189,76 @@ st.set_page_config(
 )
 
 # 画像パスの取得（複数のパスを試す）
+def safe_url(url: str) -> str:
+    """
+    URLのpath部分をエンコード（日本語ファイル名対応）
+    
+    Args:
+        url: 元のURL
+    
+    Returns:
+        エンコードされたURL
+    """
+    if not url:
+        return url
+    try:
+        p = urlsplit(url)
+        # path部分をエンコード（/と%はそのまま）
+        encoded_path = quote(p.path, safe="/%")
+        return urlunsplit((p.scheme, p.netloc, encoded_path, p.query, p.fragment))
+    except Exception:
+        # エンコードに失敗した場合は元のURLを返す
+        return url
+
+
+def get_material_image_url(material, fallback_kinds: List[str] = None) -> Optional[str]:
+    """
+    materialsテーブルから画像URLを取得（primary優先、フォールバック対応）
+    
+    Args:
+        material: MaterialオブジェクトまたはMaterialProxy
+        fallback_kinds: primaryが無い場合のフォールバック順（デフォルト: ['space', 'product']）
+    
+    Returns:
+        画像URL（見つからない場合はNone）
+    """
+    if fallback_kinds is None:
+        fallback_kinds = ['space', 'product']
+    
+    material_id = getattr(material, 'id', None)
+    if not material_id:
+        return None
+    
+    # primary_image_urlを確認
+    primary_image_url = getattr(material, "primary_image_url", None)
+    if primary_image_url and primary_image_url.strip() and primary_image_url.startswith(('http://', 'https://')):
+        return primary_image_url
+    
+    # imagesテーブルから直接取得（フォールバック）
+    db = SessionLocal()
+    try:
+        # primaryを確認
+        primary_img = db.query(Image).filter(
+            Image.material_id == material_id,
+            Image.kind == 'primary'
+        ).first()
+        if primary_img and primary_img.public_url:
+            return primary_img.public_url
+        
+        # フォールバック順に試す
+        for kind in fallback_kinds:
+            img = db.query(Image).filter(
+                Image.material_id == material_id,
+                Image.kind == kind
+            ).first()
+            if img and img.public_url:
+                return img.public_url
+    finally:
+        db.close()
+    
+    return None
+
+
 def get_image_path(filename):
     """画像パスを取得"""
     possible_paths = [
@@ -2729,19 +2800,22 @@ def show_home():
                 
                 with col_img:
                     # サムネ画像を表示（高速化: imagesテーブルのpublic_urlを直接使用、base64化やローカル探索をしない）
-                    primary_image_url = getattr(material, "primary_image_url", None)
+                    # primary優先、無い場合はspace→productをフォールバック
+                    image_url = get_material_image_url(material, fallback_kinds=['space', 'product'])
                     
                     # サムネサイズで表示（プレースホルダー付き）
-                    if primary_image_url and primary_image_url.strip() and primary_image_url.startswith(('http://', 'https://')):
+                    if image_url and image_url.strip() and image_url.startswith(('http://', 'https://')):
                         # R2の公開URLを直接使用（キャッシュバスター追加）
                         try:
                             from material_map_version import APP_VERSION
                         except ImportError:
                             APP_VERSION = get_git_sha()
-                        separator = "&" if "?" in primary_image_url else "?"
-                        image_url = f"{primary_image_url}{separator}v={APP_VERSION}"
-                        if image_url and image_url.strip():
-                            st.image(image_url, width=120)
+                        separator = "&" if "?" in image_url else "?"
+                        image_url_with_cache = f"{image_url}{separator}v={APP_VERSION}"
+                        # URLエンコード（日本語ファイル名対応）
+                        safe_image_url = safe_url(image_url_with_cache)
+                        if safe_image_url and safe_image_url.strip():
+                            st.image(safe_image_url, width=120)
                         else:
                             st.caption("画像なし")
                     else:
@@ -3089,17 +3163,21 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                         material_desc = getattr(material, "description", "") or ""
                         
                         # 素材画像を取得（高速化: imagesテーブルのpublic_urlを直接使用、base64化やローカル探索をしない）
-                        primary_image_url = getattr(material, "primary_image_url", None)
+                        # primary優先、無い場合はspace→productをフォールバック
+                        image_url = get_material_image_url(material, fallback_kinds=['space', 'product'])
                         
                         # 画像HTML（public_urlがある場合は直接使用、なければプレースホルダー）
-                        if primary_image_url and primary_image_url.startswith(('http://', 'https://')):
+                        if image_url and image_url.strip() and image_url.startswith(('http://', 'https://')):
                             # R2の公開URLを直接使用（キャッシュバスター追加）
                             try:
                                 from material_map_version import APP_VERSION
                             except ImportError:
                                 APP_VERSION = get_git_sha()
-                            separator = "&" if "?" in primary_image_url else "?"
-                            img_html = f'<img src="{primary_image_url}{separator}v={APP_VERSION}" class="material-hero-image" alt="{material_name}" />'
+                            separator = "&" if "?" in image_url else "?"
+                            image_url_with_cache = f"{image_url}{separator}v={APP_VERSION}"
+                            # URLエンコード（日本語ファイル名対応）
+                            safe_image_url = safe_url(image_url_with_cache)
+                            img_html = f'<img src="{safe_image_url}" class="material-hero-image" alt="{material_name}" />'
                         else:
                             # 画像なし（プレースホルダー）
                             img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
