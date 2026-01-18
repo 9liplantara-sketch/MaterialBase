@@ -49,3 +49,6 @@ Thumbs.db
 
 動画/
 !materials.db
+
+# dedupe reports
+reports/duplicates_report_*.csv
