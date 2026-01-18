@@ -1018,8 +1018,29 @@ def fetch_materials_page_cached(
         result = db.execute(stmt)
         materials = result.unique().scalars().all()
         
-        # dict化（DetachedInstanceErrorを防ぐ、scalar列のみ参照）
-        material_dicts = [freeze_material_row(m) for m in materials]
+        # material_idsを取得して画像情報を一括取得（N+1問題を回避）
+        material_ids = [m.id for m in materials]
+        primary_images_dict = {}  # {material_id: public_url}
+        
+        if material_ids:
+            from database import Image
+            images_stmt = select(Image).filter(
+                Image.material_id.in_(material_ids),
+                Image.kind == "primary"
+            )
+            images_result = db.execute(images_stmt)
+            images = images_result.scalars().all()
+            for img in images:
+                if img.public_url:
+                    primary_images_dict[img.material_id] = img.public_url
+        
+        # dict化（DetachedInstanceErrorを防ぐ、scalar列のみ参照、画像URLも含める）
+        material_dicts = []
+        for m in materials:
+            d = freeze_material_row(m)
+            # primary画像のpublic_urlを追加
+            d["primary_image_url"] = primary_images_dict.get(m.id)
+            material_dicts.append(d)
         
         if t0 is not None:
             print(f"[PERF] fetch_materials_page_cached(limit={limit}, offset={offset}): {time.perf_counter() - t0:.3f}s")
@@ -1312,13 +1333,18 @@ def show_materials_duplicate_diagnostics():
         # DB materials count
         db_count = db.execute(select(func.count(Material.id))).scalar() or 0
         
-        # UI materials count（get_all_materials()から取得）
-        materials = get_all_materials()
-        ui_count = len(materials)
-        
-        # Unique names count
-        unique_names = {m.name_official or m.name for m in materials if m.name_official or m.name}
-        unique_names_count = len(unique_names)
+        # UI materials count（高速化のためget_material_count_cachedを使用、DEBUG=0の時はスキップ）
+        debug_enabled = os.getenv("DEBUG", "0") == "1"
+        if debug_enabled:
+            from utils.settings import get_database_url
+            db_url = get_database_url()
+            ui_count = get_material_count_cached(db_url, include_unpublished=False, include_deleted=False)
+            # Unique names count（DEBUG時のみ、軽量クエリで取得）
+            unique_names_stmt = select(func.count(func.distinct(Material.name_official))).filter(Material.is_deleted == 0, Material.is_published == 1)
+            unique_names_count = db.execute(unique_names_stmt).scalar() or 0
+        else:
+            ui_count = db_count
+            unique_names_count = 0
         
         # Duplicate name list（同名の材料を検出）
         from collections import Counter
@@ -1655,14 +1681,20 @@ def render_debug_sidebar_early():
                         st.warning(f"base dir not exists: {base}")
                         dirs = []
                     
-                    # materialsを取得できている前提（取れない時はDB debugだけ出す）
-                    try:
-                        materials = get_all_materials()
-                        if materials:
-                            st.write(f"- **materials count:** {len(materials)}")
-                            st.write("**素材ごとの探索結果:**")
-                            
-                            for m in materials[:30]:  # 先頭30件のみ
+                    # materialsを取得できている前提（取れない時はDB debugだけ出す、DEBUG=0の時はスキップ）
+                    debug_enabled = os.getenv("DEBUG", "0") == "1"
+                    if debug_enabled:
+                        try:
+                            from utils.settings import get_database_url
+                            db_url = get_database_url()
+                            material_count = get_material_count_cached(db_url, include_unpublished=False, include_deleted=False)
+                            st.write(f"- **materials count:** {material_count}")
+                            # 詳細な素材ごとの探索結果はDEBUG=1の時のみ（重い処理のため）
+                            materials = get_all_materials()
+                            if materials:
+                                st.write("**素材ごとの探索結果（先頭30件）:**")
+                                
+                                for m in materials[:30]:  # 先頭30件のみ
                                 try:
                                     # get_material_image_refを使用して画像参照を取得
                                     # project_rootはbaseの親の親の親（static/images/materials -> static/images -> static -> プロジェクトルート）
@@ -1710,10 +1742,16 @@ def render_debug_sidebar_early():
                                     st.write(f"❌ {getattr(m, 'name_official', None) or 'N/A'}: {e}")
                                     with st.expander("詳細", expanded=False):
                                         st.code(traceback.format_exc())
-                        else:
-                            st.write("- **materials:** 0件（DBが空）")
-                    except Exception as e:
-                        st.warning("materials取得失敗（DB debugだけ表示）")
+                                else:
+                                    st.write("- **materials:** 0件（DBが空）")
+                        except Exception as e:
+                            st.warning("materials取得失敗（DB debugだけ表示）")
+                    else:
+                        # DEBUG=0の時は件数のみ表示（高速化）
+                        from utils.settings import get_database_url
+                        db_url = get_database_url()
+                        material_count = get_material_count_cached(db_url, include_unpublished=False, include_deleted=False)
+                        st.write(f"- **materials count:** {material_count}")
                         with st.expander("詳細", expanded=False):
                             st.code(traceback.format_exc())
                 except Exception as e:
@@ -2022,16 +2060,16 @@ def main():
     # 本文UIの開始（Debug sidebarはrun_app_entrypointで先に描画済み）
     # タイトルは各ページでロゴとして表示（show_home()など）
     
-    # 素材件数の表示（エラーハンドリング付き）
+    # 素材件数の表示（エラーハンドリング付き、高速化のためget_material_count_cachedを使用）
     try:
-        materials = get_all_materials()
-        st.write(f"素材件数: {len(materials)} 件")
+        from utils.settings import get_database_url
+        db_url = get_database_url()
+        material_count = get_material_count_cached(db_url, include_unpublished=False, include_deleted=False)
+        st.write(f"素材件数: {material_count} 件")
     except Exception as e:
         st.error("❌ main() 内でエラーが発生しました")
         import traceback
         st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
-        # エラー時も続行（materialsを空リストとして扱う）
-        materials = []
     
     # ページ状態の初期化
     if 'page' not in st.session_state:
@@ -2520,6 +2558,7 @@ def show_home():
             self.updated_at = d.get("updated_at")
             self.properties = []  # 一覧ではロードしない
             self.images = []  # 一覧ではロードしない
+            self.primary_image_url = d.get("primary_image_url")  # imagesテーブルから取得したpublic_url
     
     materials = [MaterialProxy(d) for d in materials_dicts]
     
