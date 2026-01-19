@@ -4200,7 +4200,16 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 if k not in system_keys:
                     setattr(material, k, v)
             
-            material.is_published = 0
+            # visibility に基づいて is_published を設定
+            visibility = form_data.get('visibility', '')
+            if visibility in ["公開", "公開（誰でも閲覧可）"]:
+                material.is_published = 1
+            elif visibility in ["非公開", "非公開（管理者のみ）"]:
+                material.is_published = 0
+            else:
+                # デフォルトは非公開（安全側に倒す）
+                material.is_published = 0
+            
             material.is_deleted = 0
             
             # Materialデータを設定（新規作成時）
@@ -4242,7 +4251,15 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             material.safety_other = form_data.get('safety_other')
             material.restrictions = form_data.get('restrictions')
             material.visibility = form_data['visibility']
-            material.is_published = 0
+            # visibility に基づいて is_published を設定（既存更新の場合も適用）
+            visibility = form_data.get('visibility', '')
+            if visibility in ["公開", "公開（誰でも閲覧可）"]:
+                material.is_published = 1
+            elif visibility in ["非公開", "非公開（管理者のみ）"]:
+                material.is_published = 0
+            else:
+                # デフォルトは非公開（安全側に倒す）
+                material.is_published = 0
             material.is_deleted = 0
             material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
             material.development_motive_other = form_data.get('development_motive_other')
@@ -4456,6 +4473,9 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 "error": "material_id is None after material creation",
                 "traceback": tb.format_exc(),
             }
+        
+        # 承認成功時にキャッシュをクリア（材料数カウント/材料一覧に即時反映）
+        clear_material_cache()
         
         result = {
             "ok": True,
