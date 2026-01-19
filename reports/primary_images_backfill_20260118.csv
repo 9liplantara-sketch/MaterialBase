@@ -1,0 +1,11 @@
+material_id,material_name,kind,file_found,file_path,sha256,file_size,action,reason
+247,コンクリート,primary,False,,,,NOT_FOUND,File not found
+215,真鍮(黄銅),primary,True,uploads/真鍮.jpg,b69eb56f2ca85e5d...,950955,SKIP,Already exists
+210,カリン材,primary,True,uploads/カリン材.jpg,f1fdb5a9520ffd93...,39695,SKIP,Already exists
+211,栗材,primary,True,uploads/栗材.jpg,aff3800e1790467a...,32130,SKIP,Already exists
+212,樫材,primary,True,uploads/樫材.webp,b4e97d0dd26fa5e3...,360938,SKIP,Already exists
+213,アルミニウム(純アルミ),primary,True,uploads/アルミニウム.jpg,268bf6792f08c398...,867321,SKIP,Already exists
+214,ステンレス鋼 SUS304,primary,True,uploads/ステンレス鋼 SUS304.jpg,0d84f4e39fa73e57...,850845,UPLOADED,Success
+216,ポリプロピレン(PP),primary,True,uploads/ポリプロピレン.jpg,b50afd90e80ca982...,802475,SKIP,Already exists
+217,ポリエチレン(PE),primary,True,uploads/ポリエチレン.jpg,0047dc528f82db8b...,764222,SKIP,Already exists
+218,ポリ塩化ビニル(PVC),primary,True,uploads/ポリ塩化ビニル.jpg,f128eb3e2026cf57...,524760,SKIP,Already exists

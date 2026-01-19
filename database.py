@@ -247,6 +247,27 @@ class Property(Base):
     material = relationship("Material", back_populates="properties")
 
 
+class MaterialEmbedding(Base):
+    """材料埋め込みテーブル（pgvector対応）"""
+    __tablename__ = "material_embeddings"
+    
+    material_id = Column(Integer, ForeignKey("materials.id", ondelete="CASCADE"), primary_key=True)
+    content_hash = Column(String(64), nullable=False)  # 内容のハッシュ（差分更新用）
+    
+    # pgvector.sqlalchemy.Vectorを使用（Postgresの場合のみ）
+    try:
+        from pgvector.sqlalchemy import Vector
+        embedding = Column(Vector(1536), nullable=True)  # vector(1536)型
+    except ImportError:
+        # pgvectorがインストールされていない場合はText型でフォールバック
+        embedding = Column(Text, nullable=True)
+    
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # リレーション
+    material = relationship("Material", backref="embedding")
+
+
 class Image(Base):
     """画像テーブル"""
     __tablename__ = "images"

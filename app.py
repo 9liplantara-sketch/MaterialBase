@@ -3058,12 +3058,12 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                 # 用途画像を2カラムで表示（画像がある場合のみ）
                 if space_url or product_url:
                     c1, c2 = st.columns(2)
-                    with c1:
-                        if space_url:
+                with c1:
+                    if space_url:
                             st.image(safe_url(space_url), width='stretch')
-                    
-                    with c2:
-                        if product_url:
+                
+                with c2:
+                    if product_url:
                             st.image(safe_url(product_url), width='stretch')
                 
                 st.markdown("---")
@@ -3660,165 +3660,228 @@ def show_dashboard():
                 st.write(f"• **{mat.name}** - {prop_count}個の物性データ")
 
 def show_search():
-    """検索ページ"""
+    """検索ページ（万華鏡体験：フィルタ + 全文検索）"""
     is_debug = os.getenv("DEBUG", "0") == "1"
     st.markdown(render_site_header(debug=is_debug), unsafe_allow_html=True)
     st.markdown('<h2 class="section-title">材料検索</h2>', unsafe_allow_html=True)
     
-    search_query = st.text_input("検索キーワード", placeholder="材料名、カテゴリ、説明などで検索...", key="search_input")
+    # 自然言語検索バー（上）
+    search_query = st.text_input(
+        "🔍 自然言語検索", 
+        placeholder="例: 透明 屋外 工房（自然言語で検索できます）", 
+        key="search_input"
+    )
+    
+    st.markdown("---")
+    
+    # フィルタ（下）
+    st.markdown("### フィルタ")
+    
+    # フィルタオプションをインポート
+    from material_form_detailed import (
+        USE_CATEGORIES, TRANSPARENCY_OPTIONS, WEATHER_RESISTANCE_OPTIONS,
+        WATER_RESISTANCE_OPTIONS, EQUIPMENT_LEVELS, COST_LEVELS
+    )
+    
+    # フィルタを2列で配置
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # 用途（複数選択）
+        selected_uses = st.multiselect(
+            "用途",
+            options=USE_CATEGORIES,
+            key="filter_use_categories"
+        )
+        
+        # 透明性
+        selected_transparency = st.selectbox(
+            "透明性",
+            options=["すべて"] + TRANSPARENCY_OPTIONS,
+            key="filter_transparency"
+        )
+        
+        # 耐候性
+        selected_weather = st.selectbox(
+            "耐候性",
+            options=["すべて"] + WEATHER_RESISTANCE_OPTIONS,
+            key="filter_weather"
+        )
+    
+    with col2:
+        # 耐水性
+        selected_water = st.selectbox(
+            "耐水性",
+            options=["すべて"] + WATER_RESISTANCE_OPTIONS,
+            key="filter_water"
+        )
+        
+        # 設備レベル
+        selected_equipment = st.selectbox(
+            "設備レベル",
+            options=["すべて"] + EQUIPMENT_LEVELS,
+            key="filter_equipment"
+        )
+        
+        # コスト帯
+        selected_cost = st.selectbox(
+            "コスト帯",
+            options=["すべて"] + COST_LEVELS,
+            key="filter_cost"
+        )
+    
+    # フィルタ辞書を構築
+    filters = {}
+    if selected_uses:
+        filters['use_categories'] = selected_uses
+    if selected_transparency and selected_transparency != "すべて":
+        filters['transparency'] = selected_transparency
+    if selected_weather and selected_weather != "すべて":
+        filters['weather_resistance'] = selected_weather
+    if selected_water and selected_water != "すべて":
+        filters['water_resistance'] = selected_water
+    if selected_equipment and selected_equipment != "すべて":
+        filters['equipment_level'] = selected_equipment
+    if selected_cost and selected_cost != "すべて":
+        filters['cost_level'] = selected_cost
     
     # 管理者表示フラグを取得
     include_unpublished = st.session_state.get("include_unpublished", False)
     
-    if search_query:
-        materials = get_all_materials(include_unpublished=include_unpublished)
-        results = []
+    # 検索実行（クエリまたはフィルタがある場合）
+    if (search_query and search_query.strip()) or filters:
+        # ハイブリッド検索（全文検索 + ベクトル検索、フィルタ対応）を使用
+        from utils.search import search_materials_hybrid
+        from database import SessionLocal
         
-        for material in materials:
-            # 材料名、カテゴリ、説明で検索
-            if (search_query.lower() in material.name.lower() or
-                (material.category and search_query.lower() in material.category.lower()) or
-                (material.description and search_query.lower() in material.description.lower())):
-                results.append(material)
+        db = SessionLocal()
+        try:
+            results, search_info = search_materials_hybrid(
+                db=db,
+                query=search_query.strip() if search_query else "",
+                filters=filters,
+                limit=20,
+                include_unpublished=include_unpublished,
+                include_deleted=False,
+                text_weight=0.5,
+                vector_weight=0.5
+            )
+        finally:
+            db.close()
+        
+        # DEBUG=1のときだけ検索の詳細情報を表示
+        if is_debug:
+            with st.expander("🔍 検索詳細情報（DEBUG）", expanded=False):
+                st.write(f"**検索クエリ**: {search_info.get('query', 'なし')}")
+                st.write(f"**フィルタ**: {search_info.get('filters', {})}")
+                st.write(f"**検索方法**: {search_info.get('method', 'unknown')}")
+                if search_info.get('method') == 'hybrid':
+                    st.write(f"**テキスト重み**: {search_info.get('text_weight', 0.5)}")
+                    st.write(f"**ベクトル重み**: {search_info.get('vector_weight', 0.5)}")
+                st.write(f"**結果件数**: {search_info.get('count', 0)}件")
         
         if results:
             st.success(f"**{len(results)}件**の結果が見つかりました")
             
-            cols = st.columns(2)
+            # 検索結果をカード形式で表示
             for idx, material in enumerate(results):
-                with cols[idx % 2]:
-                    with st.container():
-                        # SQLで直接カウント（DetachedInstanceError回避）
-                        db = get_db()
-                        try:
-                            prop_count = db.execute(
-                                select(func.count(Property.id))
-                                .where(Property.material_id == material.id)
-                            ).scalar() or 0
-                        finally:
-                            db.close()
-                        
-                        prop_text = f'<p style="color: #555; margin-top: 12px;"><strong>物性データ:</strong> {prop_count}個</p>' if prop_count > 0 else ''
-                        
-                        # 素材画像を取得（主役として表示、URL優先）
-                        from utils.image_display import get_material_image_ref
-                        from utils.logo import get_project_root
-                        # get_material_image_refを使用
-                        image_src, image_debug = get_material_image_ref(material, "primary", get_project_root())
-                        image_source = image_src
-                        
-                        # 画像HTML（プレースホルダー含む、キャッシュ回避）
-                        if image_source:
-                            if isinstance(image_source, str):
-                                # URLの場合はhttp/httpsのみキャッシュバスターを追加
-                                if image_source.startswith(('http://', 'https://')):
-                                    try:
-                                        from material_map_version import APP_VERSION
-                                    except ImportError:
-                                        APP_VERSION = get_git_sha()
-                                    separator = "&" if "?" in image_source else "?"
-                                    img_html = f'<img src="{image_source}{separator}v={APP_VERSION}" class="material-hero-image" alt="{material.name}" />'
-                                elif image_source.startswith('data:'):
-                                    # data:URLの場合はそのまま
-                                    img_html = f'<img src="{image_source}" class="material-hero-image" alt="{material.name}" />'
-                                else:
-                                    # ローカルパス文字列の場合はPathとして処理
-                                    path = Path(image_source)
-                                    if path.exists() and path.is_file():
-                                        from utils.image_display import to_data_url, to_png_bytes
-                                        data_url = to_data_url(path)
-                                        if data_url:
-                                            img_html = f'<img src="{data_url}" class="material-hero-image" alt="{material.name}" />'
-                                        else:
-                                            # to_data_urlが失敗した場合はto_png_bytesでPNG bytes化
-                                            png_bytes = to_png_bytes(path)
-                                            if png_bytes:
-                                                img_base64 = base64.b64encode(png_bytes).decode()
-                                                img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material.name}" />'
-                                            else:
-                                                img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
-                                    else:
-                                        img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
-                            elif isinstance(image_source, Path):
-                                # Pathの場合はto_data_url()またはto_png_bytes()でdata URLに変換
-                                from utils.image_display import to_data_url, to_png_bytes
-                                data_url = to_data_url(image_source)
-                                if data_url:
-                                    img_html = f'<img src="{data_url}" class="material-hero-image" alt="{material.name}" />'
-                                else:
-                                    # to_data_urlが失敗した場合はto_png_bytesでPNG bytes化
-                                    png_bytes = to_png_bytes(image_source)
-                                    if png_bytes:
-                                        img_base64 = base64.b64encode(png_bytes).decode()
-                                        img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material.name}" />'
-                                    else:
-                                        img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
-                            else:
-                                # PILImageの場合はto_png_bytes()でPNG bytes化
-                                from utils.image_display import to_png_bytes
-                                png_bytes = to_png_bytes(image_source)
-                                if png_bytes:
-                                    img_base64 = base64.b64encode(png_bytes).decode()
-                                    img_html = f'<img src="data:image/png;base64,{img_base64}" class="material-hero-image" alt="{material.name}" />'
-                                else:
-                                    img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
-                        else:
-                            # プレースホルダー
-                            img_html = f'<div class="material-hero-image" style="display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px;">画像なし</div>'
-                        
-                        # カテゴリ名（長い場合は省略）
-                        category_name = material.category or '未分類'
-                        if len(category_name) > 20:
-                            category_display = category_name[:17] + "..."
-                            category_title = category_name
-                        else:
-                            category_display = category_name
-                            category_title = ""
-                        
-                        card_html_raw = f"""
-                        <div class="material-card-container material-texture">
-                            {img_html}
-                            <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px;">
-                                <h3 style="color: #1a1a1a; margin: 0; font-size: 1.3rem; font-weight: 700; flex: 1;">{material.name}</h3>
-                            </div>
-                            <div style="margin-bottom: 12px;">
-                                <span class="category-badge" title="{category_title}">{category_display}</span>
-                            </div>
-                            <p style="color: #666; margin: 0; line-height: 1.6; font-size: 0.9rem;">{material.description or '説明なし'}</p>
-                            {prop_text}
-                        </div>
-                        """
-                        card_html = textwrap.dedent(card_html_raw).strip()
-                        st.markdown(card_html, unsafe_allow_html=True)
-                        
-                        # 詳細を見るボタン（白文字を確実に表示）
-                        button_key = f"search_detail_{material.id}"
-                        st.markdown(f"""
-                        <style>
-                            button[key="{button_key}"],
-                            button[data-testid*="{button_key}"] {{
-                                background-color: #1a1a1a !important;
-                                color: #ffffff !important;
-                                border: 1px solid #1a1a1a !important;
-                            }}
-                            button[key="{button_key}"]:hover,
-                            button[data-testid*="{button_key}"]:hover {{
-                                background-color: #333333 !important;
-                                color: #ffffff !important;
-                            }}
-                            button[key="{button_key}"] *,
-                            button[data-testid*="{button_key}"] * {{
-                                color: #ffffff !important;
-                            }}
-                        </style>
-                        """, unsafe_allow_html=True)
-                        
-                        if st.button(f"詳細を見る", key=button_key, width='stretch'):
-                            st.session_state.selected_material_id = material.id
-                            st.session_state.page = "材料一覧"  # 一覧ページの詳細表示モードに遷移
-                            st.rerun()
+                with st.container():
+                    # 材料カードを表示
+                    _render_material_search_card(material, idx, search_query)
+        
         else:
-            st.info("検索結果が見つかりませんでした。別のキーワードで検索してみてください。")
+            st.info("検索結果が見つかりませんでした。検索キーワードやフィルタを変更してみてください。")
+    else:
+        # 検索クエリもフィルタも空の場合は説明を表示
+        st.info("💡 自然言語で材料を検索できます。例：「透明 屋外 工房」「硬い 金属」「軽い プラスチック」など")
+        st.info("💡 フィルタを使って材料を絞り込むこともできます。")
+
+
+def _render_material_search_card(material, idx: int, search_query: str):
+    """
+    検索結果の材料カードをレンダリング
+    
+    Args:
+        material: Materialオブジェクト
+        idx: インデックス
+        search_query: 検索クエリ（ハイライト用）
+    """
+    # SQLで直接カウント（DetachedInstanceError回避）
+    db = get_db()
+    try:
+        prop_count = db.execute(
+            select(func.count(Property.id))
+            .where(Property.material_id == material.id)
+        ).scalar() or 0
+    finally:
+        db.close()
+    
+    # 素材画像を取得
+    from utils.image_display import get_material_image_ref, display_image_unified
+    from utils.logo import get_project_root
+    
+    image_src, image_debug = get_material_image_ref(material, "primary", get_project_root())
+    
+    # カテゴリ名
+    category_name = material.category_main or material.category or '未分類'
+    
+    # 説明文を生成（1〜2行）
+    description_parts = []
+    if material.description:
+        description_parts.append(material.description)
+    elif material.development_background_short:
+        description_parts.append(material.development_background_short)
+    
+    # 加工方法や用途を追加
+    if material.processing_methods:
+        try:
+            methods = json.loads(material.processing_methods)
+            if isinstance(methods, list) and methods:
+                description_parts.append(f"加工: {', '.join(methods[:2])}")
+        except (json.JSONDecodeError, TypeError):
+            pass
+    
+    if material.use_categories:
+        try:
+            uses = json.loads(material.use_categories)
+            if isinstance(uses, list) and uses:
+                description_parts.append(f"用途: {', '.join(uses[:2])}")
+        except (json.JSONDecodeError, TypeError):
+            pass
+    
+    description_text = " | ".join(description_parts[:2]) if description_parts else "説明なし"
+    # 長すぎる場合は省略
+    if len(description_text) > 150:
+        description_text = description_text[:147] + "..."
+    
+    # 材料名（正式名を優先）
+    material_name = material.name_official or material.name or "名称不明"
+    
+    # カード表示
+    st.markdown("---")
+    
+    # 画像と情報を横並び
+    col_img, col_info = st.columns([1, 2])
+    
+    with col_img:
+        if image_src:
+            display_image_unified(image_src, caption="", width="stretch")
+        else:
+            st.markdown("<div style='width:100%;height:120px;background:#f0f0f0;display:flex;align-items:center;justify-content:center;color:#999;'>画像なし</div>", unsafe_allow_html=True)
+    
+    with col_info:
+        st.markdown(f"### {material_name}")
+        st.markdown(f"**カテゴリ**: {category_name}")
+        st.markdown(f"{description_text}")
+        if prop_count > 0:
+            st.caption(f"物性データ: {prop_count}個")
+        
+        # 詳細を見るボタン
+        if st.button(f"詳細を見る", key=f"search_detail_{material.id}_{idx}"):
+            st.session_state.selected_material_id = material.id
+            st.session_state.page = "材料一覧"
+            st.rerun()
+
 
 def show_approval_queue():
     """承認待ち一覧ページ（管理者のみ）"""
@@ -4310,7 +4373,20 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             material.name = form_data['name_official']
             material.category = form_data['category_main']
             
+            # search_textを生成して設定
+            from utils.search import generate_search_text, update_material_embedding
+            material.search_text = generate_search_text(material)
+            
             db_tx1.flush()
+            
+            # 埋め込みを更新（content_hashが変わった場合のみ）
+            try:
+                update_material_embedding(db_tx1, material)
+            except Exception as e:
+                # 埋め込み更新失敗は警告のみ（承認は継続）
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"[APPROVE] Failed to update embedding for material_id={material.id}: {e}")
             
             # 参照URL保存（更新モードの場合は既存を削除して置き換え）
             if action == "updated":

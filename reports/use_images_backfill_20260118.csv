@@ -1,0 +1,21 @@
+material_id,material_name,kind,file_found,file_path,sha256,file_size,action,reason
+247,コンクリート,space,False,,,,NOT_FOUND,File not found
+247,コンクリート,product,False,,,,NOT_FOUND,File not found
+215,真鍮（黄銅）,space,True,uploads/uses/真鍮1.jpg,4b9ecadb954400ed...,888035,UPLOADED,Success
+215,真鍮（黄銅）,product,True,uploads/uses/真鍮2.jpg,ad08568c8641fc14...,715895,UPLOADED,Success
+210,カリン材,space,True,uploads/uses/カリン材1.jpg,6ebd26403d80677a...,909610,SKIP,Already exists
+210,カリン材,product,True,uploads/uses/カリン材2.jpg,d2678b981f299c01...,642841,SKIP,Already exists
+211,栗材,space,True,uploads/uses/栗材1.jpg,71ea2ac438f05e1e...,558740,SKIP,Already exists
+211,栗材,product,True,uploads/uses/栗材2.jpg,7fe43f228d9605f4...,673520,SKIP,Already exists
+212,樫材,space,True,uploads/uses/樫材1.jpg,513cd8a2e2d3dc6b...,874194,SKIP,Already exists
+212,樫材,product,True,uploads/uses/樫材2.jpg,8bb4b441b911ef0a...,810010,SKIP,Already exists
+213,アルミニウム（純アルミ）,space,True,uploads/uses/アルミニウム1.jpg,13b86595c3f8e5bb...,787384,UPLOADED,Success
+213,アルミニウム（純アルミ）,product,True,uploads/uses/アルミニウム2.jpg,fb22a5d6befbb73c...,523471,UPLOADED,Success
+214,ステンレス鋼 SUS304,space,False,,,,NOT_FOUND,File not found
+214,ステンレス鋼 SUS304,product,False,,,,NOT_FOUND,File not found
+216,ポリプロピレン（PP）,space,True,uploads/uses/ポリプロピレン1.jpg,c5f7bf852975ce39...,644284,UPLOADED,Success
+216,ポリプロピレン（PP）,product,True,uploads/uses/ポリプロピレン2.jpg,0bf27799ddb57880...,506083,UPLOADED,Success
+217,ポリエチレン（PE）,space,True,uploads/uses/ポリエチレン1.jpg,2e5f2de0c75288f2...,843387,UPLOADED,Success
+217,ポリエチレン（PE）,product,True,uploads/uses/ポリエチレン2.jpg,220ebb7d6eb91be0...,483331,UPLOADED,Success
+218,ポリ塩化ビニル（PVC）,space,True,uploads/uses/ポリ塩化ビニル1.jpg,219f6d785f447642...,799718,UPLOADED,Success
+218,ポリ塩化ビニル（PVC）,product,True,uploads/uses/ポリ塩化ビニル2.jpg,f574801ade933544...,569752,UPLOADED,Success

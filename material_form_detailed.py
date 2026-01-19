@@ -1404,7 +1404,20 @@ def save_material(form_data):
             material.name = form_data['name_official']
             material.category = form_data['category_main']
         
+        # search_textを生成して設定（新規/更新共通）
+        from utils.search import generate_search_text, update_material_embedding
+        material.search_text = generate_search_text(material)
+        
         db.flush()
+        
+        # 埋め込みを更新（content_hashが変わった場合のみ）
+        try:
+            update_material_embedding(db, material)
+        except Exception as e:
+            # 埋め込み更新失敗は警告のみ（保存は継続）
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"[SAVE MATERIAL] Failed to update embedding for material_id={material.id}: {e}")
         
         # 参照URL保存（既存のものは削除してから再作成）
         if existing_material:
