@@ -36,18 +36,18 @@ def safe_url(url: str) -> str:
 
 def get_images_by_kind(material) -> Dict[str, str]:
     """
-    imagesテーブルから用途画像を取得して {kind: public_url} のdictを返す
+    imagesテーブルから画像を取得して {kind: public_url} のdictを返す
     
     Args:
         material: Materialオブジェクト
     
     Returns:
-        {kind: public_url} の辞書（例: {"space": "https://...", "product": "https://..."}）
+        {kind: public_url} の辞書（例: {"primary": "https://...", "space": "https://...", "product": "https://..."}）
     """
     from database import SessionLocal, Image
     from sqlalchemy import or_
     
-    # imagesテーブルから用途画像を取得
+    # imagesテーブルから画像を取得
     images = []
     if hasattr(material, 'images') and material.images:
         images = list(material.images)
@@ -55,13 +55,13 @@ def get_images_by_kind(material) -> Dict[str, str]:
         # データベースから直接取得（kind/image_typeの両方に対応）
         db_images = SessionLocal()
         try:
-            # kind列またはimage_type列でspace/productを検索
+            # kind列またはimage_type列でprimary/space/productを検索
             try:
                 images = db_images.query(Image).filter(
                     Image.material_id == material.id,
                     or_(
-                        Image.kind.in_(['space', 'product']),
-                        Image.image_type.in_(['space', 'product'])
+                        Image.kind.in_(['primary', 'space', 'product']),
+                        Image.image_type.in_(['primary', 'space', 'product'])
                     )
                 ).all()
             except Exception:
@@ -69,7 +69,7 @@ def get_images_by_kind(material) -> Dict[str, str]:
                 try:
                     images = db_images.query(Image).filter(
                         Image.material_id == material.id,
-                        Image.kind.in_(['space', 'product'])
+                        Image.kind.in_(['primary', 'space', 'product'])
                     ).all()
                 except Exception:
                     # どちらも失敗した場合は全画像を取得して後でフィルタ
@@ -79,7 +79,7 @@ def get_images_by_kind(material) -> Dict[str, str]:
                     images = []
                     for img in all_images:
                         k = getattr(img, "kind", None) or getattr(img, "image_type", None)
-                        if k in ('space', 'product'):
+                        if k in ('primary', 'space', 'product'):
                             images.append(img)
         finally:
             db_images.close()
@@ -166,13 +166,6 @@ def show_material_detail_tabs(material):
 
 def show_properties_tab(material):
     """タブ1: 材料物性"""
-    # テクスチャ画像を表示（get_material_image_refを使用）
-    from utils.image_display import get_material_image_ref, display_image_unified
-    primary_src, primary_debug = get_material_image_ref(material, "primary", Path.cwd())
-    # primary画像がある場合のみ表示（画像なしボックスを出さない）
-    if primary_src:
-        display_image_unified(primary_src, caption="メイン画像", width="stretch", debug=primary_debug)
-    
     st.markdown("---")
     st.markdown("### 基本特性")
     
