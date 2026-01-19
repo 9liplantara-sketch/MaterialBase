@@ -169,7 +169,9 @@ def show_properties_tab(material):
     # テクスチャ画像を表示（get_material_image_refを使用）
     from utils.image_display import get_material_image_ref, display_image_unified
     primary_src, primary_debug = get_material_image_ref(material, "primary", Path.cwd())
-    display_image_unified(primary_src, caption="メイン画像", width="stretch", debug=primary_debug)
+    # primary画像がある場合のみ表示（画像なしボックスを出さない）
+    if primary_src:
+        display_image_unified(primary_src, caption="メイン画像", width="stretch", debug=primary_debug)
     
     st.markdown("---")
     st.markdown("### 基本特性")
@@ -407,27 +409,11 @@ def show_procurement_uses_tab(material):
                     ">{cat}</div>
                     """, unsafe_allow_html=True)
     
-    # 代表的な使用例（UseExample）- 画像付き表示（用途写真ギャラリー）
+    # 代表的な使用例（UseExample）
     st.markdown("---")
-    st.markdown("### 代表的な使用例（用途写真ギャラリー）")
+    st.markdown("### 代表的な使用例")
     
-    # imagesテーブルから用途画像を取得（共通関数を使用）
-    images_by_kind = get_images_by_kind(material)
-    space_url = images_by_kind.get("space")
-    product_url = images_by_kind.get("product")
-    
-    # 用途画像を表示（画像がある場合のみ）
-    if space_url or product_url:
-        c1, c2 = st.columns(2)
-        with c1:
-            if space_url:
-                st.image(safe_url(space_url), width='stretch')
-        
-        with c2:
-            if product_url:
-                st.image(safe_url(product_url), width='stretch')
-    
-    # DBから取得したUseExampleも表示（フォールバック）
+    # DBから取得したUseExampleを表示
     try:
         # eager load済みのuse_examplesにアクセス
         use_examples_list = []
