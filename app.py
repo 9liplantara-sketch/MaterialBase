@@ -2238,11 +2238,12 @@ def main():
                 background-color: #111 !important;
                 color: white !important;
             }
-            /* サイドバーのチェックボックス/ラジオボタンを非表示（option_menuのみでページ選択） */
-            section[data-testid="stSidebar"] input[type="checkbox"],
-            section[data-testid="stSidebar"] input[type="radio"],
-            .stSidebar input[type="checkbox"],
-            .stSidebar input[type="radio"] {
+            /* サイドバーの旧ナビ（radio/checkbox）を非表示（option_menuのみでページ選択） */
+            /* stRadio と stCheckbox のみを対象（stToggle は除外） */
+            section[data-testid="stSidebar"] [data-testid="stRadio"] input[type="radio"],
+            section[data-testid="stSidebar"] [data-testid="stCheckbox"] input[type="checkbox"],
+            .stSidebar [data-testid="stRadio"] input[type="radio"],
+            .stSidebar [data-testid="stCheckbox"] input[type="checkbox"] {
                 display: none !important;
                 visibility: hidden !important;
                 opacity: 0 !important;
@@ -2250,11 +2251,11 @@ def main():
                 width: 0 !important;
                 height: 0 !important;
             }
-            /* チェックボックス/ラジオボタンのラベルも非表示 */
-            section[data-testid="stSidebar"] label:has(input[type="checkbox"]),
-            section[data-testid="stSidebar"] label:has(input[type="radio"]),
-            .stSidebar label:has(input[type="checkbox"]),
-            .stSidebar label:has(input[type="radio"]) {
+            /* 旧ナビのラジオボタン/チェックボックスのラベルも非表示 */
+            section[data-testid="stSidebar"] [data-testid="stRadio"] label,
+            section[data-testid="stSidebar"] [data-testid="stCheckbox"] label,
+            .stSidebar [data-testid="stRadio"] label,
+            .stSidebar [data-testid="stCheckbox"] label {
                 display: none !important;
             }
             </style>
@@ -2955,6 +2956,38 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
         debug_enabled = os.getenv("DEBUG", "0") == "1"
         st.markdown(render_site_header(debug=debug_enabled), unsafe_allow_html=True)
         st.markdown('<h2 class="section-title">材料一覧</h2>', unsafe_allow_html=True)
+        
+        # 管理者用の設定エリア（本文側に表示）
+        from utils.settings import is_admin_mode
+        is_admin = is_admin_mode()
+        is_debug = os.getenv("DEBUG", "0") == "1"
+        
+        if is_admin or is_debug:
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            with col1:
+                # セッションステートの初期化
+                if "include_unpublished" not in st.session_state:
+                    st.session_state.include_unpublished = include_unpublished
+                if "include_deleted" not in st.session_state:
+                    st.session_state.include_deleted = include_deleted
+                
+                # トグルでセッションステートを更新
+                st.session_state.include_unpublished = st.toggle(
+                    "非公開も表示",
+                    value=st.session_state.include_unpublished,
+                    key="include_unpublished_toggle"
+                )
+            with col2:
+                st.session_state.include_deleted = st.toggle(
+                    "削除済みも表示",
+                    value=st.session_state.include_deleted,
+                    key="include_deleted_toggle"
+                )
+            
+            # セッションステートの値を優先的に使用（引数より優先）
+            include_unpublished = st.session_state.include_unpublished
+            include_deleted = st.session_state.include_deleted
         
         # 詳細表示モードのチェック
         if st.session_state.selected_material_id:
