@@ -48,10 +48,10 @@ def upgrade() -> None:
         
         # Postgres の場合、全文検索用の GIN インデックスを作成
         if conn.dialect.name == 'postgresql':
-            # to_tsvector を使った GIN インデックスを作成
+            # to_tsvector を使った GIN インデックスを作成（'simple'を使用）
             conn.execute(text("""
                 CREATE INDEX IF NOT EXISTS idx_materials_search_text_gin 
-                ON materials USING gin(to_tsvector('japanese', COALESCE(search_text, '')))
+                ON materials USING gin(to_tsvector('simple', COALESCE(search_text, '')))
             """))
         
         conn.commit()
