@@ -3021,21 +3021,16 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                 space_url = images_by_kind.get("space")
                 product_url = images_by_kind.get("product")
                 
-                # 用途画像を2カラムで表示
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.caption("空間写真")
-                    if space_url:
-                        st.image(safe_url(space_url), use_container_width=True)
-                    else:
-                        st.caption("画像なし")
-                
-                with c2:
-                    st.caption("プロダクト写真")
-                    if product_url:
-                        st.image(safe_url(product_url), use_container_width=True)
-                    else:
-                        st.caption("画像なし")
+                # 用途画像を2カラムで表示（画像がある場合のみ）
+                if space_url or product_url:
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if space_url:
+                            st.image(safe_url(space_url), width='stretch')
+                    
+                    with c2:
+                        if product_url:
+                            st.image(safe_url(product_url), width='stretch')
                 
                 st.markdown("---")
                 

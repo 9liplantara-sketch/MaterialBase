@@ -416,21 +416,16 @@ def show_procurement_uses_tab(material):
     space_url = images_by_kind.get("space")
     product_url = images_by_kind.get("product")
     
-    # 用途画像を表示（空間写真・プロダクト写真）
-    c1, c2 = st.columns(2)
-    with c1:
-        st.caption("空間写真")
-        if space_url:
-            st.image(safe_url(space_url), use_container_width=True)
-        else:
-            st.caption("画像なし")
-    
-    with c2:
-        st.caption("プロダクト写真")
-        if product_url:
-            st.image(safe_url(product_url), use_container_width=True)
-        else:
-            st.caption("画像なし")
+    # 用途画像を表示（画像がある場合のみ）
+    if space_url or product_url:
+        c1, c2 = st.columns(2)
+        with c1:
+            if space_url:
+                st.image(safe_url(space_url), width='stretch')
+        
+        with c2:
+            if product_url:
+                st.image(safe_url(product_url), width='stretch')
     
     # DBから取得したUseExampleも表示（フォールバック）
     try:
@@ -523,35 +518,6 @@ def show_procurement_uses_tab(material):
         print(f"用途例取得エラー: {e}")
         traceback.print_exc()
         st.warning("用途例の取得に失敗しました。")
-    
-    # 用途イメージ画像（画像表示の1本化）
-    st.markdown("---")
-    st.markdown("### 用途イメージ画像")
-    
-    # 材料の画像を表示（get_material_image_refを使用）
-    from utils.image_display import get_material_image_ref, display_image_unified
-    
-    if material.images:
-        cols = st.columns(min(3, len(material.images)))
-        for idx, img in enumerate(material.images):
-            with cols[idx % 3]:
-                # 各画像レコードに対して表示
-                # DBのimage_pathがある場合はそれを使用、なければprimary画像を表示
-                if img.file_path:
-                    from utils.paths import resolve_path
-                    img_path = resolve_path(img.file_path)
-                    if img_path.exists():
-                        display_image_unified(img_path, caption=img.description or f"画像 {idx+1}", width="stretch")
-                    else:
-                        st.info(f"画像が見つかりません: {img.file_path}")
-                else:
-                    # file_pathがない場合はprimary画像を表示
-                    primary_src, primary_debug = get_material_image_ref(material, "primary", Path.cwd())
-                    display_image_unified(primary_src, caption=img.description or f"画像 {idx+1}", width="stretch", debug=primary_debug)
-    else:
-        # 画像がない場合はprimary画像を表示
-        primary_src, primary_debug = get_material_image_ref(material, "primary", Path.cwd())
-        display_image_unified(primary_src, caption="メイン画像", width="stretch", debug=primary_debug)
 
 
 def show_history_story_tab(material):
