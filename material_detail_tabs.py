@@ -171,29 +171,6 @@ def show_properties_tab(material):
     primary_src, primary_debug = get_material_image_ref(material, "primary", Path.cwd())
     display_image_unified(primary_src, caption="メイン画像", width="stretch", debug=primary_debug)
     
-    # 用途画像（space/product）を表示
-    images_by_kind = get_images_by_kind(material)
-    space_url = images_by_kind.get("space")
-    product_url = images_by_kind.get("product")
-    
-    if space_url or product_url:
-        st.markdown("---")
-        st.markdown("### 用途画像")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.caption("材料の空間イメージ")
-            if space_url:
-                st.image(safe_url(space_url), use_container_width=True)
-            else:
-                st.caption("画像なし")
-        
-        with c2:
-            st.caption("用途イメージ（プロダクト）")
-            if product_url:
-                st.image(safe_url(product_url), use_container_width=True)
-            else:
-                st.caption("画像なし")
-    
     st.markdown("---")
     st.markdown("### 基本特性")
     
