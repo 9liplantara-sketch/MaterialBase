@@ -2858,10 +2858,11 @@ def show_home():
                         if safe_image_url and safe_image_url.strip():
                             st.image(safe_image_url, width=120)
                         else:
-                            st.caption("画像なし")
+                            # 画像なしの場合はスペーサーを表示（文字は出さない）
+                            st.markdown("<div style='width:120px;height:120px;'></div>", unsafe_allow_html=True)
                     else:
-                        # プレースホルダーを表示
-                        st.caption("画像なし")
+                        # 画像なしの場合はスペーサーを表示（文字は出さない）
+                        st.markdown("<div style='width:120px;height:120px;'></div>", unsafe_allow_html=True)
                 
                 with col_info:
                     # 材料名
