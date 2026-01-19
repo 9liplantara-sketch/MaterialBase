@@ -34,6 +34,68 @@ def safe_url(url: str) -> str:
         return url
 
 
+def get_images_by_kind(material) -> Dict[str, str]:
+    """
+    imagesテーブルから用途画像を取得して {kind: public_url} のdictを返す
+    
+    Args:
+        material: Materialオブジェクト
+    
+    Returns:
+        {kind: public_url} の辞書（例: {"space": "https://...", "product": "https://..."}）
+    """
+    from database import SessionLocal, Image
+    from sqlalchemy import or_
+    
+    # imagesテーブルから用途画像を取得
+    images = []
+    if hasattr(material, 'images') and material.images:
+        images = list(material.images)
+    else:
+        # データベースから直接取得（kind/image_typeの両方に対応）
+        db_images = SessionLocal()
+        try:
+            # kind列またはimage_type列でspace/productを検索
+            try:
+                images = db_images.query(Image).filter(
+                    Image.material_id == material.id,
+                    or_(
+                        Image.kind.in_(['space', 'product']),
+                        Image.image_type.in_(['space', 'product'])
+                    )
+                ).all()
+            except Exception:
+                # image_type列が存在しない場合はkind列のみで検索
+                try:
+                    images = db_images.query(Image).filter(
+                        Image.material_id == material.id,
+                        Image.kind.in_(['space', 'product'])
+                    ).all()
+                except Exception:
+                    # どちらも失敗した場合は全画像を取得して後でフィルタ
+                    all_images = db_images.query(Image).filter(
+                        Image.material_id == material.id
+                    ).all()
+                    images = []
+                    for img in all_images:
+                        k = getattr(img, "kind", None) or getattr(img, "image_type", None)
+                        if k in ('space', 'product'):
+                            images.append(img)
+        finally:
+            db_images.close()
+    
+    # images を {kind: public_url} にする（kind名やurl列名の揺れを吸収）
+    images_by_kind: Dict[str, str] = {}
+    
+    for img in images:  # material.images でも DBクエリ結果でもOK
+        k = getattr(img, "kind", None) or getattr(img, "image_type", None) or getattr(img, "type", None)
+        u = getattr(img, "public_url", None) or getattr(img, "url", None)
+        if k and u:
+            images_by_kind[str(k)] = str(u)
+    
+    return images_by_kind
+
+
 def get_image_path(filename: str) -> Optional[str]:
     """画像パスを取得"""
     possible_paths = [
@@ -109,6 +171,30 @@ def show_properties_tab(material):
     primary_src, primary_debug = get_material_image_ref(material, "primary", Path.cwd())
     display_image_unified(primary_src, caption="メイン画像", width="stretch", debug=primary_debug)
     
+    # 用途画像（space/product）を表示
+    images_by_kind = get_images_by_kind(material)
+    space_url = images_by_kind.get("space")
+    product_url = images_by_kind.get("product")
+    
+    if space_url or product_url:
+        st.markdown("---")
+        st.markdown("### 用途画像")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("材料の空間イメージ")
+            if space_url:
+                st.image(safe_url(space_url), use_container_width=True)
+            else:
+                st.caption("画像なし")
+        
+        with c2:
+            st.caption("用途イメージ（プロダクト）")
+            if product_url:
+                st.image(safe_url(product_url), use_container_width=True)
+            else:
+                st.caption("画像なし")
+    
+    st.markdown("---")
     st.markdown("### 基本特性")
     
     # 基本情報をグリッド表示
@@ -348,67 +434,26 @@ def show_procurement_uses_tab(material):
     st.markdown("---")
     st.markdown("### 代表的な使用例（用途写真ギャラリー）")
     
-    # imagesテーブルから用途画像を取得（kind='space' と kind='product'）
-    from database import SessionLocal, Image
-    
-    # 既存のimagesがロードされているか確認
-    use_images = {}
-    if hasattr(material, 'images') and material.images:
-        # material.imagesからkind='space'と'product'を抽出
-        for img in material.images:
-            if img.kind in ('space', 'product') and img.public_url:
-                use_images[img.kind] = img.public_url
-    else:
-        # データベースから直接取得
-        db = SessionLocal()
-        try:
-            images = db.query(Image).filter(
-                Image.material_id == material.id,
-                Image.kind.in_(['space', 'product'])
-            ).all()
-            for img in images:
-                if img.public_url:
-                    use_images[img.kind] = img.public_url
-        finally:
-            db.close()
+    # imagesテーブルから用途画像を取得（共通関数を使用）
+    images_by_kind = get_images_by_kind(material)
+    space_url = images_by_kind.get("space")
+    product_url = images_by_kind.get("product")
     
     # 用途画像を表示（空間写真・プロダクト写真）
-    cols = st.columns(2)
-    
-    # cache-buster用のバージョン
-    image_version = os.getenv("IMAGE_VERSION") or "dev"
-    
-    with cols[0]:
-        st.markdown("#### 空間写真")
-        space_url = use_images.get('space')
-        if space_url and space_url.strip():
-            # cache-busterを付ける
-            separator = "&" if "?" in space_url else "?"
-            space_url_with_cache = f"{space_url}{separator}v={image_version}"
-            # URLエンコード（日本語ファイル名対応）
-            safe_space_url = safe_url(space_url_with_cache)
-            st.image(safe_space_url, caption="空間の使用例", use_container_width=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.caption("空間写真")
+        if space_url:
+            st.image(safe_url(space_url), use_container_width=True)
         else:
-            st.info("画像なし")
-            # デバッグ用：画像が無い場合のみURLを表示
-            if space_url:
-                st.caption(f"space_url={space_url}")
+            st.caption("画像なし")
     
-    with cols[1]:
-        st.markdown("#### プロダクト写真")
-        product_url = use_images.get('product')
-        if product_url and product_url.strip():
-            # cache-busterを付ける
-            separator = "&" if "?" in product_url else "?"
-            product_url_with_cache = f"{product_url}{separator}v={image_version}"
-            # URLエンコード（日本語ファイル名対応）
-            safe_product_url = safe_url(product_url_with_cache)
-            st.image(safe_product_url, caption="プロダクトの使用例", use_container_width=True)
+    with c2:
+        st.caption("プロダクト写真")
+        if product_url:
+            st.image(safe_url(product_url), use_container_width=True)
         else:
-            st.info("画像なし")
-            # デバッグ用：画像が無い場合のみURLを表示
-            if product_url:
-                st.caption(f"product_url={product_url}")
+            st.caption("画像なし")
     
     # DBから取得したUseExampleも表示（フォールバック）
     try:
