@@ -182,6 +182,7 @@ class Material(Base):
     name = Column(String(255))  # 旧name（後方互換）
     category = Column(String(100), index=True)  # 旧category（後方互換）
     description = Column(Text)  # 旧description（後方互換）
+    search_text = Column(Text, nullable=True)  # 検索用テキスト（全文検索用）
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
