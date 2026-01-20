@@ -3756,16 +3756,46 @@ def show_search():
         
         db = SessionLocal()
         try:
-            results, search_info = search_materials_hybrid(
-                db=db,
-                query=search_query.strip() if search_query else "",
-                filters=filters,
-                limit=20,
-                include_unpublished=include_unpublished,
-                include_deleted=False,
-                text_weight=0.5,
-                vector_weight=0.5
-            )
+            try:
+                results, search_info = search_materials_hybrid(
+                    db=db,
+                    query=search_query.strip() if search_query else "",
+                    filters=filters,
+                    limit=20,
+                    include_unpublished=include_unpublished,
+                    include_deleted=False,
+                    text_weight=0.5,
+                    vector_weight=0.5
+                )
+            except Exception as e:
+                # 検索が失敗した場合は全文検索にフォールバック（PANICを防ぐ）
+                if is_debug:
+                    st.warning(f"ハイブリッド検索エラー、全文検索にフォールバック: {e}")
+                
+                try:
+                    from utils.search import search_materials_fulltext
+                    results, search_info = search_materials_fulltext(
+                        db=db,
+                        query=search_query.strip() if search_query else "",
+                        filters=filters,
+                        limit=20,
+                        include_unpublished=include_unpublished,
+                        include_deleted=False
+                    )
+                    search_info['method'] = 'fulltext_fallback'
+                    search_info['fallback_reason'] = str(e)
+                except Exception as e2:
+                    # 全文検索も失敗した場合は空結果を返す
+                    if is_debug:
+                        st.error(f"全文検索も失敗: {e2}")
+                    results = []
+                    search_info = {
+                        'query': search_query.strip() if search_query else "",
+                        'filters': filters,
+                        'count': 0,
+                        'method': 'error',
+                        'error': str(e2)
+                    }
         finally:
             db.close()
         
@@ -3783,11 +3813,32 @@ def show_search():
         if results:
             st.success(f"**{len(results)}件**の結果が見つかりました")
             
+            # material_idsを使ってprimary画像を一括取得
+            from database import Image
+            material_ids = [m.id for m in results]
+            primary_images_dict = {}  # {material_id: public_url}
+            
+            if material_ids:
+                db_images = SessionLocal()
+                try:
+                    images_stmt = select(Image).filter(
+                        Image.material_id.in_(material_ids),
+                        Image.kind == "primary"
+                    )
+                    images_result = db_images.execute(images_stmt)
+                    images = images_result.scalars().all()
+                    for img in images:
+                        if img.public_url:
+                            primary_images_dict[img.material_id] = img.public_url
+                finally:
+                    db_images.close()
+            
             # 検索結果をカード形式で表示
             for idx, material in enumerate(results):
                 with st.container():
-                    # 材料カードを表示
-                    _render_material_search_card(material, idx, search_query)
+                    # 材料カードを表示（画像URLを渡す）
+                    image_url = primary_images_dict.get(material.id)
+                    _render_material_search_card(material, idx, search_query, image_url=image_url)
         
         else:
             st.info("検索結果が見つかりませんでした。検索キーワードやフィルタを変更してみてください。")
@@ -3797,7 +3848,7 @@ def show_search():
         st.info("💡 フィルタを使って材料を絞り込むこともできます。")
 
 
-def _render_material_search_card(material, idx: int, search_query: str):
+def _render_material_search_card(material, idx: int, search_query: str, image_url: str = None):
     """
     検索結果の材料カードをレンダリング
     
@@ -3805,6 +3856,7 @@ def _render_material_search_card(material, idx: int, search_query: str):
         material: Materialオブジェクト
         idx: インデックス
         search_query: 検索クエリ（ハイライト用）
+        image_url: primary画像URL（一括取得済み、Noneの場合は個別取得を試みる）
     """
     # SQLで直接カウント（DetachedInstanceError回避）
     db = get_db()
@@ -3816,11 +3868,22 @@ def _render_material_search_card(material, idx: int, search_query: str):
     finally:
         db.close()
     
-    # 素材画像を取得
-    from utils.image_display import get_material_image_ref, display_image_unified
-    from utils.logo import get_project_root
-    
-    image_src, image_debug = get_material_image_ref(material, "primary", get_project_root())
+    # 素材画像を取得（image_urlが渡されている場合はそれを使用）
+    if image_url:
+        image_src = image_url
+        # キャッシュバスターを追加
+        from utils.logo import get_git_sha
+        try:
+            from material_map_version import APP_VERSION
+        except ImportError:
+            APP_VERSION = get_git_sha()
+        separator = "&" if "?" in image_src else "?"
+        image_src = f"{image_src}{separator}v={APP_VERSION}"
+    else:
+        # フォールバック: 個別取得を試みる
+        from utils.image_display import get_material_image_ref, display_image_unified
+        from utils.logo import get_project_root
+        image_src, image_debug = get_material_image_ref(material, "primary", get_project_root())
     
     # カテゴリ名
     category_name = material.category_main or material.category or '未分類'
@@ -3865,6 +3928,7 @@ def _render_material_search_card(material, idx: int, search_query: str):
     
     with col_img:
         if image_src:
+            from utils.image_display import display_image_unified
             display_image_unified(image_src, caption="", width="stretch")
         else:
             st.markdown("<div style='width:100%;height:120px;background:#f0f0f0;display:flex;align-items:center;justify-content:center;color:#999;'>画像なし</div>", unsafe_allow_html=True)

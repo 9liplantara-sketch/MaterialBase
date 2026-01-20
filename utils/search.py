@@ -12,147 +12,172 @@ from database import Material, MaterialEmbedding
 
 def generate_search_text(material: Material) -> str:
     """
-    材料から検索用テキストを生成
+    材料から検索用テキストを生成（欠損に強い実装）
     
     Args:
-        material: Materialオブジェクト
+        material: Materialオブジェクト（MaterialProxy等でも可）
     
     Returns:
-        検索用テキスト（スペース区切り）
+        検索用テキスト（スペース区切り、空の場合は空文字列）
     """
     parts = []
     
-    # 基本識別情報
-    if material.name_official:
-        parts.append(material.name_official)
+    # ヘルパー関数：安全に属性を取得
+    def safe_get(attr_name: str, default=None):
+        return getattr(material, attr_name, default)
     
-    if material.name_aliases:
+    # ヘルパー関数：JSON文字列を安全にパース
+    def safe_json_parse(value, default=None):
+        if not value:
+            return default
         try:
-            aliases = json.loads(material.name_aliases)
-            if isinstance(aliases, list):
-                parts.extend([str(a) for a in aliases if a])
-        except (json.JSONDecodeError, TypeError):
-            # JSONとしてパースできない場合はそのまま追加
-            if isinstance(material.name_aliases, str):
-                parts.append(material.name_aliases)
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return parsed
+            return default
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            if isinstance(value, str):
+                return [value]  # 文字列の場合はリストとして扱う
+            return default
     
-    if material.name:  # 後方互換
-        parts.append(material.name)
+    # 基本識別情報
+    name_official = safe_get("name_official")
+    if name_official:
+        parts.append(str(name_official))
+    
+    name_aliases = safe_get("name_aliases")
+    if name_aliases:
+        aliases = safe_json_parse(name_aliases)
+        if aliases:
+            parts.extend([str(a) for a in aliases if a])
+    
+    name = safe_get("name")  # 後方互換
+    if name:
+        parts.append(str(name))
     
     # 分類
-    if material.category_main:
-        parts.append(material.category_main)
+    category_main = safe_get("category_main")
+    if category_main:
+        parts.append(str(category_main))
     
-    if material.category_other:
-        parts.append(material.category_other)
+    category_other = safe_get("category_other")
+    if category_other:
+        parts.append(str(category_other))
     
-    if material.category:  # 後方互換
-        parts.append(material.category)
+    category = safe_get("category")  # 後方互換
+    if category:
+        parts.append(str(category))
     
-    if material.material_forms:
-        try:
-            forms = json.loads(material.material_forms)
-            if isinstance(forms, list):
-                parts.extend([str(f) for f in forms if f])
-        except (json.JSONDecodeError, TypeError):
-            if isinstance(material.material_forms, str):
-                parts.append(material.material_forms)
+    material_forms = safe_get("material_forms")
+    if material_forms:
+        forms = safe_json_parse(material_forms)
+        if forms:
+            parts.extend([str(f) for f in forms if f])
     
-    if material.material_forms_other:
-        parts.append(material.material_forms_other)
+    material_forms_other = safe_get("material_forms_other")
+    if material_forms_other:
+        parts.append(str(material_forms_other))
     
     # 由来・原料
-    if material.origin_type:
-        parts.append(material.origin_type)
+    origin_type = safe_get("origin_type")
+    if origin_type:
+        parts.append(str(origin_type))
     
-    if material.origin_detail:
-        parts.append(material.origin_detail)
+    origin_detail = safe_get("origin_detail")
+    if origin_detail:
+        parts.append(str(origin_detail))
     
-    if material.origin_other:
-        parts.append(material.origin_other)
+    origin_other = safe_get("origin_other")
+    if origin_other:
+        parts.append(str(origin_other))
     
     # 基本特性
-    if material.color_tags:
-        try:
-            colors = json.loads(material.color_tags)
-            if isinstance(colors, list):
-                parts.extend([str(c) for c in colors if c])
-        except (json.JSONDecodeError, TypeError):
-            if isinstance(material.color_tags, str):
-                parts.append(material.color_tags)
+    color_tags = safe_get("color_tags")
+    if color_tags:
+        colors = safe_json_parse(color_tags)
+        if colors:
+            parts.extend([str(c) for c in colors if c])
     
-    if material.transparency:
-        parts.append(material.transparency)
+    transparency = safe_get("transparency")
+    if transparency:
+        parts.append(str(transparency))
     
-    if material.hardness_qualitative:
-        parts.append(material.hardness_qualitative)
+    hardness_qualitative = safe_get("hardness_qualitative")
+    if hardness_qualitative:
+        parts.append(str(hardness_qualitative))
     
-    if material.weight_qualitative:
-        parts.append(material.weight_qualitative)
+    weight_qualitative = safe_get("weight_qualitative")
+    if weight_qualitative:
+        parts.append(str(weight_qualitative))
     
-    if material.water_resistance:
-        parts.append(material.water_resistance)
+    water_resistance = safe_get("water_resistance")
+    if water_resistance:
+        parts.append(str(water_resistance))
     
-    if material.heat_resistance_range:
-        parts.append(material.heat_resistance_range)
+    heat_resistance_range = safe_get("heat_resistance_range")
+    if heat_resistance_range:
+        parts.append(str(heat_resistance_range))
     
-    if material.weather_resistance:
-        parts.append(material.weather_resistance)
+    weather_resistance = safe_get("weather_resistance")
+    if weather_resistance:
+        parts.append(str(weather_resistance))
     
     # 加工・実装条件
-    if material.processing_methods:
-        try:
-            methods = json.loads(material.processing_methods)
-            if isinstance(methods, list):
-                parts.extend([str(m) for m in methods if m])
-        except (json.JSONDecodeError, TypeError):
-            if isinstance(material.processing_methods, str):
-                parts.append(material.processing_methods)
+    processing_methods = safe_get("processing_methods")
+    if processing_methods:
+        methods = safe_json_parse(processing_methods)
+        if methods:
+            parts.extend([str(m) for m in methods if m])
     
-    if material.processing_other:
-        parts.append(material.processing_other)
+    processing_other = safe_get("processing_other")
+    if processing_other:
+        parts.append(str(processing_other))
     
-    if material.equipment_level:
-        parts.append(material.equipment_level)
+    equipment_level = safe_get("equipment_level")
+    if equipment_level:
+        parts.append(str(equipment_level))
     
-    if material.prototyping_difficulty:
-        parts.append(material.prototyping_difficulty)
+    prototyping_difficulty = safe_get("prototyping_difficulty")
+    if prototyping_difficulty:
+        parts.append(str(prototyping_difficulty))
     
     # 用途
-    if material.use_categories:
-        try:
-            uses = json.loads(material.use_categories)
-            if isinstance(uses, list):
-                parts.extend([str(u) for u in uses if u])
-        except (json.JSONDecodeError, TypeError):
-            if isinstance(material.use_categories, str):
-                parts.append(material.use_categories)
+    use_categories = safe_get("use_categories")
+    if use_categories:
+        uses = safe_json_parse(use_categories)
+        if uses:
+            parts.extend([str(u) for u in uses if u])
     
-    if material.use_other:
-        parts.append(material.use_other)
+    use_other = safe_get("use_other")
+    if use_other:
+        parts.append(str(use_other))
     
     # 安全・制約
-    if material.safety_tags:
-        try:
-            safety = json.loads(material.safety_tags)
-            if isinstance(safety, list):
-                parts.extend([str(s) for s in safety if s])
-        except (json.JSONDecodeError, TypeError):
-            if isinstance(material.safety_tags, str):
-                parts.append(material.safety_tags)
+    safety_tags = safe_get("safety_tags")
+    if safety_tags:
+        safety = safe_json_parse(safety_tags)
+        if safety:
+            parts.extend([str(s) for s in safety if s])
     
-    if material.safety_other:
-        parts.append(material.safety_other)
+    safety_other = safe_get("safety_other")
+    if safety_other:
+        parts.append(str(safety_other))
     
-    if material.restrictions:
-        parts.append(material.restrictions)
+    restrictions = safe_get("restrictions")
+    if restrictions:
+        parts.append(str(restrictions))
     
     # 説明（後方互換）
-    if material.description:
-        parts.append(material.description)
+    description = safe_get("description")
+    if description:
+        parts.append(str(description))
     
     # 空白を除去して結合
-    search_text = " ".join([p.strip() for p in parts if p and p.strip()])
+    try:
+        search_text = " ".join([p.strip() for p in parts if p and p.strip()])
+    except Exception:
+        # 万が一エラーが発生した場合は空文字列を返す
+        search_text = ""
     
     return search_text
 
@@ -646,11 +671,11 @@ def search_materials_hybrid(
         query_embedding = generate_embedding(query.strip())
         embedding_str = '[' + ','.join(str(x) for x in query_embedding) + ']'
         
-        # WHERE条件を構築（SQLインジェクション対策のためパラメータ化）
+        # WHERE条件を構築（SQLインジェクション対策のためパラメータ化、:name形式）
         where_parts = []
         params = {
             "query": query.strip(),
-            "query_embedding": embedding_str,
+            "query_embedding": embedding_str,  # pgvector形式: '[0.0,0.1,...]'
             "text_weight": text_weight,
             "vector_weight": vector_weight,
             "limit": limit
@@ -661,7 +686,7 @@ def search_materials_hybrid(
         if not include_unpublished:
             where_parts.append("m.is_published = 1")
         
-        # フィルタ条件を追加（パラメータ化）
+        # フィルタ条件を追加（パラメータ化、:name形式）
         if filters.get('use_categories'):
             use_conditions = []
             for i, uc in enumerate(filters['use_categories']):
@@ -692,58 +717,129 @@ def search_materials_hybrid(
         
         where_clause = " AND " + " AND ".join(where_parts) if where_parts else ""
         
+        # ベクトル検索が使えるかチェック（material_embeddingsテーブルとpgvector拡張の存在確認）
+        use_vector_search = False
+        try:
+            # material_embeddingsテーブルの存在確認
+            check_stmt = text("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'material_embeddings'
+                )
+            """)
+            has_embeddings_table = db.execute(check_stmt).scalar()
+            
+            if has_embeddings_table:
+                # pgvector拡張の存在確認
+                check_vector_stmt = text("""
+                    SELECT EXISTS (
+                        SELECT FROM pg_extension 
+                        WHERE extname = 'vector'
+                    )
+                """)
+                has_vector_ext = db.execute(check_vector_stmt).scalar()
+                use_vector_search = has_vector_ext and vector_weight > 0
+        except Exception:
+            use_vector_search = False
+        
         # ハイブリッド検索クエリ（全文rank + ベクトル類似度）
-        hybrid_stmt = text(f"""
-            SELECT 
-                m.id,
-                COALESCE(
-                    ts_rank(to_tsvector('simple', COALESCE(m.search_text, '')), plainto_tsquery('simple', :query)),
-                    0
-                ) as text_rank,
-                COALESCE(
-                    1 - (me.embedding <=> :query_embedding::vector),
-                    0
-                ) as vector_similarity,
-                (COALESCE(
-                    ts_rank(to_tsvector('simple', COALESCE(m.search_text, '')), plainto_tsquery('simple', :query)),
-                    0
-                ) * :text_weight + COALESCE(
-                    1 - (me.embedding <=> :query_embedding::vector),
-                    0
-                ) * :vector_weight) as combined_score
-            FROM materials m
-            LEFT JOIN material_embeddings me ON m.id = me.material_id
-            WHERE (
-                (m.search_text IS NOT NULL AND m.search_text != '' AND 
-                 to_tsvector('simple', COALESCE(m.search_text, '')) @@ plainto_tsquery('simple', :query))
-                OR
-                (me.embedding IS NOT NULL)
-            ){where_clause}
-            ORDER BY combined_score DESC
-            LIMIT :limit
-        """)
+        if use_vector_search:
+            # ベクトル検索を含むハイブリッド検索
+            hybrid_stmt = text(f"""
+                SELECT 
+                    m.id,
+                    COALESCE(
+                        ts_rank(to_tsvector('simple', COALESCE(m.search_text, '')), plainto_tsquery('simple', :query)),
+                        0
+                    ) as text_rank,
+                    COALESCE(
+                        1 - (me.embedding <=> :query_embedding::vector),
+                        0
+                    ) as vector_similarity,
+                    (COALESCE(
+                        ts_rank(to_tsvector('simple', COALESCE(m.search_text, '')), plainto_tsquery('simple', :query)),
+                        0
+                    ) * :text_weight + COALESCE(
+                        1 - (me.embedding <=> :query_embedding::vector),
+                        0
+                    ) * :vector_weight) as combined_score
+                FROM materials m
+                LEFT JOIN material_embeddings me ON m.id = me.material_id
+                WHERE (
+                    (m.search_text IS NOT NULL AND m.search_text != '' AND 
+                     to_tsvector('simple', COALESCE(m.search_text, '')) @@ plainto_tsquery('simple', :query))
+                    OR
+                    (me.embedding IS NOT NULL)
+                ){where_clause}
+                ORDER BY combined_score DESC
+                LIMIT :limit
+            """)
+        else:
+            # ベクトル検索なし（全文検索のみ）
+            hybrid_stmt = text(f"""
+                SELECT 
+                    m.id,
+                    COALESCE(
+                        ts_rank(to_tsvector('simple', COALESCE(m.search_text, '')), plainto_tsquery('simple', :query)),
+                        0
+                    ) as text_rank,
+                    0 as vector_similarity,
+                    (COALESCE(
+                        ts_rank(to_tsvector('simple', COALESCE(m.search_text, '')), plainto_tsquery('simple', :query)),
+                        0
+                    ) * :text_weight) as combined_score
+                FROM materials m
+                WHERE (
+                    m.search_text IS NOT NULL AND m.search_text != '' AND 
+                    to_tsvector('simple', COALESCE(m.search_text, '')) @@ plainto_tsquery('simple', :query)
+                ){where_clause}
+                ORDER BY combined_score DESC
+                LIMIT :limit
+            """)
+            # ベクトル検索を使わない場合はquery_embeddingを削除
+            params.pop('query_embedding', None)
         
-        # 実行
-        result = db.execute(hybrid_stmt, params)
+        # 実行（エラーハンドリング付き）
+        try:
+            result = db.execute(hybrid_stmt, params)
+            
+            # Materialオブジェクトを取得
+            material_ids = [row[0] for row in result]
+            materials_dict = {m.id: m for m in db.query(Material).filter(Material.id.in_(material_ids)).all()}
+            
+            # ID順序を保持
+            results = [materials_dict[mid] for mid in material_ids if mid in materials_dict]
+            
+            # 検索情報を構築
+            search_info = {
+                'query': query,
+                'filters': filters,
+                'count': len(results),
+                'method': 'hybrid' if use_vector_search else 'fulltext_only',
+                'text_weight': text_weight,
+                'vector_weight': vector_weight if use_vector_search else 0
+            }
+            
+            return results, search_info
         
-        # Materialオブジェクトを取得
-        material_ids = [row[0] for row in result]
-        materials_dict = {m.id: m for m in db.query(Material).filter(Material.id.in_(material_ids)).all()}
-        
-        # ID順序を保持
-        results = [materials_dict[mid] for mid in material_ids if mid in materials_dict]
-        
-        # 検索情報を構築
-        search_info = {
-            'query': query,
-            'filters': filters,
-            'count': len(results),
-            'method': 'hybrid',
-            'text_weight': text_weight,
-            'vector_weight': vector_weight
-        }
-        
-        return results, search_info
+        except Exception as e:
+            # ベクトル検索が失敗した場合は全文検索にフォールバック
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Hybrid search failed, falling back to fulltext search: {e}")
+            
+            # 全文検索にフォールバック
+            results, search_info = search_materials_fulltext(
+                db=db,
+                query=query,
+                filters=filters,
+                limit=limit,
+                include_unpublished=include_unpublished,
+                include_deleted=include_deleted
+            )
+            search_info['method'] = 'fulltext_fallback'
+            search_info['fallback_reason'] = str(e)
+            return results, search_info
     else:
         # クエリがない場合はフィルタのみで全文検索を使用
         results, search_info = search_materials_fulltext(
