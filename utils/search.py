@@ -183,6 +183,44 @@ def generate_search_text(material: Material) -> str:
     return search_text
 
 
+def normalize_filters(filters: Optional[dict]) -> dict:
+    """
+    フィルタ辞書を正規化（空値やプレースホルダーを除去）
+    
+    Args:
+        filters: フィルタ辞書
+    
+    Returns:
+        正規化されたフィルタ辞書（空の場合は空辞書）
+    """
+    if not filters:
+        return {}
+    
+    normalized = {}
+    
+    # プレースホルダー文字列のリスト（無視すべき値）
+    placeholder_values = ["すべて", "", None, "Choose options", "選択してください"]
+    
+    # use_categories（リスト）
+    if 'use_categories' in filters:
+        use_categories = filters['use_categories']
+        if use_categories and isinstance(use_categories, list):
+            # 空でない、有効な値のみをフィルタ
+            valid_uses = [u for u in use_categories if u and str(u).strip() and str(u) not in placeholder_values]
+            if valid_uses:
+                normalized['use_categories'] = valid_uses
+    
+    # 単一値フィルタ（transparency, weather_resistance, water_resistance, equipment_level, cost_level）
+    single_value_keys = ['transparency', 'weather_resistance', 'water_resistance', 'equipment_level', 'cost_level']
+    for key in single_value_keys:
+        if key in filters:
+            value = filters[key]
+            if value and str(value).strip() and str(value) not in placeholder_values:
+                normalized[key] = value
+    
+    return normalized
+
+
 def search_materials_fulltext(
     db: Session,
     query: str = "",
@@ -212,7 +250,8 @@ def search_materials_fulltext(
     Returns:
         (検索結果のMaterialリスト（関連度順）, 検索情報辞書)
     """
-    filters = filters or {}
+    # フィルタを正規化（空値やプレースホルダーを除去）
+    filters = normalize_filters(filters)
     
     # データベースの種類を確認
     dialect_name = db.bind.dialect.name if hasattr(db, 'bind') and db.bind else None
@@ -682,7 +721,8 @@ def search_materials_hybrid(
     Returns:
         (検索結果のMaterialリスト（統合スコア順）, 検索情報辞書)
     """
-    filters = filters or {}
+    # フィルタを正規化（空値やプレースホルダーを除去）
+    filters = normalize_filters(filters) if filters else {}
     
     # データベースの種類を確認
     dialect_name = db.bind.dialect.name if hasattr(db, 'bind') and db.bind else None

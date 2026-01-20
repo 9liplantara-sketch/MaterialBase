@@ -3730,19 +3730,29 @@ def show_search():
             key="filter_cost"
         )
     
-    # フィルタ辞書を構築
+    # フィルタ辞書を構築（正規化済み）
     filters = {}
-    if selected_uses:
-        filters['use_categories'] = selected_uses
-    if selected_transparency and selected_transparency != "すべて":
+    
+    # プレースホルダー文字列のリスト（無視すべき値）
+    placeholder_values = ["すべて", "", None, "Choose options", "選択してください"]
+    
+    # 用途（multiselect）
+    if selected_uses and isinstance(selected_uses, list):
+        # 空でない、有効な値のみをフィルタ
+        valid_uses = [u for u in selected_uses if u and str(u).strip() and str(u) not in placeholder_values]
+        if valid_uses:
+            filters['use_categories'] = valid_uses
+    
+    # 単一値フィルタ（selectbox）
+    if selected_transparency and str(selected_transparency) not in placeholder_values:
         filters['transparency'] = selected_transparency
-    if selected_weather and selected_weather != "すべて":
+    if selected_weather and str(selected_weather) not in placeholder_values:
         filters['weather_resistance'] = selected_weather
-    if selected_water and selected_water != "すべて":
+    if selected_water and str(selected_water) not in placeholder_values:
         filters['water_resistance'] = selected_water
-    if selected_equipment and selected_equipment != "すべて":
+    if selected_equipment and str(selected_equipment) not in placeholder_values:
         filters['equipment_level'] = selected_equipment
-    if selected_cost and selected_cost != "すべて":
+    if selected_cost and str(selected_cost) not in placeholder_values:
         filters['cost_level'] = selected_cost
     
     # 管理者表示フラグを取得
