@@ -3835,10 +3835,15 @@ def show_search():
             
             # 検索結果をカード形式で表示
             for idx, material in enumerate(results):
-                with st.container():
-                    # 材料カードを表示（画像URLを渡す）
-                    image_url = primary_images_dict.get(material.id)
-                    _render_material_search_card(material, idx, search_query, image_url=image_url)
+                try:
+                    with st.container():
+                        # 材料カードを表示（画像URLを渡す）
+                        image_url = primary_images_dict.get(material.id)
+                        _render_material_search_card(material, idx, search_query, image_url=image_url)
+                except Exception as e:
+                    # カード描画で例外が発生した場合はログに記録し、そのカードだけスキップ
+                    logger.exception(f"検索結果カードの描画でエラーが発生しました (material_id={material.id if material else 'unknown'}, idx={idx}): {e}")
+                    st.warning(f"⚠️ 材料ID {material.id if material else 'unknown'} のカードを表示できませんでした。")
         
         else:
             st.info("検索結果が見つかりませんでした。検索キーワードやフィルタを変更してみてください。")

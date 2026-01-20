@@ -8,6 +8,27 @@ from typing import Optional, Dict, Any
 import streamlit as st
 import unicodedata
 import os
+import subprocess
+
+
+def get_git_sha() -> str:
+    """
+    Gitの短縮SHAを取得（失敗時は'unknown'を返す）
+    
+    Returns:
+        Gitの短縮SHA（例: 'a1b2c3d'）、取得できない場合は'unknown'
+    
+    Note:
+        Cloud環境でgitが使えない場合があるため、例外は握りつぶす
+    """
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL
+        ).decode("utf-8").strip()
+        return sha
+    except (subprocess.CalledProcessError, FileNotFoundError, Exception):
+        return "unknown"
 
 
 def get_project_root() -> Path:
