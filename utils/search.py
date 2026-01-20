@@ -1015,23 +1015,12 @@ def search_materials_hybrid(
             return results, search_info
         
         except Exception as e:
-            # ベクトル検索が失敗した場合は全文検索にフォールバック
+            # ベクトル検索が失敗した場合は例外を投げ直す（rollbackは外部で行う）
             import logging
             logger = logging.getLogger(__name__)
-            logger.warning(f"Hybrid search failed, falling back to fulltext search: {e}")
-            
-            # 全文検索にフォールバック
-            results, search_info = search_materials_fulltext(
-                db=db,
-                query=query,
-                filters=filters,
-                limit=limit,
-                include_unpublished=include_unpublished,
-                include_deleted=include_deleted
-            )
-            search_info['method'] = 'fulltext_fallback'
-            search_info['fallback_reason'] = str(e)
-            return results, search_info
+            logger.warning(f"Hybrid search failed: {e}")
+            # 例外を投げ直す（app.py側でrollbackしてからフォールバック処理を行う）
+            raise
     else:
         # クエリがない場合はフィルタのみで全文検索を使用
         results, search_info = search_materials_fulltext(

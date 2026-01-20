@@ -3058,12 +3058,12 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                 # 用途画像を2カラムで表示（画像がある場合のみ）
                 if space_url or product_url:
                     c1, c2 = st.columns(2)
-                with c1:
-                    if space_url:
+                    with c1:
+                        if space_url:
                             st.image(safe_url(space_url), width='stretch')
-                
-                with c2:
-                    if product_url:
+                    
+                    with c2:
+                        if product_url:
                             st.image(safe_url(product_url), width='stretch')
                 
                 st.markdown("---")
@@ -3760,30 +3760,66 @@ def show_search():
     
     # 検索実行（クエリまたはフィルタがある場合）
     if (search_query and search_query.strip()) or filters:
-        # ハイブリッド検索（全文検索 + ベクトル検索、フィルタ対応）を使用
-        from utils.search import search_materials_hybrid
         from database import SessionLocal
+        
+        # ハイブリッド検索を無効化できるフラグ（ENABLE_VECTOR_SEARCH=0で無効化）
+        enable_vector_search = os.getenv("ENABLE_VECTOR_SEARCH", "0") == "1"
         
         db = SessionLocal()
         try:
-            try:
-                results, search_info = search_materials_hybrid(
-                    db=db,
-                    query=search_query.strip() if search_query else "",
-                    filters=filters,
-                    limit=20,
-                    include_unpublished=include_unpublished,
-                    include_deleted=False,
-                    text_weight=0.5,
-                    vector_weight=0.5
-                )
-            except Exception as e:
-                # 検索が失敗した場合は全文検索にフォールバック（PANICを防ぐ）
-                if is_debug:
-                    st.warning(f"ハイブリッド検索エラー、全文検索にフォールバック: {e}")
-                
+            if enable_vector_search:
+                # ハイブリッド検索（全文検索 + ベクトル検索、フィルタ対応）を使用
+                from utils.search import search_materials_hybrid
                 try:
-                    from utils.search import search_materials_fulltext
+                    results, search_info = search_materials_hybrid(
+                        db=db,
+                        query=search_query.strip() if search_query else "",
+                        filters=filters,
+                        limit=20,
+                        include_unpublished=include_unpublished,
+                        include_deleted=False,
+                        text_weight=0.5,
+                        vector_weight=0.5
+                    )
+                except Exception as e:
+                    # トランザクションエラーを防ぐため、必ずrollbackする
+                    db.rollback()
+                    
+                    # 検索が失敗した場合は全文検索にフォールバック（PANICを防ぐ）
+                    if is_debug:
+                        st.warning(f"ハイブリッド検索エラー、全文検索にフォールバック: {e}")
+                    
+                    try:
+                        from utils.search import search_materials_fulltext
+                        results, search_info = search_materials_fulltext(
+                            db=db,
+                            query=search_query.strip() if search_query else "",
+                            filters=filters,
+                            limit=20,
+                            include_unpublished=include_unpublished,
+                            include_deleted=False
+                        )
+                        search_info['method'] = 'fulltext_fallback'
+                        search_info['fallback_reason'] = str(e)
+                    except Exception as e2:
+                        # トランザクションエラーを防ぐため、必ずrollbackする
+                        db.rollback()
+                        
+                        # 全文検索も失敗した場合は空結果を返す
+                        if is_debug:
+                            st.error(f"全文検索も失敗: {e2}")
+                        results = []
+                        search_info = {
+                            'query': search_query.strip() if search_query else "",
+                            'filters': filters,
+                            'count': 0,
+                            'method': 'error',
+                            'error': str(e2)
+                        }
+            else:
+                # ハイブリッド検索が無効化されている場合は全文検索のみ実行
+                from utils.search import search_materials_fulltext
+                try:
                     results, search_info = search_materials_fulltext(
                         db=db,
                         query=search_query.strip() if search_query else "",
@@ -3792,19 +3828,20 @@ def show_search():
                         include_unpublished=include_unpublished,
                         include_deleted=False
                     )
-                    search_info['method'] = 'fulltext_fallback'
-                    search_info['fallback_reason'] = str(e)
-                except Exception as e2:
-                    # 全文検索も失敗した場合は空結果を返す
+                    search_info['method'] = 'fulltext_only'
+                except Exception as e:
+                    # トランザクションエラーを防ぐため、必ずrollbackする
+                    db.rollback()
+                    
                     if is_debug:
-                        st.error(f"全文検索も失敗: {e2}")
+                        st.error(f"全文検索が失敗: {e}")
                     results = []
                     search_info = {
                         'query': search_query.strip() if search_query else "",
                         'filters': filters,
                         'count': 0,
                         'method': 'error',
-                        'error': str(e2)
+                        'error': str(e)
                     }
         finally:
             db.close()
