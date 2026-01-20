@@ -3874,21 +3874,18 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
         db.close()
     
     # 素材画像を取得（image_urlが渡されている場合はそれを使用）
+    image_src = None
     if image_url:
-        image_src = image_url
         # キャッシュバスターを追加
         from utils.logo import get_git_sha
         try:
             from material_map_version import APP_VERSION
         except ImportError:
             APP_VERSION = get_git_sha()
-        separator = "&" if "?" in image_src else "?"
-        image_src = f"{image_src}{separator}v={APP_VERSION}"
-    else:
-        # フォールバック: 個別取得を試みる
-        from utils.image_display import get_material_image_ref, display_image_unified
-        from utils.logo import get_project_root
-        image_src, image_debug = get_material_image_ref(material, "primary", get_project_root())
+        separator = "&" if "?" in image_url else "?"
+        image_url_with_cache = f"{image_url}{separator}v={APP_VERSION}"
+        # safe_url()で日本語ファイル名をエンコード
+        image_src = safe_url(image_url_with_cache)
     
     # カテゴリ名
     category_name = material.category_main or material.category or '未分類'
@@ -3933,10 +3930,11 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
     
     with col_img:
         if image_src:
-            from utils.image_display import display_image_unified
-            display_image_unified(image_src, caption="", width="stretch")
+            # st.imageを使用（最も堅い実装）
+            st.image(image_src, width='stretch')
         else:
-            st.markdown("<div style='width:100%;height:120px;background:#f0f0f0;display:flex;align-items:center;justify-content:center;color:#999;'>画像なし</div>", unsafe_allow_html=True)
+            # 画像がない場合は小さな灰色枠を表示
+            st.markdown("<div style='width:100%;height:120px;background:#f0f0f0;'></div>", unsafe_allow_html=True)
     
     with col_info:
         st.markdown(f"### {material_name}")

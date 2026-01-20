@@ -3,6 +3,7 @@
 """
 import json
 import hashlib
+import re
 from datetime import datetime
 from typing import List, Optional, Tuple
 from sqlalchemy import text, select, func
@@ -285,26 +286,78 @@ def search_materials_fulltext(
             
             # 全文検索が0件でクエリがある場合、ILIKEフォールバックを試す
             if len(results) == 0 and query and query.strip():
-                # ILIKEフォールバック: search_textに対する部分一致検索
-                if where_conditions:
-                    from sqlalchemy import and_
-                    ilike_stmt = select(Material).where(and_(*where_conditions))
-                else:
-                    ilike_stmt = select(Material)
+                # ILIKEフォールバック: search_textに対する部分一致検索（トークン分割してAND検索）
+                # クエリを空白で分割し、空要素を除去
+                tokens = [t.strip() for t in re.split(r"\s+", query.strip()) if t.strip()]
                 
-                # ILIKE検索（大文字小文字を区別しない部分一致）
-                ilike_stmt = ilike_stmt.where(
-                    text("search_text ILIKE :like_query")
-                ).params(like_query=f"%{query.strip()}%")
-                
-                # ID順でソート
-                ilike_stmt = ilike_stmt.order_by(Material.id.desc())
-                
-                # 件数制限
-                ilike_stmt = ilike_stmt.limit(limit)
-                
-                # 実行
-                results = db.execute(ilike_stmt).unique().scalars().all()
+                if tokens:
+                    # WHERE条件を構築（フィルタ条件を適用）
+                    ilike_where_parts = []
+                    ilike_params = {}
+                    
+                    # 基本フィルタ
+                    if not include_deleted:
+                        ilike_where_parts.append("m.is_deleted = 0")
+                    if not include_unpublished:
+                        ilike_where_parts.append("m.is_published = 1")
+                    
+                    # フィルタ条件を追加
+                    if filters.get('use_categories'):
+                        use_conditions = []
+                        for i, uc in enumerate(filters['use_categories']):
+                            param_name = f"use_cat_{i}"
+                            use_conditions.append(f"m.use_categories LIKE :{param_name}")
+                            ilike_params[param_name] = f'%"{uc}"%'
+                        ilike_where_parts.append(f"({' OR '.join(use_conditions)})")
+                    
+                    if filters.get('transparency'):
+                        ilike_where_parts.append("m.transparency = :transparency")
+                        ilike_params['transparency'] = filters['transparency']
+                    
+                    if filters.get('weather_resistance'):
+                        ilike_where_parts.append("m.weather_resistance = :weather_resistance")
+                        ilike_params['weather_resistance'] = filters['weather_resistance']
+                    
+                    if filters.get('water_resistance'):
+                        ilike_where_parts.append("m.water_resistance = :water_resistance")
+                        ilike_params['water_resistance'] = filters['water_resistance']
+                    
+                    if filters.get('equipment_level'):
+                        ilike_where_parts.append("m.equipment_level = :equipment_level")
+                        ilike_params['equipment_level'] = filters['equipment_level']
+                    
+                    if filters.get('cost_level'):
+                        ilike_where_parts.append("m.cost_level = :cost_level")
+                        ilike_params['cost_level'] = filters['cost_level']
+                    
+                    # トークンごとにILIKE条件を追加（ANDで組み立て）
+                    token_conditions = []
+                    for i, token in enumerate(tokens):
+                        param_name = f"t{i}"
+                        token_conditions.append(f"m.search_text ILIKE :{param_name}")
+                        ilike_params[param_name] = f"%{token}%"
+                    
+                    ilike_where_parts.append(f"({' AND '.join(token_conditions)})")
+                    ilike_where_clause = " AND " + " AND ".join(ilike_where_parts) if ilike_where_parts else ""
+                    
+                    # ILIKE検索クエリ
+                    ilike_stmt = text(f"""
+                        SELECT m.id
+                        FROM materials m
+                        WHERE m.search_text IS NOT NULL AND m.search_text != ''{ilike_where_clause}
+                        ORDER BY m.id DESC
+                        LIMIT :limit
+                    """)
+                    ilike_params['limit'] = limit
+                    
+                    try:
+                        ilike_result = db.execute(ilike_stmt, ilike_params)
+                        ilike_material_ids = [row[0] for row in ilike_result]
+                        ilike_materials_dict = {m.id: m for m in db.query(Material).filter(Material.id.in_(ilike_material_ids)).all()}
+                        results = [ilike_materials_dict[mid] for mid in ilike_material_ids if mid in ilike_materials_dict]
+                    except Exception:
+                        # ILIKEフォールバックも失敗した場合は空結果のまま
+                        pass
             
             # 検索情報を構築
             search_info = {
@@ -835,69 +888,79 @@ def search_materials_hybrid(
             results = [materials_dict[mid] for mid in material_ids if mid in materials_dict]
             
             # 全文検索が0件の場合、ILIKEフォールバックを試す
-            if len(results) == 0:
-                # ILIKEフォールバック: search_textに対する部分一致検索
-                # WHERE条件を構築（フィルタ条件を適用）
-                ilike_where_parts = []
-                ilike_params = {
-                    "like_query": f"%{query.strip()}%"
-                }
+            if len(results) == 0 and query and query.strip():
+                # ILIKEフォールバック: search_textに対する部分一致検索（トークン分割してAND検索）
+                # クエリを空白で分割し、空要素を除去
+                tokens = [t.strip() for t in re.split(r"\s+", query.strip()) if t.strip()]
                 
-                if not include_deleted:
-                    ilike_where_parts.append("m.is_deleted = 0")
-                if not include_unpublished:
-                    ilike_where_parts.append("m.is_published = 1")
-                
-                # フィルタ条件を追加
-                if filters.get('use_categories'):
-                    use_conditions = []
-                    for i, uc in enumerate(filters['use_categories']):
-                        param_name = f"use_cat_{i}"
-                        use_conditions.append(f"m.use_categories LIKE :{param_name}")
-                        ilike_params[param_name] = f'%"{uc}"%'
-                    ilike_where_parts.append(f"({' OR '.join(use_conditions)})")
-                
-                if filters.get('transparency'):
-                    ilike_where_parts.append("m.transparency = :transparency")
-                    ilike_params['transparency'] = filters['transparency']
-                
-                if filters.get('weather_resistance'):
-                    ilike_where_parts.append("m.weather_resistance = :weather_resistance")
-                    ilike_params['weather_resistance'] = filters['weather_resistance']
-                
-                if filters.get('water_resistance'):
-                    ilike_where_parts.append("m.water_resistance = :water_resistance")
-                    ilike_params['water_resistance'] = filters['water_resistance']
-                
-                if filters.get('equipment_level'):
-                    ilike_where_parts.append("m.equipment_level = :equipment_level")
-                    ilike_params['equipment_level'] = filters['equipment_level']
-                
-                if filters.get('cost_level'):
-                    ilike_where_parts.append("m.cost_level = :cost_level")
-                    ilike_params['cost_level'] = filters['cost_level']
-                
-                ilike_where_clause = " AND " + " AND ".join(ilike_where_parts) if ilike_where_parts else ""
-                
-                # ILIKE検索クエリ
-                ilike_stmt = text(f"""
-                    SELECT m.id
-                    FROM materials m
-                    WHERE m.search_text IS NOT NULL AND m.search_text != '' AND 
-                          m.search_text ILIKE :like_query{ilike_where_clause}
-                    ORDER BY m.id DESC
-                    LIMIT :limit
-                """)
-                ilike_params['limit'] = limit
-                
-                try:
-                    ilike_result = db.execute(ilike_stmt, ilike_params)
-                    ilike_material_ids = [row[0] for row in ilike_result]
-                    ilike_materials_dict = {m.id: m for m in db.query(Material).filter(Material.id.in_(ilike_material_ids)).all()}
-                    results = [ilike_materials_dict[mid] for mid in ilike_material_ids if mid in ilike_materials_dict]
-                except Exception:
-                    # ILIKEフォールバックも失敗した場合は空結果のまま
-                    pass
+                if tokens:
+                    # WHERE条件を構築（フィルタ条件を適用）
+                    ilike_where_parts = []
+                    ilike_params = {}
+                    
+                    # 基本フィルタ
+                    if not include_deleted:
+                        ilike_where_parts.append("m.is_deleted = 0")
+                    if not include_unpublished:
+                        ilike_where_parts.append("m.is_published = 1")
+                    
+                    # フィルタ条件を追加
+                    if filters.get('use_categories'):
+                        use_conditions = []
+                        for i, uc in enumerate(filters['use_categories']):
+                            param_name = f"use_cat_{i}"
+                            use_conditions.append(f"m.use_categories LIKE :{param_name}")
+                            ilike_params[param_name] = f'%"{uc}"%'
+                        ilike_where_parts.append(f"({' OR '.join(use_conditions)})")
+                    
+                    if filters.get('transparency'):
+                        ilike_where_parts.append("m.transparency = :transparency")
+                        ilike_params['transparency'] = filters['transparency']
+                    
+                    if filters.get('weather_resistance'):
+                        ilike_where_parts.append("m.weather_resistance = :weather_resistance")
+                        ilike_params['weather_resistance'] = filters['weather_resistance']
+                    
+                    if filters.get('water_resistance'):
+                        ilike_where_parts.append("m.water_resistance = :water_resistance")
+                        ilike_params['water_resistance'] = filters['water_resistance']
+                    
+                    if filters.get('equipment_level'):
+                        ilike_where_parts.append("m.equipment_level = :equipment_level")
+                        ilike_params['equipment_level'] = filters['equipment_level']
+                    
+                    if filters.get('cost_level'):
+                        ilike_where_parts.append("m.cost_level = :cost_level")
+                        ilike_params['cost_level'] = filters['cost_level']
+                    
+                    # トークンごとにILIKE条件を追加（ANDで組み立て）
+                    token_conditions = []
+                    for i, token in enumerate(tokens):
+                        param_name = f"t{i}"
+                        token_conditions.append(f"m.search_text ILIKE :{param_name}")
+                        ilike_params[param_name] = f"%{token}%"
+                    
+                    ilike_where_parts.append(f"({' AND '.join(token_conditions)})")
+                    ilike_where_clause = " AND " + " AND ".join(ilike_where_parts) if ilike_where_parts else ""
+                    
+                    # ILIKE検索クエリ
+                    ilike_stmt = text(f"""
+                        SELECT m.id
+                        FROM materials m
+                        WHERE m.search_text IS NOT NULL AND m.search_text != ''{ilike_where_clause}
+                        ORDER BY m.id DESC
+                        LIMIT :limit
+                    """)
+                    ilike_params['limit'] = limit
+                    
+                    try:
+                        ilike_result = db.execute(ilike_stmt, ilike_params)
+                        ilike_material_ids = [row[0] for row in ilike_result]
+                        ilike_materials_dict = {m.id: m for m in db.query(Material).filter(Material.id.in_(ilike_material_ids)).all()}
+                        results = [ilike_materials_dict[mid] for mid in ilike_material_ids if mid in ilike_materials_dict]
+                    except Exception:
+                        # ILIKEフォールバックも失敗した場合は空結果のまま
+                        pass
             
             # 検索情報を構築
             search_info = {
