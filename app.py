@@ -5016,9 +5016,19 @@ def show_bulk_import(embedded: bool = False):
             if duplicates:
                 st.warning(f"⚠️ CSV内に同名の材料があります: {', '.join(set(duplicates))}")
             
-            # 実行ボタン
-            if not preview_mode:
+            # 検証結果を確認（すべての行がOKなら preview_ok = True）
+            preview_ok = all(
+                validate_csv_row(row, row_num)[0] 
+                for row_num, row in enumerate(csv_rows, start=2)
+            )
+            
+            # 検証がOKなら、プレビューモードの状態に関係なくボタンを表示
+            if preview_ok:
                 st.markdown("---")
+                
+                # プレビューモードの場合は警告メッセージを表示
+                if preview_mode:
+                    st.info("ℹ️ プレビューモード：検証はOKです。下のボタンで実行または送信できます。")
                 
                 # 管理者の場合は直接実行、非管理者の場合は承認待ちに送信
                 if is_admin:
@@ -5131,6 +5141,10 @@ def show_bulk_import(embedded: bool = False):
                             logger.exception(f"Bulk submission error: {e}")
                         finally:
                             db.close()
+            else:
+                # 検証エラーがある場合は警告を表示
+                st.markdown("---")
+                st.error("❌ CSVファイルに検証エラーがあります。上記のプレビューを確認して修正してください。")
         
         except Exception as e:
             st.error(f"ファイル処理中にエラーが発生しました: {e}")
