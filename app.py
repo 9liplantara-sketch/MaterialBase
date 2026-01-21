@@ -3065,15 +3065,13 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                 
                 # 用途画像を2カラムで表示（画像がある場合のみ）
                 if space_url or product_url:
-                c1, c2 = st.columns(2)
-                with c1:
-                    if space_url:
-                            st.image(safe_url(space_url), width='stretch')
-                
-                with c2:
-                    if product_url:
-                            st.image(safe_url(product_url), width='stretch')
-                
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if space_url:
+                            st.image(safe_url(space_url), width="stretch")
+                    with c2:
+                        if product_url:
+                            st.image(safe_url(product_url), width="stretch")
                 st.markdown("---")
                 
                 # 管理者モードの場合は編集・削除ボタンを表示
@@ -3831,7 +3829,7 @@ def show_search():
                         # 全文検索も失敗した場合は空結果を返す
                         if is_debug:
                             st.error(f"全文検索も失敗: {e2}")
-        results = []
+                        results = []
                         search_info = {
                             'query': search_query.strip() if search_query else "",
                             'filters': filters,
@@ -4748,25 +4746,25 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 db_emb.close()
         
         # ===== TxProps: properties upsert（別トランザクション、失敗しても承認は継続） =====
-        properties_list = form_data.get("properties", [])
+            properties_list = form_data.get("properties", [])
         if properties_list and material_id:
             db_props = SessionLocal()
-            try:
-                # 既存の同keyを削除（置き換えのため）
-                property_keys = [prop.get("key") for prop in properties_list if prop.get("key")]
-                if property_keys:
+                try:
+                    # 既存の同keyを削除（置き換えのため）
+                    property_keys = [prop.get("key") for prop in properties_list if prop.get("key")]
+                    if property_keys:
                     db_props.query(Property).filter(
-                        Property.material_id == material_id,
-                        Property.property_name.in_(property_keys)
-                    ).delete(synchronize_session=False)
+                            Property.material_id == material_id,
+                            Property.property_name.in_(property_keys)
+                        ).delete(synchronize_session=False)
                     db_props.flush()
-                
-                # 新しいpropertiesを追加
-                for prop in properties_list:
-                    prop_key = prop.get("key")
-                    prop_value = prop.get("value")
-                    prop_unit = prop.get("unit")
-                    if prop_key and prop_value is not None:
+                    
+                    # 新しいpropertiesを追加
+                    for prop in properties_list:
+                        prop_key = prop.get("key")
+                        prop_value = prop.get("value")
+                        prop_unit = prop.get("unit")
+                        if prop_key and prop_value is not None:
                         try:
                             new_property = Property(
                                 material_id=material_id,
@@ -4781,11 +4779,11 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 
                 db_props.commit()
                 logger.info(f"[APPROVE] TxProps success: properties upserted for material_id={material_id} (count={len(properties_list)})")
-            except Exception as prop_error:
+                except Exception as prop_error:
                 db_props.rollback()
                 logger.warning(f"[APPROVE] TxProps failed (properties upsert): {prop_error}, continuing approval")
-                # properties の upsert 失敗は警告のみ（承認は継続）
-            finally:
+                    # properties の upsert 失敗は警告のみ（承認は継続）
+        finally:
                 db_props.close()
         
         # ここまで来れば、Tx1は成功し、material_idは確定している
