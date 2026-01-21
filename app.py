@@ -3065,13 +3065,13 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                 
                 # 用途画像を2カラムで表示（画像がある場合のみ）
                 if space_url or product_url:
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if space_url:
+                c1, c2 = st.columns(2)
+                with c1:
+                    if space_url:
                             st.image(safe_url(space_url), width='stretch')
-                    
-                    with c2:
-                        if product_url:
+                
+                with c2:
+                    if product_url:
                             st.image(safe_url(product_url), width='stretch')
                 
                 st.markdown("---")
@@ -3831,7 +3831,7 @@ def show_search():
                         # 全文検索も失敗した場合は空結果を返す
                         if is_debug:
                             st.error(f"全文検索も失敗: {e2}")
-                        results = []
+        results = []
                         search_info = {
                             'query': search_query.strip() if search_query else "",
                             'filters': filters,
@@ -3938,24 +3938,24 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
     from sqlalchemy import select, func
     from database import Property
     
-    db = get_db()
-    try:
-        prop_count = db.execute(
-            select(func.count(Property.id))
-            .where(Property.material_id == material.id)
-        ).scalar() or 0
-    finally:
-        db.close()
+                        db = get_db()
+                        try:
+                            prop_count = db.execute(
+                                select(func.count(Property.id))
+                                .where(Property.material_id == material.id)
+                            ).scalar() or 0
+                        finally:
+                            db.close()
                         
     # 素材画像を取得（image_urlが渡されている場合はそれを使用）
     image_src = None
     if image_url:
         # キャッシュバスターを追加
         from utils.logo import get_git_sha
-        try:
-            from material_map_version import APP_VERSION
-        except ImportError:
-            APP_VERSION = get_git_sha()
+                                    try:
+                                        from material_map_version import APP_VERSION
+                                    except ImportError:
+                                        APP_VERSION = get_git_sha()
         separator = "&" if "?" in image_url else "?"
         image_url_with_cache = f"{image_url}{separator}v={APP_VERSION}"
         # safe_url()で日本語ファイル名をエンコード
@@ -4019,9 +4019,9 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
         
         # 詳細を見るボタン
         if st.button(f"詳細を見る", key=f"search_detail_{material.id}_{idx}"):
-            st.session_state.selected_material_id = material.id
+                            st.session_state.selected_material_id = material.id
             st.session_state.page = "材料一覧"
-            st.rerun()
+                            st.rerun()
 
 
 def show_approval_queue():
@@ -4465,7 +4465,7 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                     active_existing = db_tx1.execute(active_check_stmt).scalar_one_or_none()
                     if active_existing is not None:
                         if update_existing:
-                            error_msg = f"同名の材料が既に存在します（ID: {active_existing}）。「既存へ反映」モードで承認してください。"
+                        error_msg = f"同名の材料が既に存在します（ID: {active_existing}）。「既存へ反映」モードで承認してください。"
                         else:
                             error_msg = f"同名の材料が既に存在します（ID: {active_existing}）。「既存へ反映（update_existing=True）」か、材料名を変更してください。"
                         logger.warning(f"[APPROVE] Tx1: Active material with same name_official exists (id={active_existing}), update_existing={update_existing}, blocking creation")
@@ -4493,7 +4493,7 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             if visibility in ["公開", "公開（誰でも閲覧可）"]:
                 material.is_published = 1
             elif visibility in ["非公開", "非公開（管理者のみ）"]:
-                material.is_published = 0
+            material.is_published = 0
             else:
                 # デフォルトは非公開（安全側に倒す）
                 material.is_published = 0
@@ -4535,57 +4535,57 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             
             # オプショナルフィールド（存在する場合のみ設定）
             if form_data.get('name_aliases'):
-                material.name_aliases = json.dumps(form_data.get('name_aliases', []), ensure_ascii=False)
+            material.name_aliases = json.dumps(form_data.get('name_aliases', []), ensure_ascii=False)
             if form_data.get('supplier_other'):
-                material.supplier_other = form_data.get('supplier_other')
+            material.supplier_other = form_data.get('supplier_other')
             if form_data.get('category_other'):
-                material.category_other = form_data.get('category_other')
+            material.category_other = form_data.get('category_other')
             if form_data.get('material_forms'):
                 material.material_forms = json.dumps(form_data.get('material_forms', []), ensure_ascii=False)
             if form_data.get('material_forms_other'):
-                material.material_forms_other = form_data.get('material_forms_other')
+            material.material_forms_other = form_data.get('material_forms_other')
             if form_data.get('origin_other'):
-                material.origin_other = form_data.get('origin_other')
+            material.origin_other = form_data.get('origin_other')
             if form_data.get('recycle_bio_rate'):
-                material.recycle_bio_rate = form_data.get('recycle_bio_rate')
+            material.recycle_bio_rate = form_data.get('recycle_bio_rate')
             if form_data.get('recycle_bio_basis'):
-                material.recycle_bio_basis = form_data.get('recycle_bio_basis')
+            material.recycle_bio_basis = form_data.get('recycle_bio_basis')
             if form_data.get('color_tags'):
-                material.color_tags = json.dumps(form_data.get('color_tags', []), ensure_ascii=False)
+            material.color_tags = json.dumps(form_data.get('color_tags', []), ensure_ascii=False)
             if form_data.get('hardness_value'):
-                material.hardness_value = form_data.get('hardness_value')
+            material.hardness_value = form_data.get('hardness_value')
             if form_data.get('specific_gravity'):
-                material.specific_gravity = form_data.get('specific_gravity')
+            material.specific_gravity = form_data.get('specific_gravity')
             if form_data.get('heat_resistance_temp'):
-                material.heat_resistance_temp = form_data.get('heat_resistance_temp')
+            material.heat_resistance_temp = form_data.get('heat_resistance_temp')
             if form_data.get('heat_resistance_range'):
                 material.heat_resistance_range = form_data.get('heat_resistance_range')
             if form_data.get('processing_methods'):
                 material.processing_methods = json.dumps(form_data.get('processing_methods', []), ensure_ascii=False)
             if form_data.get('processing_other'):
-                material.processing_other = form_data.get('processing_other')
+            material.processing_other = form_data.get('processing_other')
             if form_data.get('prototyping_difficulty'):
                 material.prototyping_difficulty = form_data.get('prototyping_difficulty')
             if form_data.get('use_categories'):
                 material.use_categories = json.dumps(form_data.get('use_categories', []), ensure_ascii=False)
             if form_data.get('use_other'):
-                material.use_other = form_data.get('use_other')
+            material.use_other = form_data.get('use_other')
             if form_data.get('cost_value'):
-                material.cost_value = form_data.get('cost_value')
+            material.cost_value = form_data.get('cost_value')
             if form_data.get('cost_unit'):
-                material.cost_unit = form_data.get('cost_unit')
+            material.cost_unit = form_data.get('cost_unit')
             if form_data.get('safety_tags'):
                 material.safety_tags = json.dumps(form_data.get('safety_tags', []), ensure_ascii=False)
             if form_data.get('safety_other'):
-                material.safety_other = form_data.get('safety_other')
+            material.safety_other = form_data.get('safety_other')
             if form_data.get('restrictions'):
-                material.restrictions = form_data.get('restrictions')
+            material.restrictions = form_data.get('restrictions')
             # visibility に基づいて is_published を設定（既存更新の場合も適用）
             visibility = form_data.get('visibility', '')
             if visibility in ["公開", "公開（誰でも閲覧可）"]:
                 material.is_published = 1
             elif visibility in ["非公開", "非公開（管理者のみ）"]:
-                material.is_published = 0
+            material.is_published = 0
             else:
                 # デフォルトは非公開（安全側に倒す）
                 material.is_published = 0
@@ -4594,31 +4594,31 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             
             # オプショナルフィールド（存在する場合のみ設定）
             if form_data.get('development_motives'):
-                material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
+            material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
             if form_data.get('development_motive_other'):
-                material.development_motive_other = form_data.get('development_motive_other')
+            material.development_motive_other = form_data.get('development_motive_other')
             if form_data.get('development_background_short'):
-                material.development_background_short = form_data.get('development_background_short')
+            material.development_background_short = form_data.get('development_background_short')
             if form_data.get('development_story'):
-                material.development_story = form_data.get('development_story')
+            material.development_story = form_data.get('development_story')
             if form_data.get('tactile_tags'):
-                material.tactile_tags = json.dumps(form_data.get('tactile_tags', []), ensure_ascii=False)
+            material.tactile_tags = json.dumps(form_data.get('tactile_tags', []), ensure_ascii=False)
             if form_data.get('tactile_other'):
-                material.tactile_other = form_data.get('tactile_other')
+            material.tactile_other = form_data.get('tactile_other')
             if form_data.get('visual_tags'):
-                material.visual_tags = json.dumps(form_data.get('visual_tags', []), ensure_ascii=False)
+            material.visual_tags = json.dumps(form_data.get('visual_tags', []), ensure_ascii=False)
             if form_data.get('visual_other'):
-                material.visual_other = form_data.get('visual_other')
+            material.visual_other = form_data.get('visual_other')
             if form_data.get('sound_smell'):
-                material.sound_smell = form_data.get('sound_smell')
+            material.sound_smell = form_data.get('sound_smell')
             if form_data.get('circularity'):
-                material.circularity = form_data.get('circularity')
+            material.circularity = form_data.get('circularity')
             if form_data.get('certifications'):
-                material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
+            material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
             if form_data.get('certifications_other'):
-                material.certifications_other = form_data.get('certifications_other')
+            material.certifications_other = form_data.get('certifications_other')
             if form_data.get('main_elements'):
-                material.main_elements = form_data.get('main_elements')
+            material.main_elements = form_data.get('main_elements')
             
             # 後方互換フィールド（存在する場合のみ設定）
             if form_data.get('name_official'):
@@ -4630,17 +4630,10 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             _apply_not_null_defaults_for_approval(material, form_data)
             
             # search_textを生成して設定
-            from utils.search import generate_search_text, update_material_embedding
+            from utils.search import generate_search_text
             material.search_text = generate_search_text(material)
             
             db_tx1.flush()
-            
-            # 埋め込みを更新（content_hashが変わった場合のみ）
-            try:
-                update_material_embedding(db_tx1, material)
-            except Exception as e:
-                # 埋め込み更新失敗は警告のみ（承認は継続）
-                logger.warning(f"[APPROVE] Failed to update embedding for material_id={material.id}: {e}")
             
             # 参照URL保存（更新モードの場合は既存を削除して置き換え）
             if action == "updated":
@@ -4731,6 +4724,28 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             # 確認失敗でも続行（commit成功しているので）
         finally:
             db_check.close()
+        
+        # ===== TxEmb: embedding upsert（別トランザクション、失敗しても承認は継続） =====
+        # ENABLE_VECTOR_SEARCH=0のときはスキップ（後でbackfill_embeddingsで作成可能）
+        enable_vector_search = os.getenv("ENABLE_VECTOR_SEARCH", "0") == "1"
+        if enable_vector_search and material_id:
+            db_emb = SessionLocal()
+            try:
+                from utils.search import update_material_embedding
+                # materialを再取得（Tx1とは別セッション）
+                material_for_emb = db_emb.query(Material).filter(Material.id == material_id).first()
+                if material_for_emb:
+                    update_material_embedding(db_emb, material_for_emb)
+                    db_emb.commit()
+                    logger.info(f"[APPROVE] TxEmb success: embedding updated for material_id={material_id}")
+                else:
+                    logger.warning(f"[APPROVE] TxEmb skipped: material_id={material_id} not found")
+            except Exception as emb_error:
+                db_emb.rollback()
+                logger.warning(f"[APPROVE] TxEmb failed (embedding upsert): {emb_error}, continuing approval")
+                # embedding の upsert 失敗は警告のみ（承認は継続）
+            finally:
+                db_emb.close()
         
         # ===== TxProps: properties upsert（別トランザクション、失敗しても承認は継続） =====
         properties_list = form_data.get("properties", [])
