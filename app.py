@@ -3946,7 +3946,7 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
         ).scalar() or 0
     finally:
         db.close()
-    
+                        
     # 素材画像を取得（image_urlが渡されている場合はそれを使用）
     image_src = None
     if image_url:
@@ -4626,6 +4626,9 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             if form_data.get('category_main'):
                 material.category = form_data.get('category_main')
             
+            # NOT NULL補完を確実に適用（最初のflush()より前に実行）
+            _apply_not_null_defaults_for_approval(material, form_data)
+            
             # search_textを生成して設定
             from utils.search import generate_search_text, update_material_embedding
             material.search_text = generate_search_text(material)
@@ -4668,9 +4671,6 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                         description=ex.get('desc')
                     )
                     db_tx1.add(use_ex)
-            
-            # NOT NULL補完を確実に適用（commit前に）
-            _apply_not_null_defaults_for_approval(material, form_data)
             
             # material.id を確定（flush してから取得）
             db_tx1.flush()
