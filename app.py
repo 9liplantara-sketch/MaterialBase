@@ -4448,45 +4448,86 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             
             material.is_deleted = 0
             
-            # Materialデータを設定（新規作成時）
-            material.name_official = form_data['name_official']
-            material.name_aliases = json.dumps(form_data.get('name_aliases', []), ensure_ascii=False)
-            material.supplier_org = form_data['supplier_org']
-            material.supplier_type = form_data['supplier_type']
-            material.supplier_other = form_data.get('supplier_other')
-            material.category_main = form_data['category_main']
-            material.category_other = form_data.get('category_other')
-            material.material_forms = json.dumps(form_data['material_forms'], ensure_ascii=False)
-            material.material_forms_other = form_data.get('material_forms_other')
-            material.origin_type = form_data['origin_type']
-            material.origin_other = form_data.get('origin_other')
-            material.origin_detail = form_data['origin_detail']
-            material.recycle_bio_rate = form_data.get('recycle_bio_rate')
-            material.recycle_bio_basis = form_data.get('recycle_bio_basis')
-            material.color_tags = json.dumps(form_data.get('color_tags', []), ensure_ascii=False)
-            material.transparency = form_data['transparency']
-            material.hardness_qualitative = form_data['hardness_qualitative']
-            material.hardness_value = form_data.get('hardness_value')
-            material.weight_qualitative = form_data['weight_qualitative']
-            material.specific_gravity = form_data.get('specific_gravity')
-            material.water_resistance = form_data['water_resistance']
-            material.heat_resistance_temp = form_data.get('heat_resistance_temp')
-            material.heat_resistance_range = form_data['heat_resistance_range']
-            material.weather_resistance = form_data['weather_resistance']
-            material.processing_methods = json.dumps(form_data['processing_methods'], ensure_ascii=False)
-            material.processing_other = form_data.get('processing_other')
-            material.equipment_level = form_data['equipment_level']
-            material.prototyping_difficulty = form_data['prototyping_difficulty']
-            material.use_categories = json.dumps(form_data['use_categories'], ensure_ascii=False)
-            material.use_other = form_data.get('use_other')
-            material.procurement_status = form_data['procurement_status']
-            material.cost_level = form_data['cost_level']
-            material.cost_value = form_data.get('cost_value')
-            material.cost_unit = form_data.get('cost_unit')
-            material.safety_tags = json.dumps(form_data['safety_tags'], ensure_ascii=False)
-            material.safety_other = form_data.get('safety_other')
-            material.restrictions = form_data.get('restrictions')
-            material.visibility = form_data['visibility']
+            # Materialデータを設定（存在するキーのみ、値が空でない場合のみ）
+            # 必須フィールド（validate_csv_rowでチェック済み、ただし存在チェックを追加）
+            if form_data.get('name_official'):
+                material.name_official = form_data.get('name_official')
+            if form_data.get('supplier_org'):
+                material.supplier_org = form_data.get('supplier_org')
+            if form_data.get('supplier_type'):
+                material.supplier_type = form_data.get('supplier_type')
+            if form_data.get('category_main'):
+                material.category_main = form_data.get('category_main')
+            if form_data.get('origin_type'):
+                material.origin_type = form_data.get('origin_type')
+            if form_data.get('origin_detail'):
+                material.origin_detail = form_data.get('origin_detail')
+            if form_data.get('transparency'):
+                material.transparency = form_data.get('transparency')
+            if form_data.get('hardness_qualitative'):
+                material.hardness_qualitative = form_data.get('hardness_qualitative')
+            if form_data.get('weight_qualitative'):
+                material.weight_qualitative = form_data.get('weight_qualitative')
+            if form_data.get('water_resistance'):
+                material.water_resistance = form_data.get('water_resistance')
+            if form_data.get('weather_resistance'):
+                material.weather_resistance = form_data.get('weather_resistance')
+            if form_data.get('equipment_level'):
+                material.equipment_level = form_data.get('equipment_level')
+            if form_data.get('cost_level'):
+                material.cost_level = form_data.get('cost_level')
+            if form_data.get('procurement_status'):
+                material.procurement_status = form_data.get('procurement_status')
+            if form_data.get('visibility'):
+                material.visibility = form_data.get('visibility')
+            
+            # オプショナルフィールド（存在する場合のみ設定）
+            if form_data.get('name_aliases'):
+                material.name_aliases = json.dumps(form_data.get('name_aliases', []), ensure_ascii=False)
+            if form_data.get('supplier_other'):
+                material.supplier_other = form_data.get('supplier_other')
+            if form_data.get('category_other'):
+                material.category_other = form_data.get('category_other')
+            if form_data.get('material_forms'):
+                material.material_forms = json.dumps(form_data.get('material_forms', []), ensure_ascii=False)
+            if form_data.get('material_forms_other'):
+                material.material_forms_other = form_data.get('material_forms_other')
+            if form_data.get('origin_other'):
+                material.origin_other = form_data.get('origin_other')
+            if form_data.get('recycle_bio_rate'):
+                material.recycle_bio_rate = form_data.get('recycle_bio_rate')
+            if form_data.get('recycle_bio_basis'):
+                material.recycle_bio_basis = form_data.get('recycle_bio_basis')
+            if form_data.get('color_tags'):
+                material.color_tags = json.dumps(form_data.get('color_tags', []), ensure_ascii=False)
+            if form_data.get('hardness_value'):
+                material.hardness_value = form_data.get('hardness_value')
+            if form_data.get('specific_gravity'):
+                material.specific_gravity = form_data.get('specific_gravity')
+            if form_data.get('heat_resistance_temp'):
+                material.heat_resistance_temp = form_data.get('heat_resistance_temp')
+            if form_data.get('heat_resistance_range'):
+                material.heat_resistance_range = form_data.get('heat_resistance_range')
+            if form_data.get('processing_methods'):
+                material.processing_methods = json.dumps(form_data.get('processing_methods', []), ensure_ascii=False)
+            if form_data.get('processing_other'):
+                material.processing_other = form_data.get('processing_other')
+            if form_data.get('prototyping_difficulty'):
+                material.prototyping_difficulty = form_data.get('prototyping_difficulty')
+            if form_data.get('use_categories'):
+                material.use_categories = json.dumps(form_data.get('use_categories', []), ensure_ascii=False)
+            if form_data.get('use_other'):
+                material.use_other = form_data.get('use_other')
+            if form_data.get('cost_value'):
+                material.cost_value = form_data.get('cost_value')
+            if form_data.get('cost_unit'):
+                material.cost_unit = form_data.get('cost_unit')
+            if form_data.get('safety_tags'):
+                material.safety_tags = json.dumps(form_data.get('safety_tags', []), ensure_ascii=False)
+            if form_data.get('safety_other'):
+                material.safety_other = form_data.get('safety_other')
+            if form_data.get('restrictions'):
+                material.restrictions = form_data.get('restrictions')
             # visibility に基づいて is_published を設定（既存更新の場合も適用）
             visibility = form_data.get('visibility', '')
             if visibility in ["公開", "公開（誰でも閲覧可）"]:
@@ -4498,21 +4539,40 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 material.is_published = 0
             
             material.is_deleted = 0
-            material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
-            material.development_motive_other = form_data.get('development_motive_other')
-            material.development_background_short = form_data.get('development_background_short')
-            material.development_story = form_data.get('development_story')
-            material.tactile_tags = json.dumps(form_data.get('tactile_tags', []), ensure_ascii=False)
-            material.tactile_other = form_data.get('tactile_other')
-            material.visual_tags = json.dumps(form_data.get('visual_tags', []), ensure_ascii=False)
-            material.visual_other = form_data.get('visual_other')
-            material.sound_smell = form_data.get('sound_smell')
-            material.circularity = form_data.get('circularity')
-            material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
-            material.certifications_other = form_data.get('certifications_other')
-            material.main_elements = form_data.get('main_elements')
-            material.name = form_data['name_official']
-            material.category = form_data['category_main']
+            
+            # オプショナルフィールド（存在する場合のみ設定）
+            if form_data.get('development_motives'):
+                material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
+            if form_data.get('development_motive_other'):
+                material.development_motive_other = form_data.get('development_motive_other')
+            if form_data.get('development_background_short'):
+                material.development_background_short = form_data.get('development_background_short')
+            if form_data.get('development_story'):
+                material.development_story = form_data.get('development_story')
+            if form_data.get('tactile_tags'):
+                material.tactile_tags = json.dumps(form_data.get('tactile_tags', []), ensure_ascii=False)
+            if form_data.get('tactile_other'):
+                material.tactile_other = form_data.get('tactile_other')
+            if form_data.get('visual_tags'):
+                material.visual_tags = json.dumps(form_data.get('visual_tags', []), ensure_ascii=False)
+            if form_data.get('visual_other'):
+                material.visual_other = form_data.get('visual_other')
+            if form_data.get('sound_smell'):
+                material.sound_smell = form_data.get('sound_smell')
+            if form_data.get('circularity'):
+                material.circularity = form_data.get('circularity')
+            if form_data.get('certifications'):
+                material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
+            if form_data.get('certifications_other'):
+                material.certifications_other = form_data.get('certifications_other')
+            if form_data.get('main_elements'):
+                material.main_elements = form_data.get('main_elements')
+            
+            # 後方互換フィールド（存在する場合のみ設定）
+            if form_data.get('name_official'):
+                material.name = form_data.get('name_official')
+            if form_data.get('category_main'):
+                material.category = form_data.get('category_main')
             
             # search_textを生成して設定
             from utils.search import generate_search_text, update_material_embedding
