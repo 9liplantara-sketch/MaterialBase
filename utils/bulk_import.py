@@ -274,6 +274,48 @@ def extract_zip_images(zip_file) -> Tuple[Dict[str, Tuple[str, bytes]], Dict[str
     return image_files, stats
 
 
+def _apply_not_null_defaults(material: Material) -> None:
+    """
+    NOT NULL列にデフォルト値を設定（値が無い場合のみ）
+    
+    Args:
+        material: Materialオブジェクト
+    """
+    # NOT NULL列のデフォルト値マップ
+    defaults = {
+        'origin_type': '不明',
+        'origin_detail': '不明',
+        'transparency': '不明',
+        'hardness_qualitative': '不明',
+        'weight_qualitative': '不明',
+        'water_resistance': '不明',
+        'heat_resistance_range': '不明',
+        'weather_resistance': '不明',
+        'procurement_status': '不明',
+        'cost_level': '不明',
+        'visibility': '非公開（管理者のみ）',
+        'is_deleted': 0,
+    }
+    
+    # 各フィールドに対して、値が無い場合のみデフォルトを設定
+    for field, default_value in defaults.items():
+        if hasattr(material, field):
+            current_value = getattr(material, field)
+            # None、空文字列、または未設定の場合のみデフォルトを設定
+            if current_value is None or (isinstance(current_value, str) and not current_value.strip()):
+                setattr(material, field, default_value)
+    
+    # is_publishedはvisibilityから決定（既存ロジック）
+    visibility = getattr(material, 'visibility', '')
+    if visibility in ["公開", "公開（誰でも閲覧可）"]:
+        material.is_published = 1
+    elif visibility in ["非公開", "非公開（管理者のみ）"]:
+        material.is_published = 0
+    else:
+        # デフォルトは非公開（安全側に倒す）
+        material.is_published = 0
+
+
 def validate_csv_row(row: Dict[str, str], row_num: int) -> Tuple[bool, List[str]]:
     """
     CSV行を検証
@@ -296,7 +338,8 @@ def validate_csv_row(row: Dict[str, str], row_num: int) -> Tuple[bool, List[str]
     ]
     
     for field in required_fields:
-        if not row.get(field) or not str(row[field]).strip():
+        field_value = row.get(field)
+        if not field_value or not str(field_value).strip():
             errors.append(f"必須フィールド '{field}' が空です")
     
     return len(errors) == 0, errors
@@ -390,7 +433,10 @@ def create_or_update_material(
     Returns:
         (Materialオブジェクト, 'created'または'updated')
     """
-    name_official = str(row['name_official']).strip()
+    # name_officialは必須フィールド（validate_csv_rowでチェック済み）
+    name_official = str(row.get('name_official', '')).strip()
+    if not name_official:
+        raise ValueError(f"Row {row_num}: name_official is required")
     
     # 既存レコードを検索
     existing = db.query(Material).filter(
@@ -417,11 +463,17 @@ def create_or_update_material(
         'use_environment', 'use_categories', 'safety_tags', 'question_templates', 'main_elements'
     ]
     
+    # フィールドを設定（存在するキーのみ、値が空でない場合のみ）
     for key, value in row.items():
-        if not value or not str(value).strip():
+        # 値が存在しない、空、または空白のみの場合はスキップ
+        if value is None or not str(value).strip():
             continue
         
         value_str = str(value).strip()
+        
+        # Materialモデルに存在しないキーはスキップ
+        if not hasattr(material, key):
+            continue
         
         # JSON配列フィールドの処理
         if key in json_fields:
@@ -456,11 +508,8 @@ def create_or_update_material(
         # 文字列フィールド
         setattr(material, key, value_str)
     
-    # デフォルト値の設定
-    if not material.is_published:
-        material.is_published = 1
-    if material.is_deleted is None:
-        material.is_deleted = 0
+    # NOT NULL列のデフォルト値補完（値が無い場合のみ設定）
+    _apply_not_null_defaults(material)
     
     # search_textを生成
     try:

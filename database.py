@@ -108,7 +108,7 @@ class Material(Base):
     specific_gravity = Column(Float)  # 比重
     water_resistance = Column(String(50), nullable=False)  # 耐水性・耐湿性
     heat_resistance_temp = Column(Float)  # 耐熱性（温度℃）
-    heat_resistance_range = Column(String(50), nullable=False)  # 耐熱性（範囲）
+    heat_resistance_range = Column(String(50), nullable=True)  # 耐熱性（範囲）
     weather_resistance = Column(String(50), nullable=False)  # 耐候性
     
     # 5. 加工・実装条件
@@ -119,6 +119,7 @@ class Material(Base):
     
     # 6. 用途・市場状態
     use_categories = Column(Text)  # 主用途カテゴリ（複数選択）（JSON文字列）
+    use_environment = Column(Text)  # 使用環境（複数選択）（JSON文字列）
     use_other = Column(String(255))  # その他（自由記述）
     procurement_status = Column(String(50), nullable=False)  # 調達性
     cost_level = Column(String(50), nullable=False)  # コスト帯

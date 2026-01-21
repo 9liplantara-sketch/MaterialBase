@@ -4283,6 +4283,50 @@ def show_approval_queue():
         db.close()
 
 
+def _apply_not_null_defaults_for_approval(material: Material, form_data: dict) -> None:
+    """
+    NOT NULL列にデフォルト値を設定（値が無い場合のみ）
+    approve_submission()内で使用
+    
+    Args:
+        material: Materialオブジェクト
+        form_data: フォームデータの辞書
+    """
+    # NOT NULL列のデフォルト値マップ
+    defaults = {
+        'origin_type': '不明',
+        'origin_detail': '不明',
+        'transparency': '不明',
+        'hardness_qualitative': '不明',
+        'weight_qualitative': '不明',
+        'water_resistance': '不明',
+        'heat_resistance_range': '不明',
+        'weather_resistance': '不明',
+        'procurement_status': '不明',
+        'cost_level': '不明',
+        'visibility': '非公開（管理者のみ）',
+        'is_deleted': 0,
+    }
+    
+    # 各フィールドに対して、値が無い場合のみデフォルトを設定
+    for field, default_value in defaults.items():
+        if hasattr(material, field):
+            current_value = getattr(material, field)
+            # None、空文字列、または未設定の場合のみデフォルトを設定
+            if current_value is None or (isinstance(current_value, str) and not current_value.strip()):
+                setattr(material, field, default_value)
+    
+    # is_publishedはvisibilityから決定（既存ロジック）
+    visibility = getattr(material, 'visibility', '')
+    if visibility in ["公開", "公開（誰でも閲覧可）"]:
+        material.is_published = 1
+    elif visibility in ["非公開", "非公開（管理者のみ）"]:
+        material.is_published = 0
+    else:
+        # デフォルトは非公開（安全側に倒す）
+        material.is_published = 0
+
+
 def approve_submission(submission_id: int, editor_note: str = None, update_existing: bool = True, db=None):
     """
     投稿を承認してmaterialsテーブルに反映（トランザクション分離版）
@@ -4573,6 +4617,9 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 material.name = form_data.get('name_official')
             if form_data.get('category_main'):
                 material.category = form_data.get('category_main')
+            
+            # NOT NULL列のデフォルト値補完（値が無い場合のみ設定）
+            _apply_not_null_defaults_for_approval(material, form_data)
             
             # search_textを生成して設定
             from utils.search import generate_search_text, update_material_embedding
