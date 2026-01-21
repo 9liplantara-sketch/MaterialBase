@@ -4462,10 +4462,9 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                     active_existing = db_tx1.execute(active_check_stmt).scalar_one_or_none()
                     if active_existing is not None:
                         if update_existing:
-                        error_msg = f"同名の材料が既に存在します（ID: {active_existing}）。「既存へ反映」モードで承認してください。"
+                            error_msg = f"同名の材料が既に存在します（ID: {active_existing}）。「既存へ反映」モードで承認してください。"
                         else:
-                            error_msg = f"同名の材料が既に存在します（ID: {active_existing}）。「既存へ反映（update_existing=True）」か、材料名を変更してください。"
-                        logger.warning(f"[APPROVE] Tx1: Active material with same name_official exists (id={active_existing}), update_existing={update_existing}, blocking creation")
+                            error_msg = f"同名の材料が既に存在します（ID: {active_existing}）。材料名を変更して再投稿してください。"
                         return {
                             "ok": False,
                             "error": error_msg,
@@ -4490,7 +4489,7 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             if visibility in ["公開", "公開（誰でも閲覧可）"]:
                 material.is_published = 1
             elif visibility in ["非公開", "非公開（管理者のみ）"]:
-            material.is_published = 0
+                material.is_published = 0
             else:
                 # デフォルトは非公開（安全側に倒す）
                 material.is_published = 0
