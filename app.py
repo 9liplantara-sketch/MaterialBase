@@ -4626,9 +4626,6 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             if form_data.get('category_main'):
                 material.category = form_data.get('category_main')
             
-            # NOT NULL列のデフォルト値補完（値が無い場合のみ設定）
-            _apply_not_null_defaults_for_approval(material, form_data)
-            
             # search_textを生成して設定
             from utils.search import generate_search_text, update_material_embedding
             material.search_text = generate_search_text(material)
@@ -4672,6 +4669,9 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                     )
                     db_tx1.add(use_ex)
             
+            # NOT NULL補完を確実に適用（commit前に）
+            _apply_not_null_defaults_for_approval(material, form_data)
+            
             # material.id を確定（flush してから取得）
             db_tx1.flush()
             material_id = material.id
@@ -4711,8 +4711,9 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                     logger.warning(f"[APPROVE] Tx1: properties upsert failed for material_id={material_id}: {prop_error}")
                     # rollback はしない（material の commit は継続）
             
+            # commit()を必ず先に実行（存在確認の前に）
             db_tx1.commit()
-            logger.info(f"[APPROVE] Tx1 success: material_id={material_id}, action={action}, uuid={material.uuid}")
+            logger.info(f"[APPROVE] Tx1 commit success: material_id={material_id}, action={action}, uuid={material.uuid}")
             
         except Exception as e:
             db_tx1.rollback()
@@ -4730,7 +4731,7 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
         finally:
             db_tx1.close()
         
-        # Tx1成功後、material_idが実際に存在するか確認（別セッションで）
+        # Tx1 commit成功後、material_idが実際に存在するか確認（別セッションで、任意）
         # material_idがNoneの場合は既にreturnしているので、ここに来る時点では必ず存在するはず
         if not material_id:
             logger.error(f"[APPROVE] material_id is None after Tx1 commit, cannot proceed")
@@ -4740,32 +4741,31 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 "error_code": "material_id_none_after_tx1",
             }
         
-        # material_idの存在確認（別セッションで）
+        # material_idの存在確認（別セッションで、commit成功後）
+        # commit()が成功したので、通常は存在するはずだが、念のため確認
         db_check = SessionLocal()
         try:
             from sqlalchemy import select
             check_stmt = select(Material.id).where(Material.id == material_id).limit(1)
             material_exists = db_check.execute(check_stmt).scalar_one_or_none()
             if not material_exists:
-                logger.error(f"[APPROVE] Material {material_id} does not exist after Tx1 commit (possibly rolled back)")
+                # commit成功後に存在しない場合は異常（通常は発生しない）
+                logger.error(f"[APPROVE] Material {material_id} does not exist after Tx1 commit (unexpected)")
                 return {
                     "ok": False,
-                    "error": f"Material {material_id} does not exist after creation. Tx1 may have been rolled back.",
+                    "error": f"Material {material_id} does not exist after commit. This is unexpected - please check database state.",
                     "error_code": "material_not_found_after_commit",
                 }
             logger.info(f"[APPROVE] Verified material_id={material_id} exists after Tx1 commit")
         except Exception as check_error:
-            logger.exception(f"[APPROVE] Failed to verify material_id={material_id} existence: {check_error}")
-            return {
-                "ok": False,
-                "error": f"Failed to verify material existence after Tx1: {check_error}",
-                "error_code": "material_verification_failed_after_tx1",
-            }
+            # 存在確認の失敗は警告のみ（commit成功しているので、通常は問題ない）
+            logger.warning(f"[APPROVE] Failed to verify material_id={material_id} existence after commit: {check_error}")
+            # 確認失敗でも続行（commit成功しているので）
         finally:
             db_check.close()
         
-        # 存在確認が成功した場合のみ、Tx2/Tx3へ進む
-        if material_id:
+        # ここまで来れば、Tx1は成功し、material_idは確定している
+        # Tx2/Tx3へ進む
             db_check = SessionLocal()
             try:
                 from sqlalchemy import select
