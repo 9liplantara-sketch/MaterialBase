@@ -4531,15 +4531,15 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             
             # オプショナルフィールド（存在する場合のみ設定）
             if form_data.get('name_aliases'):
-            material.name_aliases = json.dumps(form_data.get('name_aliases', []), ensure_ascii=False)
+                material.name_aliases = json.dumps(form_data.get('name_aliases', []), ensure_ascii=False)
             if form_data.get('supplier_other'):
-            material.supplier_other = form_data.get('supplier_other')
+                material.supplier_other = form_data.get('supplier_other')
             if form_data.get('category_other'):
-            material.category_other = form_data.get('category_other')
+                material.category_other = form_data.get('category_other')
             if form_data.get('material_forms'):
                 material.material_forms = json.dumps(form_data.get('material_forms', []), ensure_ascii=False)
             if form_data.get('material_forms_other'):
-            material.material_forms_other = form_data.get('material_forms_other')
+                material.material_forms_other = form_data.get('material_forms_other')
             if form_data.get('origin_other'):
             material.origin_other = form_data.get('origin_other')
             if form_data.get('recycle_bio_rate'):
