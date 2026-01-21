@@ -4541,25 +4541,25 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             if form_data.get('material_forms_other'):
                 material.material_forms_other = form_data.get('material_forms_other')
             if form_data.get('origin_other'):
-            material.origin_other = form_data.get('origin_other')
+                material.origin_other = form_data.get('origin_other')
             if form_data.get('recycle_bio_rate'):
-            material.recycle_bio_rate = form_data.get('recycle_bio_rate')
+                material.recycle_bio_rate = form_data.get('recycle_bio_rate')
             if form_data.get('recycle_bio_basis'):
-            material.recycle_bio_basis = form_data.get('recycle_bio_basis')
+                material.recycle_bio_basis = form_data.get('recycle_bio_basis')
             if form_data.get('color_tags'):
-            material.color_tags = json.dumps(form_data.get('color_tags', []), ensure_ascii=False)
+                material.color_tags = json.dumps(form_data.get('color_tags', []), ensure_ascii=False)
             if form_data.get('hardness_value'):
-            material.hardness_value = form_data.get('hardness_value')
+                material.hardness_value = form_data.get('hardness_value')
             if form_data.get('specific_gravity'):
-            material.specific_gravity = form_data.get('specific_gravity')
+                material.specific_gravity = form_data.get('specific_gravity')
             if form_data.get('heat_resistance_temp'):
-            material.heat_resistance_temp = form_data.get('heat_resistance_temp')
+                material.heat_resistance_temp = form_data.get('heat_resistance_temp')
             if form_data.get('heat_resistance_range'):
                 material.heat_resistance_range = form_data.get('heat_resistance_range')
             if form_data.get('processing_methods'):
                 material.processing_methods = json.dumps(form_data.get('processing_methods', []), ensure_ascii=False)
             if form_data.get('processing_other'):
-            material.processing_other = form_data.get('processing_other')
+                material.processing_other = form_data.get('processing_other')
             if form_data.get('prototyping_difficulty'):
                 material.prototyping_difficulty = form_data.get('prototyping_difficulty')
             if form_data.get('use_categories'):
