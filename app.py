@@ -4565,23 +4565,23 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             if form_data.get('use_categories'):
                 material.use_categories = json.dumps(form_data.get('use_categories', []), ensure_ascii=False)
             if form_data.get('use_other'):
-            material.use_other = form_data.get('use_other')
+                material.use_other = form_data.get('use_other')
             if form_data.get('cost_value'):
-            material.cost_value = form_data.get('cost_value')
+                material.cost_value = form_data.get('cost_value')
             if form_data.get('cost_unit'):
-            material.cost_unit = form_data.get('cost_unit')
+                material.cost_unit = form_data.get('cost_unit')
             if form_data.get('safety_tags'):
                 material.safety_tags = json.dumps(form_data.get('safety_tags', []), ensure_ascii=False)
             if form_data.get('safety_other'):
-            material.safety_other = form_data.get('safety_other')
+                material.safety_other = form_data.get('safety_other')
             if form_data.get('restrictions'):
-            material.restrictions = form_data.get('restrictions')
+                material.restrictions = form_data.get('restrictions')
             # visibility に基づいて is_published を設定（既存更新の場合も適用）
             visibility = form_data.get('visibility', '')
             if visibility in ["公開", "公開（誰でも閲覧可）"]:
                 material.is_published = 1
             elif visibility in ["非公開", "非公開（管理者のみ）"]:
-            material.is_published = 0
+                material.is_published = 0
             else:
                 # デフォルトは非公開（安全側に倒す）
                 material.is_published = 0
@@ -4590,31 +4590,31 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             
             # オプショナルフィールド（存在する場合のみ設定）
             if form_data.get('development_motives'):
-            material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
+                material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
             if form_data.get('development_motive_other'):
-            material.development_motive_other = form_data.get('development_motive_other')
+                material.development_motive_other = form_data.get('development_motive_other')
             if form_data.get('development_background_short'):
-            material.development_background_short = form_data.get('development_background_short')
+                material.development_background_short = form_data.get('development_background_short')
             if form_data.get('development_story'):
-            material.development_story = form_data.get('development_story')
+                material.development_story = form_data.get('development_story')
             if form_data.get('tactile_tags'):
-            material.tactile_tags = json.dumps(form_data.get('tactile_tags', []), ensure_ascii=False)
+                material.tactile_tags = json.dumps(form_data.get('tactile_tags', []), ensure_ascii=False)
             if form_data.get('tactile_other'):
-            material.tactile_other = form_data.get('tactile_other')
+                material.tactile_other = form_data.get('tactile_other')
             if form_data.get('visual_tags'):
-            material.visual_tags = json.dumps(form_data.get('visual_tags', []), ensure_ascii=False)
+                material.visual_tags = json.dumps(form_data.get('visual_tags', []), ensure_ascii=False)
             if form_data.get('visual_other'):
-            material.visual_other = form_data.get('visual_other')
+                material.visual_other = form_data.get('visual_other')
             if form_data.get('sound_smell'):
-            material.sound_smell = form_data.get('sound_smell')
+                material.sound_smell = form_data.get('sound_smell')
             if form_data.get('circularity'):
-            material.circularity = form_data.get('circularity')
+                material.circularity = form_data.get('circularity')
             if form_data.get('certifications'):
-            material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
+                material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
             if form_data.get('certifications_other'):
-            material.certifications_other = form_data.get('certifications_other')
+                material.certifications_other = form_data.get('certifications_other')
             if form_data.get('main_elements'):
-            material.main_elements = form_data.get('main_elements')
+                material.main_elements = form_data.get('main_elements')
             
             # 後方互換フィールド（存在する場合のみ設定）
             if form_data.get('name_official'):
@@ -4744,49 +4744,43 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 db_emb.close()
         
         # ===== TxProps: properties upsert（別トランザクション、失敗しても承認は継続） =====
-            properties_list = form_data.get("properties", [])
+        properties_list = form_data.get('properties', [])
         if properties_list and material_id:
             db_props = SessionLocal()
-                try:
-                    # 既存の同keyを削除（置き換えのため）
-                    property_keys = [prop.get("key") for prop in properties_list if prop.get("key")]
-                    if property_keys:
+            try:
+                property_keys = [prop.get('key') for prop in properties_list if prop.get('key')]
+                if property_keys:
                     db_props.query(Property).filter(
-                            Property.material_id == material_id,
-                            Property.property_name.in_(property_keys)
-                        ).delete(synchronize_session=False)
+                        Property.material_id == material_id,
+                        Property.property_name.in_(property_keys)
+                    ).delete(synchronize_session=False)
                     db_props.flush()
-                    
-                    # 新しいpropertiesを追加
-                    for prop in properties_list:
-                        prop_key = prop.get("key")
-                        prop_value = prop.get("value")
-                        prop_unit = prop.get("unit")
-                        if prop_key and prop_value is not None:
-                        try:
-                            new_property = Property(
-                                material_id=material_id,
-                                property_name=prop_key,
-                                value=float(prop_value),
-                                unit=prop_unit
-                            )
-                            db_props.add(new_property)
-                        except (ValueError, TypeError) as prop_convert_error:
-                            logger.warning(f"[APPROVE][TxProps] Failed to convert property value for {prop_key}: {prop_convert_error}, skipping")
-                            continue
+                
+                for prop in properties_list:
+                    prop_key = prop.get('key')
+                    prop_value = prop.get('value')
+                    prop_unit = prop.get('unit')
+                    if not prop_key or prop_value is None:
+                        continue
+                    try:
+                        new_property = Property(
+                            material_id=material_id,
+                            property_name=prop_key,
+                            value=float(prop_value),
+                            unit=prop_unit,
+                        )
+                        db_props.add(new_property)
+                    except (ValueError, TypeError) as prop_convert_error:
+                        logger.warning(f"[APPROVE][TxProps] Failed to convert property value for {prop_key}: {prop_convert_error}, skipping")
                 
                 db_props.commit()
                 logger.info(f"[APPROVE] TxProps success: properties upserted for material_id={material_id} (count={len(properties_list)})")
-                except Exception as prop_error:
+            except Exception as props_error:
                 db_props.rollback()
-                logger.warning(f"[APPROVE] TxProps failed (properties upsert): {prop_error}, continuing approval")
-                    # properties の upsert 失敗は警告のみ（承認は継続）
-        finally:
+                logger.warning(f"[APPROVE] TxProps failed (properties upsert): {props_error}, continuing approval")
+            finally:
                 db_props.close()
-        
-        # ここまで来れば、Tx1は成功し、material_idは確定している
-        # Tx2/Tx3へ進む
-        
+
         # ===== Tx2: images upsert（失敗しても rollback、全体は落とさない） =====
         # Tx2 の先頭で uploaded_images を確実に取り出す
         uploaded_images = payload_dict.get("uploaded_images", uploaded_images_fallback)  # KEY固定: "uploaded_images"
