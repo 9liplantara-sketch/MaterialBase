@@ -3933,7 +3933,7 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
         search_query: 検索クエリ（ハイライト用）
         image_url: primary画像URL（一括取得済み、Noneの場合は個別取得を試みる）
     """
-    # SQLで直接カウント（DetachedInstanceError回避）
+                        # SQLで直接カウント（DetachedInstanceError回避）
     from database import get_db
     from sqlalchemy import select, func
     from database import Property
@@ -4678,40 +4678,8 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             if not material_id:
                 raise ValueError("material.id is None after flush")
             
-            # properties を upsert（Tx1内で処理、失敗しても承認は継続）
-            properties_list = form_data.get("properties", [])
-            if properties_list:
-                try:
-                    # 既存の同keyを削除（置き換えのため）
-                    property_keys = [prop.get("key") for prop in properties_list if prop.get("key")]
-                    if property_keys:
-                        db_tx1.query(Property).filter(
-                            Property.material_id == material_id,
-                            Property.property_name.in_(property_keys)
-                        ).delete(synchronize_session=False)
-                        db_tx1.flush()
-                    
-                    # 新しいpropertiesを追加
-                    for prop in properties_list:
-                        prop_key = prop.get("key")
-                        prop_value = prop.get("value")
-                        prop_unit = prop.get("unit")
-                        if prop_key and prop_value is not None:
-                            new_property = Property(
-                                material_id=material_id,
-                                property_name=prop_key,
-                                value=float(prop_value),
-                                unit=prop_unit
-                            )
-                            db_tx1.add(new_property)
-                    db_tx1.flush()
-                    logger.info(f"[APPROVE] Tx1: properties upserted for material_id={material_id} (count={len(properties_list)})")
-                except Exception as prop_error:
-                    # properties の upsert 失敗は警告のみ（承認は継続）
-                    logger.warning(f"[APPROVE] Tx1: properties upsert failed for material_id={material_id}: {prop_error}")
-                    # rollback はしない（material の commit は継続）
-            
             # commit()を必ず先に実行（存在確認の前に）
+            # properties upsertはTx1から外し、別トランザクション（TxProps）で実行
             db_tx1.commit()
             logger.info(f"[APPROVE] Tx1 commit success: material_id={material_id}, action={action}, uuid={material.uuid}")
             
@@ -4764,26 +4732,49 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
         finally:
             db_check.close()
         
+        # ===== TxProps: properties upsert（別トランザクション、失敗しても承認は継続） =====
+        properties_list = form_data.get("properties", [])
+        if properties_list and material_id:
+            db_props = SessionLocal()
+            try:
+                # 既存の同keyを削除（置き換えのため）
+                property_keys = [prop.get("key") for prop in properties_list if prop.get("key")]
+                if property_keys:
+                    db_props.query(Property).filter(
+                        Property.material_id == material_id,
+                        Property.property_name.in_(property_keys)
+                    ).delete(synchronize_session=False)
+                    db_props.flush()
+                
+                # 新しいpropertiesを追加
+                for prop in properties_list:
+                    prop_key = prop.get("key")
+                    prop_value = prop.get("value")
+                    prop_unit = prop.get("unit")
+                    if prop_key and prop_value is not None:
+                        try:
+                            new_property = Property(
+                                material_id=material_id,
+                                property_name=prop_key,
+                                value=float(prop_value),
+                                unit=prop_unit
+                            )
+                            db_props.add(new_property)
+                        except (ValueError, TypeError) as prop_convert_error:
+                            logger.warning(f"[APPROVE][TxProps] Failed to convert property value for {prop_key}: {prop_convert_error}, skipping")
+                            continue
+                
+                db_props.commit()
+                logger.info(f"[APPROVE] TxProps success: properties upserted for material_id={material_id} (count={len(properties_list)})")
+            except Exception as prop_error:
+                db_props.rollback()
+                logger.warning(f"[APPROVE] TxProps failed (properties upsert): {prop_error}, continuing approval")
+                # properties の upsert 失敗は警告のみ（承認は継続）
+            finally:
+                db_props.close()
+        
         # ここまで来れば、Tx1は成功し、material_idは確定している
         # Tx2/Tx3へ進む
-            db_check = SessionLocal()
-            try:
-                from sqlalchemy import select
-                check_stmt = select(Material.id).where(Material.id == material_id).limit(1)
-                material_exists = db_check.execute(check_stmt).scalar_one_or_none()
-                if not material_exists:
-                    logger.error(f"[APPROVE] Material {material_id} does not exist after Tx1 commit (possibly rolled back)")
-                    return {
-                        "ok": False,
-                        "error": f"Material {material_id} does not exist after creation. Tx1 may have been rolled back.",
-                        "error_code": "material_not_found_after_commit",
-                    }
-                logger.info(f"[APPROVE] Verified material_id={material_id} exists after Tx1 commit")
-            except Exception as check_error:
-                logger.exception(f"[APPROVE] Failed to verify material_id={material_id} existence: {check_error}")
-                # 確認失敗は警告のみ（承認は継続）
-            finally:
-                db_check.close()
         
         # ===== Tx2: images upsert（失敗しても rollback、全体は落とさない） =====
         # Tx2 の先頭で uploaded_images を確実に取り出す
