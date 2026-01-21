@@ -289,7 +289,7 @@ def show_detailed_material_form(material_id: int = None):
             'processing_other': getattr(existing_material, 'processing_other', ''),
             'equipment_level': getattr(existing_material, 'equipment_level', ''),
             'prototyping_difficulty': getattr(existing_material, 'prototyping_difficulty', ''),
-            'use_environment': json.loads(getattr(existing_material, 'use_environment', '[]')) if getattr(existing_material, 'use_environment', None) else [],
+            # 'use_environment': json.loads(getattr(existing_material, 'use_environment', '[]')) if getattr(existing_material, 'use_environment', None) else [],  # 一時的にコメントアウト（DBにカラムが存在しない）
             'use_categories': json.loads(getattr(existing_material, 'use_categories', '[]')) if getattr(existing_material, 'use_categories', None) else [],
             'use_other': getattr(existing_material, 'use_other', ''),
             'procurement_status': getattr(existing_material, 'procurement_status', ''),
@@ -954,12 +954,13 @@ def show_layer1_form(existing_material=None):
     st.markdown("---")
     st.markdown("### 6. 用途・市場状態")
     
-    form_data['use_environment'] = st.multiselect(
-        "6-1 使用環境",
-        USE_ENVIRONMENT_OPTIONS,
-        default=form_data.get('use_environment', []),
-        key="use_environment"
-    )
+    # 使用環境（一時的にコメントアウト - DBにカラムが存在しない）
+    # form_data['use_environment'] = st.multiselect(
+    #     "6-1 使用環境",
+    #     USE_ENVIRONMENT_OPTIONS,
+    #     default=form_data.get('use_environment', []),
+    #     key="use_environment"
+    # )
     
     form_data['use_categories'] = st.multiselect(
         "6-2 主用途カテゴリ*",
@@ -1414,7 +1415,7 @@ def save_material(form_data):
             material.processing_other = form_data.get('processing_other')
             material.equipment_level = form_data['equipment_level']
             material.prototyping_difficulty = form_data['prototyping_difficulty']  # typo修正
-            material.use_environment = json.dumps(form_data.get('use_environment', []), ensure_ascii=False)
+            # material.use_environment = json.dumps(form_data.get('use_environment', []), ensure_ascii=False)  # 一時的にコメントアウト（DBにカラムが存在しない）
             material.use_categories = json.dumps(form_data['use_categories'], ensure_ascii=False)
             material.use_other = form_data.get('use_other')
             material.procurement_status = form_data['procurement_status']
