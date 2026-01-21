@@ -3924,41 +3924,39 @@ def show_search():
 def _render_material_search_card(material, idx: int, search_query: str, image_url: str = None):
     """
     検索結果の材料カードをレンダリング
-    
+
     Args:
         material: Materialオブジェクト
         idx: インデックス
         search_query: 検索クエリ（ハイライト用）
         image_url: primary画像URL（一括取得済み、Noneの場合は個別取得を試みる）
     """
-                        # SQLで直接カウント（DetachedInstanceError回避）
+    # SQLで直接カウント（DetachedInstanceError回避）
     from database import get_db
     from sqlalchemy import select, func
     from database import Property
-    
-                        db = get_db()
-                        try:
-                            prop_count = db.execute(
-                                select(func.count(Property.id))
-                                .where(Property.material_id == material.id)
-                            ).scalar() or 0
-                        finally:
-                            db.close()
-                        
+
+    db = get_db()
+    try:
+        prop_count = db.execute(
+            select(func.count(Property.id)).where(Property.material_id == material.id)
+        ).scalar() or 0
+    finally:
+        db.close()
+
     # 素材画像を取得（image_urlが渡されている場合はそれを使用）
     image_src = None
     if image_url:
         # キャッシュバスターを追加
         from utils.logo import get_git_sha
-                                    try:
-                                        from material_map_version import APP_VERSION
-                                    except ImportError:
-                                        APP_VERSION = get_git_sha()
+        try:
+            from material_map_version import APP_VERSION
+        except ImportError:
+            APP_VERSION = get_git_sha()
         separator = "&" if "?" in image_url else "?"
         image_url_with_cache = f"{image_url}{separator}v={APP_VERSION}"
         # safe_url()で日本語ファイル名をエンコード
         image_src = safe_url(image_url_with_cache)
-    
     # カテゴリ名
     category_name = material.category_main or material.category or '未分類'
     
@@ -4016,10 +4014,11 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
             st.caption(f"物性データ: {prop_count}個")
         
         # 詳細を見るボタン
+        # 詳細を見るボタン
         if st.button(f"詳細を見る", key=f"search_detail_{material.id}_{idx}"):
-                            st.session_state.selected_material_id = material.id
+            st.session_state.selected_material_id = material.id
             st.session_state.page = "材料一覧"
-                            st.rerun()
+            st.rerun()
 
 
 def show_approval_queue():
