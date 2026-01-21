@@ -3933,6 +3933,10 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
         image_url: primary画像URL（一括取得済み、Noneの場合は個別取得を試みる）
     """
     # SQLで直接カウント（DetachedInstanceError回避）
+    from database import get_db
+    from sqlalchemy import select, func
+    from database import Property
+    
     db = get_db()
     try:
         prop_count = db.execute(
@@ -4492,6 +4496,7 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             else:
                 # デフォルトは非公開（安全側に倒す）
                 material.is_published = 0
+            
             material.is_deleted = 0
             material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
             material.development_motive_other = form_data.get('development_motive_other')
@@ -4982,8 +4987,9 @@ def show_bulk_import(embedded: bool = False):
             st.success(f"✅ CSVファイルを読み込みました（{len(csv_rows)}行）")
             
             # ZIPを展開
-            image_files_dict = extract_zip_images(zip_file)
-            st.success(f"✅ ZIPファイルを展開しました（{len(image_files_dict)}ファイル）")
+            image_files_dict, zip_stats = extract_zip_images(zip_file)
+            st.success(f"✅ ZIPファイルを展開しました（画像: {zip_stats['images_used']}ファイル）")
+            st.caption(f"📊 ZIP統計: 総数={zip_stats['zip_total']}, 除外={zip_stats['excluded']}, 画像採用={zip_stats['images_used']}")
             
             # プレビュー表示
             st.markdown("### プレビュー")

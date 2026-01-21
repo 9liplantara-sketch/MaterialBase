@@ -150,18 +150,23 @@ def find_image_files(
     return None
 
 
-def extract_zip_images(zip_file) -> Dict[str, bytes]:
+def extract_zip_images(zip_file) -> Tuple[Dict[str, bytes], Dict[str, int]]:
     """
-    ZIPファイルから画像ファイルを展開
+    ZIPファイルから画像ファイルを展開（macOSメタファイルを除外）
     
     Args:
         zip_file: ZIPファイル（Streamlit UploadedFileまたはファイルパス）
     
     Returns:
-        {ファイル名: ファイルデータ} の辞書
+        ({正規化ファイル名: ファイルデータ} の辞書, {統計情報})
+        統計情報: {'zip_total': int, 'excluded': int, 'images_used': int}
     """
     image_files = {}
     allowed_extensions = {'.jpg', '.jpeg', '.png', '.webp'}
+    
+    zip_total = 0
+    excluded = 0
+    images_used = 0
     
     try:
         # Streamlit UploadedFileの場合はread()で取得
@@ -175,27 +180,65 @@ def extract_zip_images(zip_file) -> Dict[str, bytes]:
         # ZIPを展開
         with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
             for file_info in zf.namelist():
+                zip_total += 1
+                
                 # ディレクトリはスキップ
                 if file_info.endswith('/'):
+                    excluded += 1
                     continue
                 
-                # 拡張子チェック
+                # macOSメタファイルを除外
                 file_path = Path(file_info)
-                if file_path.suffix.lower() in allowed_extensions:
-                    try:
-                        file_data = zf.read(file_info)
-                        # ファイル名のみ（パスは除去）
-                        file_name = file_path.name
-                        image_files[file_name] = file_data
-                    except Exception as e:
-                        logger.warning(f"Failed to extract {file_info}: {e}")
-                        continue
+                basename = file_path.name
+                
+                # __MACOSX/ を含むパスは除外
+                if '__MACOSX/' in file_info or '__MACOSX\\' in file_info:
+                    excluded += 1
+                    continue
+                
+                # ._ で始まるbasenameは除外
+                if basename.startswith('._'):
+                    excluded += 1
+                    continue
+                
+                # .DS_Store は除外
+                if basename == '.DS_Store':
+                    excluded += 1
+                    continue
+                
+                # 拡張子チェック（小文字化して判定）
+                suffix_lower = file_path.suffix.lower()
+                if suffix_lower not in allowed_extensions:
+                    excluded += 1
+                    continue
+                
+                # 画像ファイルとして採用
+                try:
+                    file_data = zf.read(file_info)
+                    
+                    # ファイル名を正規化（NFKC、前後空白除去）
+                    file_name_raw = file_path.name
+                    file_name_normalized = unicodedata.normalize('NFKC', file_name_raw).strip()
+                    
+                    # 正規化後のファイル名をキーとして使用
+                    image_files[file_name_normalized] = file_data
+                    images_used += 1
+                except Exception as e:
+                    logger.warning(f"Failed to extract {file_info}: {e}")
+                    excluded += 1
+                    continue
     
     except Exception as e:
         logger.error(f"Failed to extract ZIP file: {e}")
         raise
     
-    return image_files
+    stats = {
+        'zip_total': zip_total,
+        'excluded': excluded,
+        'images_used': images_used
+    }
+    
+    return image_files, stats
 
 
 def validate_csv_row(row: Dict[str, str], row_num: int) -> Tuple[bool, List[str]]:
