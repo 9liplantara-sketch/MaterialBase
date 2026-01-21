@@ -4525,8 +4525,6 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 update_material_embedding(db_tx1, material)
             except Exception as e:
                 # 埋め込み更新失敗は警告のみ（承認は継続）
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.warning(f"[APPROVE] Failed to update embedding for material_id={material.id}: {e}")
             
             # 参照URL保存（更新モードの場合は既存を削除して置き換え）
