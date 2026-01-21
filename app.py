@@ -3687,7 +3687,8 @@ def show_search():
     
     # フィルタオプションをインポート
     from material_form_detailed import (
-        USE_CATEGORIES, USE_ENVIRONMENT_OPTIONS, TRANSPARENCY_OPTIONS, WEATHER_RESISTANCE_OPTIONS,
+        USE_CATEGORIES, TRANSPARENCY_OPTIONS, WEATHER_RESISTANCE_OPTIONS,
+        # USE_ENVIRONMENT_OPTIONS,  # 一時的にコメントアウト（DBにカラムが存在しない）
         WATER_RESISTANCE_OPTIONS, EQUIPMENT_LEVELS, COST_LEVELS
     )
     
@@ -3695,12 +3696,12 @@ def show_search():
     col1, col2 = st.columns(2)
     
     with col1:
-        # 使用環境（複数選択）
-        selected_environments = st.multiselect(
-            "使用環境",
-            options=USE_ENVIRONMENT_OPTIONS,
-            key="filter_use_environment"
-        )
+        # 使用環境（複数選択）- 一時的にコメントアウト（DBにカラムが存在しない）
+        # selected_environments = st.multiselect(
+        #     "使用環境",
+        #     options=USE_ENVIRONMENT_OPTIONS,
+        #     key="filter_use_environment"
+        # )
         
         # 用途カテゴリ（複数選択）
         selected_uses = st.multiselect(
@@ -3751,12 +3752,12 @@ def show_search():
     # プレースホルダー文字列のリスト（無視すべき値）
     placeholder_values = ["すべて", "", None, "Choose options", "選択してください"]
     
-    # 使用環境（multiselect）
-    if selected_environments and isinstance(selected_environments, list):
-        # 空でない、有効な値のみをフィルタ
-        valid_envs = [e for e in selected_environments if e and str(e).strip() and str(e) not in placeholder_values]
-        if valid_envs:
-            filters['use_environment'] = valid_envs
+    # 使用環境（multiselect）- 一時的にコメントアウト（DBにカラムが存在しない）
+    # if selected_environments and isinstance(selected_environments, list):
+    #     # 空でない、有効な値のみをフィルタ
+    #     valid_envs = [e for e in selected_environments if e and str(e).strip() and str(e) not in placeholder_values]
+    #     if valid_envs:
+    #         filters['use_environment'] = valid_envs
     
     # 用途カテゴリ（multiselect）
     if selected_uses and isinstance(selected_uses, list):
@@ -4421,6 +4422,9 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
         }
         
         # ===== Tx1: materialsテーブルに新規作成 or 既存更新（commit） =====
+        # material_idを初期化（Tx1失敗時にNoneに戻すため）
+        material_id = None
+        
         try:
             from sqlalchemy import select
             
@@ -4450,6 +4454,7 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             
             if material is None:
                 # 新規作成前に、同名の active があるかチェック（UNIQUEで落ちる前に弾く）
+                # update_existing=False の場合も必ずチェック（同名が存在する場合はエラー）
                 if name_official:
                     active_check_stmt = (
                         select(Material.id)
@@ -4459,8 +4464,11 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                     )
                     active_existing = db_tx1.execute(active_check_stmt).scalar_one_or_none()
                     if active_existing is not None:
-                        error_msg = f"同名の材料が既に存在します（ID: {active_existing}）。「既存へ反映」モードで承認してください。"
-                        logger.warning(f"[APPROVE] Tx1: Active material with same name_official exists (id={active_existing}), blocking creation")
+                        if update_existing:
+                            error_msg = f"同名の材料が既に存在します（ID: {active_existing}）。「既存へ反映」モードで承認してください。"
+                        else:
+                            error_msg = f"同名の材料が既に存在します（ID: {active_existing}）。「既存へ反映（update_existing=True）」か、材料名を変更してください。"
+                        logger.warning(f"[APPROVE] Tx1: Active material with same name_official exists (id={active_existing}), update_existing={update_existing}, blocking creation")
                         return {
                             "ok": False,
                             "error": error_msg,
@@ -4708,14 +4716,74 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             
         except Exception as e:
             db_tx1.rollback()
+            # material_idをNoneに戻す（Tx1失敗時はmaterialが作成されていない）
+            material_id = None
             logger.exception(f"[APPROVE] Tx1 failed (materials upsert): {e}")
+            error_msg = f"Tx1 failed: {e}"
+            if is_debug():
+                error_msg += f"\n\nTraceback:\n{tb.format_exc()}"
             return {
                 "ok": False,
-                "error": f"Failed to create/update material: {e}",
-                "traceback": tb.format_exc(),
+                "error": error_msg,
+                "traceback": tb.format_exc() if is_debug() else None,
             }
         finally:
             db_tx1.close()
+        
+        # Tx1成功後、material_idが実際に存在するか確認（別セッションで）
+        # material_idがNoneの場合は既にreturnしているので、ここに来る時点では必ず存在するはず
+        if not material_id:
+            logger.error(f"[APPROVE] material_id is None after Tx1 commit, cannot proceed")
+            return {
+                "ok": False,
+                "error": "material_id is None after Tx1 commit. Material creation may have failed.",
+                "error_code": "material_id_none_after_tx1",
+            }
+        
+        # material_idの存在確認（別セッションで）
+        db_check = SessionLocal()
+        try:
+            from sqlalchemy import select
+            check_stmt = select(Material.id).where(Material.id == material_id).limit(1)
+            material_exists = db_check.execute(check_stmt).scalar_one_or_none()
+            if not material_exists:
+                logger.error(f"[APPROVE] Material {material_id} does not exist after Tx1 commit (possibly rolled back)")
+                return {
+                    "ok": False,
+                    "error": f"Material {material_id} does not exist after creation. Tx1 may have been rolled back.",
+                    "error_code": "material_not_found_after_commit",
+                }
+            logger.info(f"[APPROVE] Verified material_id={material_id} exists after Tx1 commit")
+        except Exception as check_error:
+            logger.exception(f"[APPROVE] Failed to verify material_id={material_id} existence: {check_error}")
+            return {
+                "ok": False,
+                "error": f"Failed to verify material existence after Tx1: {check_error}",
+                "error_code": "material_verification_failed_after_tx1",
+            }
+        finally:
+            db_check.close()
+        
+        # 存在確認が成功した場合のみ、Tx2/Tx3へ進む
+        if material_id:
+            db_check = SessionLocal()
+            try:
+                from sqlalchemy import select
+                check_stmt = select(Material.id).where(Material.id == material_id).limit(1)
+                material_exists = db_check.execute(check_stmt).scalar_one_or_none()
+                if not material_exists:
+                    logger.error(f"[APPROVE] Material {material_id} does not exist after Tx1 commit (possibly rolled back)")
+                    return {
+                        "ok": False,
+                        "error": f"Material {material_id} does not exist after creation. Tx1 may have been rolled back.",
+                        "error_code": "material_not_found_after_commit",
+                    }
+                logger.info(f"[APPROVE] Verified material_id={material_id} exists after Tx1 commit")
+            except Exception as check_error:
+                logger.exception(f"[APPROVE] Failed to verify material_id={material_id} existence: {check_error}")
+                # 確認失敗は警告のみ（承認は継続）
+            finally:
+                db_check.close()
         
         # ===== Tx2: images upsert（失敗しても rollback、全体は落とさない） =====
         # Tx2 の先頭で uploaded_images を確実に取り出す
@@ -4825,6 +4893,37 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 db_tx2.close()
         
         # ===== Tx3: submissionを更新（commit） =====
+        # Tx3実行前に、material_idが存在することを再確認（FK違反防止）
+        # ここに来る時点では、既にTx1成功後の存在確認を通過しているはずだが、念のため再確認
+        if not material_id:
+            logger.error(f"[APPROVE] material_id is None before Tx3, cannot update submission")
+            return {"ok": False, "error": "material_id is None before Tx3"}
+        
+        # material_idの存在確認（別セッションで）
+        db_check_tx3 = SessionLocal()
+        try:
+            from sqlalchemy import select
+            check_stmt_tx3 = select(Material.id).where(Material.id == material_id).limit(1)
+            material_exists_tx3 = db_check_tx3.execute(check_stmt_tx3).scalar_one_or_none()
+            if not material_exists_tx3:
+                logger.error(f"[APPROVE] Material {material_id} does not exist before Tx3, cannot set approved_material_id (FK violation prevented)")
+                return {
+                    "ok": False,
+                    "error": f"Material {material_id} does not exist. Cannot update submission with approved_material_id (FK violation prevented).",
+                    "error_code": "material_not_found_before_tx3",
+                }
+            logger.info(f"[APPROVE] Verified material_id={material_id} exists before Tx3")
+        except Exception as check_error_tx3:
+            logger.exception(f"[APPROVE] Failed to verify material_id={material_id} existence before Tx3: {check_error_tx3}")
+            return {
+                "ok": False,
+                "error": f"Failed to verify material existence before Tx3: {check_error_tx3}",
+                "error_code": "material_verification_failed_before_tx3",
+            }
+        finally:
+            db_check_tx3.close()
+        
+        # 存在確認が成功した場合のみ、submissionを更新
         try:
             # submissionを再取得（Tx1とは別セッション）
             submission_tx3 = db_tx3.query(MaterialSubmission).filter(
@@ -4835,11 +4934,18 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 logger.error(f"[APPROVE] Submission {submission_id} not found in Tx3")
                 return {"ok": False, "error": "Submission not found in Tx3"}
             
+            # statusがpendingのままか確認（Tx1失敗時にpendingのまま残す）
+            if submission_tx3.status != "pending":
+                logger.warning(f"[APPROVE] Submission {submission_id} status is '{submission_tx3.status}', not 'pending'. Skipping status update.")
+                # status更新はスキップするが、approved_material_idは設定しない（FK違反防止）
+                db_tx3.commit()
+                return {
+                    "ok": False,
+                    "error": f"Submission status is '{submission_tx3.status}', not 'pending'. Cannot approve.",
+                    "error_code": "submission_not_pending",
+                }
+            
             submission_tx3.status = "approved"
-            # approved_material_id を Tx1 で確定した material_id に設定（確実に設定）
-            if not material_id:
-                logger.error(f"[APPROVE] material_id is None in Tx3, cannot set approved_material_id")
-                return {"ok": False, "error": "material_id is None in Tx3"}
             submission_tx3.approved_material_id = material_id
             if editor_note and editor_note.strip():
                 submission_tx3.editor_note = editor_note.strip()
@@ -4850,10 +4956,11 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
         except Exception as e:
             db_tx3.rollback()
             logger.exception(f"[APPROVE] Tx3 failed (submission update): {e}")
+            # Tx3失敗時はpendingのままにする（approvedにしない）
             return {
                 "ok": False,
                 "error": f"Failed to update submission: {e}",
-                "traceback": tb.format_exc(),
+                "traceback": tb.format_exc() if is_debug() else None,
             }
         finally:
             db_tx3.close()
