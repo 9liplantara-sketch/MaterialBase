@@ -2198,6 +2198,8 @@ def main():
             if is_admin:
                 menu_items.append("承認待ち一覧")
                 menu_icons.append("clipboard-check")
+                menu_items.append("一括登録")
+                menu_icons.append("upload")
             
             # 現在のページのインデックスを取得
             current_index = 0
@@ -2415,6 +2417,12 @@ def main():
             st.error("❌ このページは管理者のみアクセス可能です。")
     elif page == "投稿ステータス確認":
         show_submission_status()
+    elif page == "一括登録":
+        # 管理者のみアクセス可能
+        if is_admin:
+            show_bulk_import()
+        else:
+            st.error("❌ このページは管理者のみアクセス可能です。")
 
 def resolve_home_main_visual(project_root: Optional[Path] = None) -> tuple[Optional[Path], Optional[bytes]]:
     """
@@ -3679,7 +3687,7 @@ def show_search():
     
     # フィルタオプションをインポート
     from material_form_detailed import (
-        USE_CATEGORIES, TRANSPARENCY_OPTIONS, WEATHER_RESISTANCE_OPTIONS,
+        USE_CATEGORIES, USE_ENVIRONMENT_OPTIONS, TRANSPARENCY_OPTIONS, WEATHER_RESISTANCE_OPTIONS,
         WATER_RESISTANCE_OPTIONS, EQUIPMENT_LEVELS, COST_LEVELS
     )
     
@@ -3687,9 +3695,16 @@ def show_search():
     col1, col2 = st.columns(2)
     
     with col1:
-        # 用途（複数選択）
+        # 使用環境（複数選択）
+        selected_environments = st.multiselect(
+            "使用環境",
+            options=USE_ENVIRONMENT_OPTIONS,
+            key="filter_use_environment"
+        )
+        
+        # 用途カテゴリ（複数選択）
         selected_uses = st.multiselect(
-            "用途",
+            "用途カテゴリ",
             options=USE_CATEGORIES,
             key="filter_use_categories"
         )
@@ -3736,7 +3751,14 @@ def show_search():
     # プレースホルダー文字列のリスト（無視すべき値）
     placeholder_values = ["すべて", "", None, "Choose options", "選択してください"]
     
-    # 用途（multiselect）
+    # 使用環境（multiselect）
+    if selected_environments and isinstance(selected_environments, list):
+        # 空でない、有効な値のみをフィルタ
+        valid_envs = [e for e in selected_environments if e and str(e).strip() and str(e) not in placeholder_values]
+        if valid_envs:
+            filters['use_environment'] = valid_envs
+    
+    # 用途カテゴリ（multiselect）
     if selected_uses and isinstance(selected_uses, list):
         # 空でない、有効な値のみをフィルタ
         valid_uses = [u for u in selected_uses if u and str(u).strip() and str(u) not in placeholder_values]
@@ -4592,6 +4614,45 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
             logger.warning(f"[APPROVE][Tx2] uploaded_images is not a list: type={type(uploaded_images)}, using empty list")
             uploaded_images = []
         
+        # 一括登録の承認待ち送信で保存した images_info を処理
+        images_info = payload_dict.get("images_info", [])
+        if isinstance(images_info, list) and len(images_info) > 0 and material_id:
+            # base64エンコードされた画像データをデコードしてアップロード
+            import base64
+            import hashlib
+            from utils.bulk_import import upload_image_to_r2
+            
+            for img_info in images_info:
+                if not isinstance(img_info, dict):
+                    continue
+                
+                kind = img_info.get('kind', 'primary')
+                file_name = img_info.get('file_name', '')
+                data_base64 = img_info.get('data_base64', '')
+                
+                if not data_base64:
+                    continue
+                
+                try:
+                    # base64デコード
+                    image_data = base64.b64decode(data_base64)
+                    
+                    # R2にアップロード
+                    r2_result = upload_image_to_r2(material_id, image_data, kind, file_name)
+                    
+                    if r2_result:
+                        uploaded_images.append({
+                            'kind': kind,
+                            'r2_key': r2_result['r2_key'],
+                            'public_url': r2_result['public_url'],
+                            'mime': r2_result.get('mime', 'image/jpeg'),
+                            'sha256': hashlib.sha256(image_data).hexdigest(),
+                            'bytes': len(image_data)
+                        })
+                        logger.info(f"[APPROVE][Tx2] Uploaded image from images_info: kind={kind}, file_name={file_name}")
+                except Exception as e:
+                    logger.warning(f"[APPROVE][Tx2] Failed to process image from images_info: {e}")
+        
         uploaded_images_count = len(uploaded_images)
         logger.info(f"[APPROVE][Tx2] uploaded_images_count={uploaded_images_count} submission_id={submission_id} material_id={material_id}")
         
@@ -4863,6 +4924,220 @@ def reject_submission(submission_id: int, reject_reason: str = None, db=None):
     finally:
         if should_close:
             db.close()
+
+
+def show_bulk_import(embedded: bool = False):
+    """
+    一括登録ページ
+    
+    Args:
+        embedded: Trueの場合は埋め込みモード（ヘッダーなし、戻るボタンあり）
+    """
+    from utils.settings import is_admin_mode
+    is_admin = is_admin_mode()
+    
+    if not embedded:
+        is_debug = os.getenv("DEBUG", "0") == "1"
+        st.markdown(render_site_header(debug=is_debug), unsafe_allow_html=True)
+        st.markdown('<h2 class="section-title">📦 一括登録</h2>', unsafe_allow_html=True)
+    else:
+        # 埋め込みモード：戻るボタンを表示
+        if st.button("← 材料登録に戻る", key="back_to_material_form"):
+            st.session_state.bulk_import_mode = False
+            st.rerun()
+        st.markdown('<h2 class="section-title">📦 材料一括登録</h2>', unsafe_allow_html=True)
+    
+    st.info("""
+    **一括登録機能**
+    
+    CSVファイルと画像ZIPファイルを使用して材料を一括登録・更新できます。
+    
+    **CSVファイル形式:**
+    - 必須カラム: `name_official`, `category_main`, `supplier_org`, `supplier_type`, `origin_type`, `origin_detail`, `transparency`, `hardness_qualitative`, `weight_qualitative`, `water_resistance`, `weather_resistance`, `equipment_level`, `cost_level`, `use_categories`
+    - JSON配列フィールド（`use_categories`, `processing_methods`など）はカンマ区切りで記入可能
+    
+    **画像ファイル命名規則:**
+    - primary画像: `{材料名}.jpg`（例: `真鍮.jpg`）
+    - space画像: `{材料名}1.jpg`（例: `真鍮1.jpg`）
+    - product画像: `{材料名}2.jpg`（例: `真鍮2.jpg`）
+    - 拡張子: `.jpg`, `.jpeg`, `.png`, `.webp` に対応
+    - 括弧揺れに対応（例: `真鍮（黄銅）` → `真鍮1.jpg` も検索可能）
+    """)
+    
+    # CSVファイルとZIPファイルのアップロード
+    csv_file = st.file_uploader("CSVファイル", type=['csv'], key="bulk_import_csv")
+    zip_file = st.file_uploader("画像ZIPファイル", type=['zip'], key="bulk_import_zip")
+    
+    if csv_file and zip_file:
+        st.markdown("---")
+        
+        # プレビューモードと実行モードの切り替え
+        preview_mode = st.checkbox("プレビューモード（実行前に確認）", value=True, key="bulk_import_preview")
+        
+        try:
+            # CSVをパース
+            from utils.bulk_import import parse_csv, extract_zip_images, find_image_files, validate_csv_row
+            
+            csv_rows = parse_csv(csv_file)
+            st.success(f"✅ CSVファイルを読み込みました（{len(csv_rows)}行）")
+            
+            # ZIPを展開
+            image_files_dict = extract_zip_images(zip_file)
+            st.success(f"✅ ZIPファイルを展開しました（{len(image_files_dict)}ファイル）")
+            
+            # プレビュー表示
+            st.markdown("### プレビュー")
+            
+            preview_data = []
+            for row_num, row in enumerate(csv_rows, start=2):
+                name_official = row.get('name_official', '').strip()
+                is_valid, errors = validate_csv_row(row, row_num)
+                
+                # 画像の有無を確認
+                images_found = {}
+                for kind in ['primary', 'space', 'product']:
+                    image_match = find_image_files(name_official, image_files_dict, kind)
+                    images_found[kind] = '✅' if image_match else '❌'
+                
+                preview_data.append({
+                    '行番号': row_num,
+                    '材料名': name_official,
+                    '検証': '✅ OK' if is_valid else f'❌ {"; ".join(errors)}',
+                    'primary': images_found['primary'],
+                    'space': images_found['space'],
+                    'product': images_found['product']
+                })
+            
+            st.dataframe(preview_data, use_container_width=True)
+            
+            # 同名衝突チェック
+            names = [row.get('name_official', '').strip() for row in csv_rows]
+            duplicates = [name for name in names if names.count(name) > 1]
+            if duplicates:
+                st.warning(f"⚠️ CSV内に同名の材料があります: {', '.join(set(duplicates))}")
+            
+            # 実行ボタン
+            if not preview_mode:
+                st.markdown("---")
+                
+                # 管理者の場合は直接実行、非管理者の場合は承認待ちに送信
+                if is_admin:
+                    if st.button("🚀 一括登録を実行", type="primary", key="bulk_import_execute"):
+                        db = SessionLocal()
+                        try:
+                            from utils.bulk_import import process_bulk_import, generate_report_csv
+                            
+                            with st.spinner("一括登録を実行中..."):
+                                results = process_bulk_import(db, csv_rows, image_files_dict)
+                            
+                            # 結果サマリー
+                            created = sum(1 for r in results if r['action'] == 'created')
+                            updated = sum(1 for r in results if r['action'] == 'updated')
+                            errors = sum(1 for r in results if r['status'] == 'error')
+                            
+                            st.success(f"""
+                            **処理完了**
+                            - 作成: {created}件
+                            - 更新: {updated}件
+                            - エラー: {errors}件
+                            """)
+                            
+                            # エラーがある場合は表示
+                            if errors > 0:
+                                st.markdown("### エラー詳細")
+                                error_results = [r for r in results if r['status'] == 'error']
+                                for err in error_results[:10]:  # 最大10件表示
+                                    st.error(f"行{err['row_num']}: {err['name_official']} - {err.get('error', 'Unknown error')}")
+                            
+                            # レポートCSVをダウンロード
+                            report_csv = generate_report_csv(results)
+                            st.download_button(
+                                label="📥 結果レポートをダウンロード",
+                                data=report_csv.encode('utf-8-sig'),  # BOM付きUTF-8
+                                file_name=f"bulk_import_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                mime="text/csv",
+                                key="bulk_import_report"
+                            )
+                        
+                        except Exception as e:
+                            db.rollback()
+                            st.error(f"一括登録中にエラーが発生しました: {e}")
+                            if is_debug:
+                                import traceback
+                                st.code(traceback.format_exc(), language="python")
+                            logger.exception(f"Bulk import error: {e}")
+                        finally:
+                            db.close()
+                else:
+                    # 非管理者の場合は承認待ちに送信
+                    submitted_by = st.text_input(
+                        "投稿者情報（任意）",
+                        placeholder="ニックネーム / メールアドレス",
+                        key="bulk_import_submitted_by"
+                    )
+                    
+                    if st.button("📤 承認待ちに送信", type="primary", key="bulk_import_submit"):
+                        db = SessionLocal()
+                        try:
+                            from utils.bulk_import import create_bulk_submissions, generate_report_csv
+                            
+                            with st.spinner("承認待ちに送信中..."):
+                                results = create_bulk_submissions(
+                                    db, csv_rows, image_files_dict,
+                                    submitted_by=submitted_by.strip() if submitted_by else None
+                                )
+                            
+                            # 結果サマリー
+                            submitted = sum(1 for r in results if r['status'] == 'success')
+                            errors = sum(1 for r in results if r['status'] == 'error')
+                            
+                            st.success(f"""
+                            **送信完了**
+                            - 承認待ちに送信: {submitted}件
+                            - エラー: {errors}件
+                            
+                            ⚠️ 管理者が承認すると材料が公開されます。
+                            """)
+                            
+                            # エラーがある場合は表示
+                            if errors > 0:
+                                st.markdown("### エラー詳細")
+                                error_results = [r for r in results if r['status'] == 'error']
+                                for err in error_results[:10]:  # 最大10件表示
+                                    st.error(f"行{err['row_num']}: {err['name_official']} - {err.get('error', 'Unknown error')}")
+                            
+                            # 送信されたSubmission IDを表示
+                            if submitted > 0:
+                                st.markdown("### 送信された投稿ID")
+                                submission_ids = [r['submission_id'] for r in results if r['submission_id']]
+                                st.info(f"投稿ID: {', '.join(map(str, submission_ids[:10]))}" + (f" 他{submitted-10}件" if submitted > 10 else ""))
+                            
+                            # レポートCSVをダウンロード
+                            report_csv = generate_report_csv(results)
+                            st.download_button(
+                                label="📥 結果レポートをダウンロード",
+                                data=report_csv.encode('utf-8-sig'),  # BOM付きUTF-8
+                                file_name=f"bulk_submission_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                mime="text/csv",
+                                key="bulk_submission_report"
+                            )
+                        
+                        except Exception as e:
+                            db.rollback()
+                            st.error(f"承認待ち送信中にエラーが発生しました: {e}")
+                            if is_debug:
+                                import traceback
+                                st.code(traceback.format_exc(), language="python")
+                            logger.exception(f"Bulk submission error: {e}")
+                        finally:
+                            db.close()
+        
+        except Exception as e:
+            st.error(f"ファイル処理中にエラーが発生しました: {e}")
+            if is_debug:
+                import traceback
+                st.code(traceback.format_exc(), language="python")
+            logger.exception(f"Bulk import file processing error: {e}")
 
 
 def show_submission_status():

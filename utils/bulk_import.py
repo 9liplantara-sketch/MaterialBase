@@ -1,0 +1,684 @@
+"""
+一括登録機能（CSV + 画像ZIP）
+管理者用の材料一括登録・更新機能
+"""
+import csv
+import io
+import json
+import re
+import unicodedata
+import zipfile
+import tempfile
+import hashlib
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any
+from datetime import datetime
+import uuid
+
+from sqlalchemy.orm import Session
+from database import Material, Image
+from utils.search import generate_search_text, update_material_search_text
+from utils.image_repo import upsert_image
+
+# ロガーを設定
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('[%(name)s] %(levelname)s: %(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+
+def normalize_material_name(name: str) -> str:
+    """
+    材料名を正規化（NFKC、空白除去）
+    
+    Args:
+        name: 材料名
+    
+    Returns:
+        正規化された材料名
+    """
+    if not name:
+        return ""
+    # Unicode正規化（NFKC: 互換文字を正規化）
+    name = unicodedata.normalize('NFKC', name)
+    # 全角スペースを半角スペースに変換
+    name = name.replace("　", " ")
+    # 連続するスペースを1つに
+    while "  " in name:
+        name = name.replace("  ", " ")
+    # 末尾の空白を除去
+    name = name.strip()
+    return name
+
+
+def generate_material_name_candidates(material_name: str) -> List[str]:
+    """
+    材料名から候補名を複数生成（括弧揺れ吸収）
+    
+    例: "真鍮（黄銅）" の場合
+    - "真鍮（黄銅）"（元の名前）
+    - "真鍮"（括弧前のみ）
+    - "黄銅"（括弧内のみ）
+    
+    Args:
+        material_name: 材料名
+    
+    Returns:
+        候補名のリスト
+    """
+    candidates = []
+    normalized = normalize_material_name(material_name)
+    
+    if not normalized:
+        return candidates
+    
+    # 元の名前を追加
+    candidates.append(normalized)
+    
+    # 括弧パターンを抽出（全角・半角両対応）
+    # 例: "真鍮（黄銅）" → ["真鍮", "黄銅"]
+    bracket_patterns = [
+        r'(.+?)（(.+?)）',  # 全角括弧
+        r'(.+?)\((.+?)\)',  # 半角括弧
+        r'(.+?)【(.+?)】',  # 二重括弧
+    ]
+    
+    for pattern in bracket_patterns:
+        match = re.match(pattern, normalized)
+        if match:
+            before = match.group(1).strip()
+            inside = match.group(2).strip()
+            if before:
+                candidates.append(before)
+            if inside:
+                candidates.append(inside)
+    
+    # 重複を除去して返す
+    seen = set()
+    result = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            result.append(c)
+    
+    return result
+
+
+def find_image_files(
+    material_name: str,
+    image_files_dict: Dict[str, bytes],
+    kind: str
+) -> Optional[Tuple[str, bytes]]:
+    """
+    材料名から画像ファイルを検索
+    
+    Args:
+        material_name: 材料名
+        image_files_dict: {ファイル名: ファイルデータ} の辞書
+        kind: 画像種別（primary/space/product）
+    
+    Returns:
+        (ファイル名, ファイルデータ) のタプル、見つからない場合はNone
+    """
+    # 拡張子のリスト
+    extensions = ['.jpg', '.jpeg', '.png', '.webp']
+    
+    # 候補名を生成
+    candidates = generate_material_name_candidates(material_name)
+    
+    # kindに応じたファイル名パターンを生成
+    if kind == 'primary':
+        patterns = [f"{name}{ext}" for name in candidates for ext in extensions]
+    elif kind == 'space':
+        patterns = [f"{name}1{ext}" for name in candidates for ext in extensions]
+    elif kind == 'product':
+        patterns = [f"{name}2{ext}" for name in candidates for ext in extensions]
+    else:
+        return None
+    
+    # 大文字小文字を区別しない検索
+    image_files_lower = {k.lower(): (k, v) for k, v in image_files_dict.items()}
+    
+    for pattern in patterns:
+        pattern_lower = pattern.lower()
+        if pattern_lower in image_files_lower:
+            return image_files_lower[pattern_lower]
+    
+    return None
+
+
+def extract_zip_images(zip_file) -> Dict[str, bytes]:
+    """
+    ZIPファイルから画像ファイルを展開
+    
+    Args:
+        zip_file: ZIPファイル（Streamlit UploadedFileまたはファイルパス）
+    
+    Returns:
+        {ファイル名: ファイルデータ} の辞書
+    """
+    image_files = {}
+    allowed_extensions = {'.jpg', '.jpeg', '.png', '.webp'}
+    
+    try:
+        # Streamlit UploadedFileの場合はread()で取得
+        if hasattr(zip_file, 'read'):
+            zip_data = zip_file.read()
+        else:
+            # ファイルパスの場合
+            with open(zip_file, 'rb') as f:
+                zip_data = f.read()
+        
+        # ZIPを展開
+        with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+            for file_info in zf.namelist():
+                # ディレクトリはスキップ
+                if file_info.endswith('/'):
+                    continue
+                
+                # 拡張子チェック
+                file_path = Path(file_info)
+                if file_path.suffix.lower() in allowed_extensions:
+                    try:
+                        file_data = zf.read(file_info)
+                        # ファイル名のみ（パスは除去）
+                        file_name = file_path.name
+                        image_files[file_name] = file_data
+                    except Exception as e:
+                        logger.warning(f"Failed to extract {file_info}: {e}")
+                        continue
+    
+    except Exception as e:
+        logger.error(f"Failed to extract ZIP file: {e}")
+        raise
+    
+    return image_files
+
+
+def validate_csv_row(row: Dict[str, str], row_num: int) -> Tuple[bool, List[str]]:
+    """
+    CSV行を検証
+    
+    Args:
+        row: CSV行の辞書
+        row_num: 行番号（1始まり）
+    
+    Returns:
+        (検証OKか, エラーメッセージのリスト)
+    """
+    errors = []
+    
+    # 必須カラム
+    required_fields = [
+        'name_official', 'category_main', 'supplier_org', 'supplier_type',
+        'origin_type', 'origin_detail', 'transparency', 'hardness_qualitative',
+        'weight_qualitative', 'water_resistance', 'weather_resistance',
+        'equipment_level', 'cost_level', 'use_categories'
+    ]
+    
+    for field in required_fields:
+        if not row.get(field) or not str(row[field]).strip():
+            errors.append(f"必須フィールド '{field}' が空です")
+    
+    return len(errors) == 0, errors
+
+
+def normalize_csv_value(value: str, field_name: str, options: Optional[List[str]] = None) -> str:
+    """
+    CSVの値を正規化（選択肢の正規化）
+    
+    Args:
+        value: CSVの値
+        field_name: フィールド名
+        options: 有効な選択肢のリスト（Noneの場合は正規化しない）
+    
+    Returns:
+        正規化された値（見つからない場合は元の値）
+    """
+    if not value:
+        return value
+    
+    value = str(value).strip()
+    
+    # 選択肢が指定されていない場合はそのまま返す
+    if not options:
+        return value
+    
+    # 完全一致をチェック
+    if value in options:
+        return value
+    
+    # 大文字小文字を区別しない検索
+    value_lower = value.lower()
+    for opt in options:
+        if opt.lower() == value_lower:
+            return opt
+    
+    # 部分一致をチェック
+    for opt in options:
+        if value in opt or opt in value:
+            return opt
+    
+    return value
+
+
+def parse_csv(csv_file) -> List[Dict[str, str]]:
+    """
+    CSVファイルをパース
+    
+    Args:
+        csv_file: CSVファイル（Streamlit UploadedFileまたはファイルパス）
+    
+    Returns:
+        CSV行のリスト（辞書のリスト）
+    """
+    rows = []
+    
+    try:
+        # Streamlit UploadedFileの場合はread()で取得
+        if hasattr(csv_file, 'read'):
+            csv_data = csv_file.read().decode('utf-8-sig')  # BOM対応
+        else:
+            # ファイルパスの場合
+            with open(csv_file, 'r', encoding='utf-8-sig') as f:
+                csv_data = f.read()
+        
+        # CSVをパース
+        reader = csv.DictReader(io.StringIO(csv_data))
+        for row_num, row in enumerate(reader, start=2):  # ヘッダー行を除くので2から
+            rows.append(row)
+    
+    except Exception as e:
+        logger.error(f"Failed to parse CSV: {e}")
+        raise
+    
+    return rows
+
+
+def create_or_update_material(
+    db: Session,
+    row: Dict[str, str],
+    row_num: int
+) -> Tuple[Material, str]:
+    """
+    材料を作成または更新
+    
+    Args:
+        db: データベースセッション
+        row: CSV行の辞書
+        row_num: 行番号
+    
+    Returns:
+        (Materialオブジェクト, 'created'または'updated')
+    """
+    name_official = str(row['name_official']).strip()
+    
+    # 既存レコードを検索
+    existing = db.query(Material).filter(
+        Material.name_official == name_official
+    ).first()
+    
+    if existing:
+        # 更新
+        material = existing
+        action = 'updated'
+    else:
+        # 新規作成
+        material_uuid = str(uuid.uuid4())
+        material = Material(
+            uuid=material_uuid,
+            name_official=name_official
+        )
+        db.add(material)
+        action = 'created'
+    
+    # フィールドを設定（JSON配列フィールドはJSON文字列に変換）
+    json_fields = [
+        'name_aliases', 'material_forms', 'color_tags', 'processing_methods',
+        'use_environment', 'use_categories', 'safety_tags', 'question_templates', 'main_elements'
+    ]
+    
+    for key, value in row.items():
+        if not value or not str(value).strip():
+            continue
+        
+        value_str = str(value).strip()
+        
+        # JSON配列フィールドの処理
+        if key in json_fields:
+            # カンマ区切りの場合は配列に変換
+            if ',' in value_str:
+                items = [item.strip() for item in value_str.split(',')]
+                value_str = json.dumps(items, ensure_ascii=False)
+            elif value_str.startswith('[') and value_str.endswith(']'):
+                # 既にJSON配列形式の場合
+                pass
+            else:
+                # 単一値の場合は配列に変換
+                value_str = json.dumps([value_str], ensure_ascii=False)
+        
+        # 数値フィールドの処理
+        numeric_fields = [
+            'recycle_bio_rate', 'specific_gravity', 'heat_resistance_temp'
+        ]
+        if key in numeric_fields:
+            try:
+                setattr(material, key, float(value_str) if value_str else None)
+            except (ValueError, TypeError):
+                setattr(material, key, None)
+            continue
+        
+        # 真偽値フィールドの処理
+        boolean_fields = ['is_published', 'is_deleted']
+        if key in boolean_fields:
+            setattr(material, key, 1 if value_str.lower() in ['1', 'true', 'yes', '公開'] else 0)
+            continue
+        
+        # 文字列フィールド
+        setattr(material, key, value_str)
+    
+    # デフォルト値の設定
+    if not material.is_published:
+        material.is_published = 1
+    if material.is_deleted is None:
+        material.is_deleted = 0
+    
+    # search_textを生成
+    try:
+        update_material_search_text(db, material)
+    except Exception as e:
+        logger.warning(f"Failed to update search_text for {name_official}: {e}")
+    
+    db.flush()
+    
+    return material, action
+
+
+def upload_image_to_r2(
+    material_id: int,
+    image_data: bytes,
+    kind: str,
+    file_name: str
+) -> Optional[Dict[str, str]]:
+    """
+    画像をR2にアップロード
+    
+    Args:
+        material_id: 材料ID
+        image_data: 画像データ（バイト）
+        kind: 画像種別（primary/space/product）
+        file_name: ファイル名
+    
+    Returns:
+        {'r2_key': str, 'public_url': str} または None（失敗時）
+    """
+    try:
+        import utils.r2_storage as r2_storage
+        
+        # R2設定の確認
+        try:
+            _ = r2_storage.get_r2_client()
+        except RuntimeError as e:
+            logger.warning(f"R2 configuration error: {e}")
+            return None
+        
+        # SHA256ハッシュを計算
+        sha256 = hashlib.sha256(image_data).hexdigest()
+        
+        # MIMEタイプを判定
+        ext = Path(file_name).suffix.lower()
+        mime_map = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.webp': 'image/webp'
+        }
+        mime = mime_map.get(ext, 'image/jpeg')
+        
+        # R2キーを生成
+        r2_key = f"materials/{material_id}/{kind}/{sha256[:16]}{ext}"
+        
+        # R2にアップロード
+        r2_storage.upload_bytes_to_r2(r2_key, image_data, mime)
+        
+        # 公開URLを生成
+        public_url = r2_storage.make_public_url(r2_key)
+        
+        return {
+            'r2_key': r2_key,
+            'public_url': public_url
+        }
+    
+    except Exception as e:
+        logger.error(f"Failed to upload image to R2: {e}")
+        return None
+
+
+def process_bulk_import(
+    db: Session,
+    csv_rows: List[Dict[str, str]],
+    image_files_dict: Dict[str, bytes]
+) -> List[Dict[str, Any]]:
+    """
+    一括登録を実行
+    
+    Args:
+        db: データベースセッション
+        csv_rows: CSV行のリスト
+        image_files_dict: {ファイル名: ファイルデータ} の辞書
+    
+    Returns:
+        結果レポートのリスト（各行の処理結果）
+    """
+    results = []
+    
+    for row_num, row in enumerate(csv_rows, start=2):  # ヘッダー行を除くので2から
+        result = {
+            'row_num': row_num,
+            'name_official': row.get('name_official', ''),
+            'status': 'pending',
+            'action': None,
+            'material_id': None,
+            'error': None,
+            'images': []
+        }
+        
+        try:
+            # CSV行を検証
+            is_valid, errors = validate_csv_row(row, row_num)
+            if not is_valid:
+                result['status'] = 'error'
+                result['error'] = '; '.join(errors)
+                results.append(result)
+                continue
+            
+            # 材料を作成または更新
+            material, action = create_or_update_material(db, row, row_num)
+            db.commit()
+            
+            result['action'] = action
+            result['material_id'] = material.id
+            
+            # 画像を検索してアップロード
+            material_name = material.name_official
+            for kind in ['primary', 'space', 'product']:
+                image_match = find_image_files(material_name, image_files_dict, kind)
+                if image_match:
+                    file_name, image_data = image_match
+                    
+                    # R2にアップロード
+                    r2_result = upload_image_to_r2(material.id, image_data, kind, file_name)
+                    
+                    if r2_result:
+                        # imagesテーブルにupsert
+                        upsert_image(
+                            db=db,
+                            material_id=material.id,
+                            kind=kind,
+                            r2_key=r2_result['r2_key'],
+                            public_url=r2_result['public_url'],
+                            mime=r2_result.get('mime', 'image/jpeg'),
+                            sha256=hashlib.sha256(image_data).hexdigest(),
+                            bytes=len(image_data)
+                        )
+                        db.commit()
+                        
+                        result['images'].append({
+                            'kind': kind,
+                            'file_name': file_name,
+                            'public_url': r2_result['public_url']
+                        })
+            
+            result['status'] = 'success'
+        
+        except Exception as e:
+            db.rollback()
+            result['status'] = 'error'
+            result['error'] = str(e)
+            logger.exception(f"Error processing row {row_num}: {e}")
+        
+        results.append(result)
+    
+    return results
+
+
+def create_bulk_submissions(
+    db: Session,
+    csv_rows: List[Dict[str, str]],
+    image_files_dict: Dict[str, bytes],
+    submitted_by: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    一括登録を承認待ちに送信（各行ごとにMaterialSubmissionを作成）
+    
+    Args:
+        db: データベースセッション
+        csv_rows: CSV行のリスト
+        image_files_dict: {ファイル名: ファイルデータ} の辞書
+        submitted_by: 投稿者情報（任意）
+    
+    Returns:
+        結果レポートのリスト（各行の処理結果）
+    """
+    from database import MaterialSubmission
+    
+    results = []
+    
+    for row_num, row in enumerate(csv_rows, start=2):  # ヘッダー行を除くので2から
+        result = {
+            'row_num': row_num,
+            'name_official': row.get('name_official', ''),
+            'status': 'pending',
+            'submission_id': None,
+            'submission_uuid': None,
+            'error': None,
+            'images': []
+        }
+        
+        try:
+            # CSV行を検証
+            is_valid, errors = validate_csv_row(row, row_num)
+            if not is_valid:
+                result['status'] = 'error'
+                result['error'] = '; '.join(errors)
+                results.append(result)
+                continue
+            
+            # 画像情報を収集
+            material_name = row.get('name_official', '').strip()
+            images_info = []
+            for kind in ['primary', 'space', 'product']:
+                image_match = find_image_files(material_name, image_files_dict, kind)
+                if image_match:
+                    file_name, image_data = image_match
+                    # 画像データをbase64エンコードして保存（承認時にデコードしてアップロード）
+                    import base64
+                    image_base64 = base64.b64encode(image_data).decode('utf-8')
+                    images_info.append({
+                        'kind': kind,
+                        'file_name': file_name,
+                        'data_base64': image_base64  # base64エンコードされた画像データ
+                    })
+            
+            # MaterialSubmissionを作成
+            submission_uuid = str(uuid.uuid4())
+            
+            # payload_jsonを作成（画像データを含める）
+            payload = dict(row)
+            payload['images_info'] = images_info
+            
+            submission = MaterialSubmission(
+                uuid=submission_uuid,
+                status='pending',
+                name_official=material_name,
+                payload_json=json.dumps(payload, ensure_ascii=False),
+                submitted_by=submitted_by
+            )
+            
+            db.add(submission)
+            db.flush()
+            
+            # 画像情報を結果に追加（承認時にアップロードされる）
+            for img_info in images_info:
+                result['images'].append({
+                    'kind': img_info['kind'],
+                    'file_name': img_info['file_name'],
+                    'public_url': None  # 承認時にアップロードされる
+                })
+            
+            result['submission_id'] = submission.id
+            result['submission_uuid'] = submission_uuid
+            result['status'] = 'success'
+        
+        except Exception as e:
+            db.rollback()
+            result['status'] = 'error'
+            result['error'] = str(e)
+            logger.exception(f"Error creating submission for row {row_num}: {e}")
+        
+        results.append(result)
+    
+    db.commit()
+    return results
+
+
+def generate_report_csv(results: List[Dict[str, Any]]) -> str:
+    """
+    結果レポートCSVを生成
+    
+    Args:
+        results: 処理結果のリスト
+    
+    Returns:
+        CSV文字列
+    """
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # ヘッダー
+    writer.writerow([
+        '行番号', '材料名', 'ステータス', 'アクション', '材料ID',
+        'エラー', '画像（primary）', '画像（space）', '画像（product）'
+    ])
+    
+    # データ行
+    for result in results:
+        # 画像URLをkindごとに整理
+        images_by_kind = {img['kind']: img['public_url'] for img in result.get('images', [])}
+        
+        writer.writerow([
+            result['row_num'],
+            result['name_official'],
+            result['status'],
+            result.get('action', ''),
+            result.get('material_id', ''),
+            result.get('error', ''),
+            images_by_kind.get('primary', ''),
+            images_by_kind.get('space', ''),
+            images_by_kind.get('product', '')
+        ])
+    
+    return output.getvalue()

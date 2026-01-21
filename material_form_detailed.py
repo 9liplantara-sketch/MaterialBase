@@ -100,7 +100,22 @@ USE_CATEGORIES = [
     "建築・内装", "家具", "生活用品/雑貨", "家電/機器筐体",
     "パッケージ/包装", "繊維/アパレル", "医療/ヘルスケア", "食品関連",
     "モビリティ", "エネルギー/電気電子", "教育/ホビー",
-    "アート/展示", "その他（自由記述）", "不明"
+    "アート/展示", "その他（自由記述）", "不明",
+    "産業設備・プラント",
+    "インフラ・土木",
+    "エネルギー（発電・蓄電・配電）",
+    "防災・安全",
+    "輸送・モビリティ",
+    "海洋・港湾",
+    "極環境",
+    "研究・実験",
+    "その他専門領域"
+]
+
+USE_ENVIRONMENT_OPTIONS = [
+    "屋内", "屋外", "高温", "低温", "薬品", "塩害", "摩耗",
+    "紫外線", "湿気", "乾燥", "振動", "衝撃", "圧力", "真空",
+    "放射線", "電磁波", "静電気", "その他（自由記述）", "不明"
 ]
 
 PROCUREMENT_OPTIONS = [
@@ -224,6 +239,22 @@ def show_detailed_material_form(material_id: int = None):
     else:
         st.markdown('<h2 class="gradient-text">➕ 材料登録（詳細版）</h2>', unsafe_allow_html=True)
         st.info("📝 **レイヤー①（必須）**: 約10分で入力可能な基本情報\n\n**レイヤー②（任意）**: 後から追記できる詳細情報")
+        
+        # 一括登録モードのチェック
+        if st.session_state.get('bulk_import_mode', False):
+            # 一括登録UIを表示
+            from app import show_bulk_import
+            show_bulk_import(embedded=True)
+            return
+    
+    # 一括登録ボタン（編集モードでない場合のみ表示）
+    if not existing_material:
+        st.markdown("---")
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            if st.button("📦 材料一括登録", key="bulk_import_button", use_container_width=True):
+                st.session_state.bulk_import_mode = True
+                st.rerun()
     
     # 編集モードの場合は既存値をform_dataに初期化
     if existing_material:
@@ -258,6 +289,7 @@ def show_detailed_material_form(material_id: int = None):
             'processing_other': getattr(existing_material, 'processing_other', ''),
             'equipment_level': getattr(existing_material, 'equipment_level', ''),
             'prototyping_difficulty': getattr(existing_material, 'prototyping_difficulty', ''),
+            'use_environment': json.loads(getattr(existing_material, 'use_environment', '[]')) if getattr(existing_material, 'use_environment', None) else [],
             'use_categories': json.loads(getattr(existing_material, 'use_categories', '[]')) if getattr(existing_material, 'use_categories', None) else [],
             'use_other': getattr(existing_material, 'use_other', ''),
             'procurement_status': getattr(existing_material, 'procurement_status', ''),
@@ -922,9 +954,17 @@ def show_layer1_form(existing_material=None):
     st.markdown("---")
     st.markdown("### 6. 用途・市場状態")
     
+    form_data['use_environment'] = st.multiselect(
+        "6-1 使用環境",
+        USE_ENVIRONMENT_OPTIONS,
+        default=form_data.get('use_environment', []),
+        key="use_environment"
+    )
+    
     form_data['use_categories'] = st.multiselect(
-        "6-1 主用途カテゴリ*",
+        "6-2 主用途カテゴリ*",
         USE_CATEGORIES,
+        default=form_data.get('use_categories', []),
         key="use_categories"
     )
     if "その他（自由記述）" in form_data['use_categories']:
@@ -1374,6 +1414,7 @@ def save_material(form_data):
             material.processing_other = form_data.get('processing_other')
             material.equipment_level = form_data['equipment_level']
             material.prototyping_difficulty = form_data['prototyping_difficulty']  # typo修正
+            material.use_environment = json.dumps(form_data.get('use_environment', []), ensure_ascii=False)
             material.use_categories = json.dumps(form_data['use_categories'], ensure_ascii=False)
             material.use_other = form_data.get('use_other')
             material.procurement_status = form_data['procurement_status']
