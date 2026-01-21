@@ -107,50 +107,75 @@ def generate_material_name_candidates(material_name: str) -> List[str]:
     return result
 
 
+def fix_zip_filename(name: str) -> str:
+    """
+    ZIP内の日本語ファイル名を復元（CP437→UTF-8変換を試す）
+    
+    Args:
+        name: ZIP内のファイル名（文字化けしている可能性あり）
+    
+    Returns:
+        復元されたファイル名（失敗した場合は元のname）
+    """
+    try:
+        # CP437エンコーディングでエンコードしてからUTF-8でデコードを試す
+        fixed = name.encode('cp437').decode('utf-8')
+        return fixed
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        # 変換に失敗した場合は元の名前を返す
+        return name
+
+
 def find_image_files(
     material_name: str,
-    image_files_dict: Dict[str, bytes],
+    image_files_dict: Dict[str, Tuple[str, bytes]],
     kind: str
 ) -> Optional[Tuple[str, bytes]]:
     """
-    材料名から画像ファイルを検索
+    材料名から画像ファイルを検索（CSV側・ZIP側両方にNFKC正規化を適用）
     
     Args:
-        material_name: 材料名
-        image_files_dict: {ファイル名: ファイルデータ} の辞書
+        material_name: 材料名（CSV側）
+        image_files_dict: {正規化済みbasename（拡張子除外）: (完全なファイル名, ファイルデータ)} の辞書
         kind: 画像種別（primary/space/product）
     
     Returns:
-        (ファイル名, ファイルデータ) のタプル、見つからない場合はNone
+        (完全なファイル名, ファイルデータ) のタプル、見つからない場合はNone
     """
-    # 拡張子のリスト
-    extensions = ['.jpg', '.jpeg', '.png', '.webp']
+    # CSV側の材料名を正規化（NFKC）
+    material_name_normalized = unicodedata.normalize('NFKC', material_name.strip())
     
-    # 候補名を生成
-    candidates = generate_material_name_candidates(material_name)
+    # 候補名を生成（正規化済み）
+    candidates_raw = generate_material_name_candidates(material_name)
+    candidates = [unicodedata.normalize('NFKC', c.strip()) for c in candidates_raw]
     
-    # kindに応じたファイル名パターンを生成
+    # kindに応じたbasenameパターンを生成（拡張子なし）
     if kind == 'primary':
-        patterns = [f"{name}{ext}" for name in candidates for ext in extensions]
+        patterns = candidates
     elif kind == 'space':
-        patterns = [f"{name}1{ext}" for name in candidates for ext in extensions]
+        patterns = [f"{name}1" for name in candidates]
     elif kind == 'product':
-        patterns = [f"{name}2{ext}" for name in candidates for ext in extensions]
+        patterns = [f"{name}2" for name in candidates]
     else:
         return None
     
+    # ZIP側のキーも正規化済みなので、そのまま比較
     # 大文字小文字を区別しない検索
-    image_files_lower = {k.lower(): (k, v) for k, v in image_files_dict.items()}
+    # image_files_dictの値は (full_filename, file_data) のタプル
+    image_files_lower = {k.lower(): v for k, v in image_files_dict.items()}
     
     for pattern in patterns:
-        pattern_lower = pattern.lower()
+        pattern_normalized = unicodedata.normalize('NFKC', pattern.strip())
+        pattern_lower = pattern_normalized.lower()
         if pattern_lower in image_files_lower:
-            return image_files_lower[pattern_lower]
+            # 見つかった場合は、値のタプル(完全なファイル名, ファイルデータ)を返す
+            full_filename, file_data = image_files_lower[pattern_lower]
+            return (full_filename, file_data)
     
     return None
 
 
-def extract_zip_images(zip_file) -> Tuple[Dict[str, bytes], Dict[str, int]]:
+def extract_zip_images(zip_file) -> Tuple[Dict[str, Tuple[str, bytes]], Dict[str, int]]:
     """
     ZIPファイルから画像ファイルを展開（macOSメタファイルを除外）
     
@@ -158,7 +183,7 @@ def extract_zip_images(zip_file) -> Tuple[Dict[str, bytes], Dict[str, int]]:
         zip_file: ZIPファイル（Streamlit UploadedFileまたはファイルパス）
     
     Returns:
-        ({正規化ファイル名: ファイルデータ} の辞書, {統計情報})
+        ({正規化basename（拡張子除外）: (完全なファイル名, ファイルデータ)} の辞書, {統計情報})
         統計情報: {'zip_total': int, 'excluded': int, 'images_used': int}
     """
     image_files = {}
@@ -216,12 +241,20 @@ def extract_zip_images(zip_file) -> Tuple[Dict[str, bytes], Dict[str, int]]:
                 try:
                     file_data = zf.read(file_info)
                     
-                    # ファイル名を正規化（NFKC、前後空白除去）
+                    # ZIP内の日本語ファイル名を復元（CP437→UTF-8変換を試す）
                     file_name_raw = file_path.name
-                    file_name_normalized = unicodedata.normalize('NFKC', file_name_raw).strip()
+                    file_name_fixed = fix_zip_filename(file_name_raw)
                     
-                    # 正規化後のファイル名をキーとして使用
-                    image_files[file_name_normalized] = file_data
+                    # ファイル名を正規化（NFKC、前後空白除去）
+                    file_name_normalized = unicodedata.normalize('NFKC', file_name_fixed).strip()
+                    
+                    # 拡張子を除去してbasenameを取得（照合用キー）
+                    basename_without_ext = Path(file_name_normalized).stem
+                    extension = file_path.suffix.lower()
+                    
+                    # 正規化済みのbasename（拡張子除外）をキーとして使用
+                    # 値は(完全なファイル名, ファイルデータ)のタプル
+                    image_files[basename_without_ext] = (file_name_normalized, file_data)
                     images_used += 1
                 except Exception as e:
                     logger.warning(f"Failed to extract {file_info}: {e}")
@@ -503,7 +536,7 @@ def upload_image_to_r2(
 def process_bulk_import(
     db: Session,
     csv_rows: List[Dict[str, str]],
-    image_files_dict: Dict[str, bytes]
+    image_files_dict: Dict[str, Tuple[str, bytes]]
 ) -> List[Dict[str, Any]]:
     """
     一括登録を実行
@@ -591,7 +624,7 @@ def process_bulk_import(
 def create_bulk_submissions(
     db: Session,
     csv_rows: List[Dict[str, str]],
-    image_files_dict: Dict[str, bytes],
+    image_files_dict: Dict[str, Tuple[str, bytes]],
     submitted_by: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
