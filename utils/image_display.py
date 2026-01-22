@@ -108,9 +108,9 @@ def get_material_image_ref(
     material_id = getattr(material, 'id', None)
     if material_id:
         try:
-            from database import SessionLocal, Image
-            db = SessionLocal()
-            try:
+            from utils.db import get_session
+            from database import Image
+            with get_session() as db:
                 db_image = db.query(Image).filter(
                     Image.material_id == material_id,
                     Image.kind == kind
@@ -127,8 +127,7 @@ def get_material_image_ref(
                         debug_info["final_src_type"] = "url"
                         debug_info["final_url"] = url_with_cache
                         return url_with_cache, debug_info
-            finally:
-                db.close()
+            # get_session()が自動でcloseするため、finallyは不要
         except Exception as e:
             if os.getenv("DEBUG", "0") == "1":
                 debug_info["db_query_error"] = str(e)

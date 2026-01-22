@@ -44,7 +44,8 @@ def get_images_by_kind(material) -> Dict[str, str]:
     Returns:
         {kind: public_url} の辞書（例: {"primary": "https://...", "space": "https://...", "product": "https://..."}）
     """
-    from database import SessionLocal, Image
+    from utils.db import get_session
+    from database import Image
     from sqlalchemy import or_
     
     # imagesテーブルから画像を取得
@@ -53,8 +54,7 @@ def get_images_by_kind(material) -> Dict[str, str]:
         images = list(material.images)
     else:
         # データベースから直接取得（kind/image_typeの両方に対応）
-        db_images = SessionLocal()
-        try:
+        with get_session() as db_images:
             # kind列またはimage_type列でprimary/space/productを検索
             try:
                 images = db_images.query(Image).filter(
@@ -81,8 +81,7 @@ def get_images_by_kind(material) -> Dict[str, str]:
                         k = getattr(img, "kind", None) or getattr(img, "image_type", None)
                         if k in ('primary', 'space', 'product'):
                             images.append(img)
-        finally:
-            db_images.close()
+            # get_session()が自動でcloseするため、finallyは不要
     
     # images を {kind: public_url} にする（kind名やurl列名の揺れを吸収）
     images_by_kind: Dict[str, str] = {}
@@ -276,19 +275,17 @@ def show_properties_tab(material):
             st.markdown("### 加工例")
             
             # データベースから材料別の加工例画像を取得
-            from database import SessionLocal, ProcessExampleImage
+            from utils.db import get_session
+            from database import ProcessExampleImage
             from utils.paths import resolve_path
             
-            db = SessionLocal()
-            try:
+            with get_session() as db:
                 process_images = db.query(ProcessExampleImage).filter(
                     ProcessExampleImage.material_id == material.id
                 ).all()
                 
                 # 加工方法と画像のマッピング
                 process_image_map = {p.process_method: p.image_path for p in process_images if p.image_path}
-            finally:
-                db.close()
             
             # 加工方法ごとに画像を表示（最大3列）
             cols = st.columns(min(3, len(methods)))
@@ -359,9 +356,9 @@ def show_procurement_uses_tab(material):
                     st.markdown(f"  *{ref_url.description}*")
         else:
             # データベースから直接取得を試みる（フォールバック）
-            from database import SessionLocal, ReferenceURL
-            db = SessionLocal()
-            try:
+            from utils.db import get_session
+            from database import ReferenceURL
+            with get_session() as db:
                 ref_urls = db.query(ReferenceURL).filter(ReferenceURL.material_id == material.id).all()
                 if ref_urls:
                     st.markdown("---")
@@ -370,8 +367,6 @@ def show_procurement_uses_tab(material):
                         st.markdown(f"- [{ref_url.url or 'URL'}]({ref_url.url})")
                         if ref_url.description:
                             st.markdown(f"  *{ref_url.description}*")
-            finally:
-                db.close()
     except Exception as e:
         # DetachedInstanceError等の例外をキャッチ（アプリを落とさない）
         import traceback
@@ -414,13 +409,11 @@ def show_procurement_uses_tab(material):
             use_examples_list = material.use_examples
         else:
             # データベースから直接取得を試みる（フォールバック）
-            from database import SessionLocal, UseExample
+            from utils.db import get_session
+            from database import UseExample
             from utils.paths import resolve_path
-            db = SessionLocal()
-            try:
+            with get_session() as db:
                 use_examples_list = db.query(UseExample).filter(UseExample.material_id == material.id).all()
-            finally:
-                db.close()
         
         if use_examples_list:
             # domainごとにグループ化（オプション）

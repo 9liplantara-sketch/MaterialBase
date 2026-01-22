@@ -9,7 +9,8 @@ import os
 import re
 import inspect
 import logging
-from database import SessionLocal, Material, Property, Image, MaterialMetadata, ReferenceURL, UseExample, MaterialSubmission, init_db
+from database import Material, Property, Image, MaterialMetadata, ReferenceURL, UseExample, MaterialSubmission, init_db
+# Phase 2.5: SessionLocal()は使用禁止。読み取りはget_session()、書き込みはsession_scope()を使用
 
 # ロガーを設定（Cloudで確実に追えるように）
 logger = logging.getLogger(__name__)
@@ -191,11 +192,11 @@ def show_detailed_material_form(material_id: int = None):
     
     if is_edit_mode:
         # 編集モード：既存材料を取得（eager load でリレーションを事前ロード）
-        db = SessionLocal()
-        try:
-            from sqlalchemy.orm import selectinload
-            from sqlalchemy import select
-            
+        from utils.db import get_session
+        from sqlalchemy.orm import selectinload
+        from sqlalchemy import select
+        
+        with get_session() as db:
             # selectinload で必要なリレーションを事前ロード
             stmt = (
                 select(Material)
@@ -232,9 +233,7 @@ def show_detailed_material_form(material_id: int = None):
                     for ex in use_examples_list
                 ],
             }
-            
-        finally:
-            db.close()
+            # get_session()が自動でcloseするため、finallyは不要
             # existing_material は detached になるが、必要なデータは既に dict に変換済み
     else:
         st.markdown('<h2 class="gradient-text">➕ 材料登録（詳細版）</h2>', unsafe_allow_html=True)
@@ -1312,8 +1311,8 @@ def handle_primary_image(material_id: int, uploaded_files: list) -> None:
         logger.info(f"[R2] Upload success: material_id={material_id}, r2_key={r2_result.get('r2_key')}, public_url={r2_result.get('public_url')}")
         
         # images テーブルへ upsert
-        db = SessionLocal()
-        try:
+        from utils.db import session_scope
+        with session_scope() as db:
             upsert_image(
                 db=db,
                 material_id=material_id,
@@ -1324,11 +1323,9 @@ def handle_primary_image(material_id: int, uploaded_files: list) -> None:
                 mime=r2_result["mime"],
                 sha256=r2_result["sha256"],
             )
-            db.commit()
+            # commitはsession_scopeが自動で行う
             logger.info(f"[R2] Image saved to DB: material_id={material_id}, public_url={r2_result['public_url']}")
             st.success(f"✅ 画像をR2にアップロードしました: {r2_result.get('public_url', 'N/A')}")
-        finally:
-            db.close()
             
     except Exception as r2_error:
         # R2 アップロード失敗はログとUI警告のみ（材料保存は成功させる）
@@ -1338,10 +1335,11 @@ def handle_primary_image(material_id: int, uploaded_files: list) -> None:
 
 def save_material(form_data):
     """材料データを保存（upsert対応）"""
-    db = SessionLocal()
+    from utils.db import session_scope
     try:
-        # name_officialで既存レコードを検索（upsert）
-        existing_material = db.query(Material).filter(
+        with session_scope() as db:
+            # name_officialで既存レコードを検索（upsert）
+            existing_material = db.query(Material).filter(
             Material.name_official == form_data['name_official']
         ).first()
         
@@ -1487,7 +1485,7 @@ def save_material(form_data):
                 )
                 db.add(use_ex)
         
-        db.commit()
+        # commitはsession_scopeが自動で行う
         
         # R2 アップロード処理（material.id 確定後）
         # submitted 時は session_state のキャッシュから確実に取得
@@ -1523,9 +1521,8 @@ def save_material(form_data):
             "material_id": material.id,
             "uuid": material.uuid,
         }
-        
     except Exception as e:
-        db.rollback()
+        # rollbackはsession_scopeが自動で行う
         import traceback
         # 失敗時はdictを返す（例外を再発生させない）
         return {
@@ -1533,8 +1530,6 @@ def save_material(form_data):
             "error": str(e),
             "traceback": traceback.format_exc(),
         }
-    finally:
-        db.close()
 
 
 def save_material_submission(form_data: dict, submitted_by: str = None):
@@ -1548,10 +1543,11 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
     Returns:
         dict: {"ok": True/False, "submission_id": int, "uuid": str, "error": str, "traceback": str}
     """
-    db = SessionLocal()
+    from utils.db import session_scope
     try:
-        # UUIDを生成（R2 プレフィックス用）
-        submission_uuid = str(uuid.uuid4())
+        with session_scope() as db:
+            # UUIDを生成（R2 プレフィックス用）
+            submission_uuid = str(uuid.uuid4())
         
         # 画像を form_data から pop（UploadedFile は JSON 化できないため）
         # 防御的に複数回 pop して確実に除去（再発防止）
@@ -1786,7 +1782,7 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
         )
         
         db.add(submission)
-        db.commit()
+        # commitはsession_scopeが自動で行う
         db.refresh(submission)
         
         # 成功時はdictを返す
@@ -1796,9 +1792,8 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
             "uuid": submission.uuid,
             "uploaded_images": uploaded_images,  # プレビュー用
         }
-        
     except Exception as e:
-        db.rollback()
+        # rollbackはsession_scopeが自動で行う
         import traceback
         # 失敗時はdictを返す（例外を再発生させない）
         return {
@@ -1806,7 +1801,5 @@ def save_material_submission(form_data: dict, submitted_by: str = None):
             "error": str(e),
             "traceback": traceback.format_exc(),
         }
-    finally:
-        db.close()
 
 

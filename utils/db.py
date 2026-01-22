@@ -135,3 +135,61 @@ else:
             engine = get_engine(db_url)
             _sessionmaker_cache[db_url] = _create_sessionmaker_impl(engine)
         return _sessionmaker_cache[db_url]
+
+
+# ===== Phase 2: DBセッション統一API =====
+# Streamlit側で database.get_db() generator を二度と使わない構造にする
+
+from contextlib import contextmanager
+from typing import Generator
+from sqlalchemy.orm import Session
+
+
+@contextmanager
+def get_session() -> Generator[Session, None, None]:
+    """
+    読み取り専用セッションを取得（context manager）
+    
+    Usage:
+        with get_session() as db:
+            result = db.execute(...)
+            # commit/rollbackは自動で行われない（読み取り専用）
+    
+    Note:
+        - commit/rollbackは呼び出し側の責務
+        - 読み取り専用のクエリに使用
+        - 例外時も自動rollbackしない（明示的に制御するため）
+    """
+    from database import SessionLocal
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@contextmanager
+def session_scope() -> Generator[Session, None, None]:
+    """
+    書き込み用セッションを取得（context manager、自動commit/rollback）
+    
+    Usage:
+        with session_scope() as db:
+            db.add(...)
+            # 例外時は自動rollback、正常終了時は自動commit
+    
+    Note:
+        - 正常終了時は自動commit
+        - 例外時は自動rollback
+        - 明示的なcommit/rollbackは不要
+    """
+    from database import SessionLocal
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
