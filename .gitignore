@@ -57,3 +57,6 @@ reports/duplicates_report_*.csv
 _local_backups/
 *.bak
 app.py.bak*
+
+# Streamlit multipage folder (unused)
+pages/
