@@ -3,6 +3,10 @@ StreamlitベースのWebアプリケーション
 マテリアル感のあるリッチなUI
 """
 import streamlit as st
+# ページ設定は最初の st.* 呼び出しでなければならない（Streamlitの制約）
+from utils.ui_shell import setup_page_config
+setup_page_config()
+
 import os
 import subprocess
 
@@ -179,15 +183,6 @@ def get_git_sha() -> str:
 # クラウド環境でのポート設定
 if 'PORT' in os.environ:
     port = int(os.environ.get("PORT", 8501))
-
-# ページ設定
-st.set_page_config(
-    page_title="Material Map",
-    page_icon=None,
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items=None
-)
 
 # 画像パスの取得（複数のパスを試す）
 def safe_url(url: str) -> str:
