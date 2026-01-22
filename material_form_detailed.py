@@ -630,7 +630,7 @@ def show_detailed_material_form(material_id: int = None):
                         st.code(result["traceback"], language="python")
     else:
         # 一般ユーザーモード：submissionsに保存
-        if form_data and st.button("📤 投稿を送信（承認待ち）", type="primary", width='stretch'):
+        if form_data and st.button("📤 投稿を送信（承認待ち）", type="primary", use_container_width=True):
             # save_material_submission() を呼ぶ "直前" に必ずこれを実行
             NAME_CACHE = "name_official_cached"
             NAME_INPUT_KEY = "name_official_input"

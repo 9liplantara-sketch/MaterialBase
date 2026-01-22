@@ -1844,6 +1844,24 @@ def render_debug_sidebar_early():
                         st.sidebar.exception(e)
 
 
+def _handle_material_registration():
+    """
+    材料登録ページのハンドラー
+    
+    編集対象IDは st.session_state.get("edit_material_id") から取得し、
+    show_detailed_material_form(material_id=その値) を呼ぶ。Noneなら新規登録。
+    """
+    # 関数内importで循環を避ける（import は関数内に維持）
+    import streamlit as st
+    from material_form_detailed import show_detailed_material_form
+    
+    # 編集対象IDを取得（Noneなら新規登録）
+    edit_material_id = st.session_state.get("edit_material_id")
+    
+    # 材料フォームを表示
+    show_detailed_material_form(material_id=edit_material_id)
+
+
 def main():
     # 実行順序の安全策: is_debug_flag が存在することを確認
     if "is_debug_flag" not in globals() or not callable(globals().get("is_debug_flag")):
@@ -3038,10 +3056,10 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                     c1, c2 = st.columns(2)
                     with c1:
                         if space_url:
-                            st.image(safe_url(space_url), width="stretch")
+                            st.image(safe_url(space_url), use_container_width=True)
                     with c2:
                         if product_url:
-                            st.image(safe_url(product_url), width="stretch")
+                            st.image(safe_url(product_url), use_container_width=True)
                 st.markdown("---")
                 
                 # 管理者モードの場合は編集・削除ボタンを表示
@@ -3482,7 +3500,7 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        if st.button(f"詳細を見る", key=button_key, width='stretch'):
+                        if st.button(f"詳細を見る", key=button_key, use_container_width=True):
                             st.session_state.selected_material_id = material.id
                             st.session_state.page = "材料一覧"  # 一覧ページの詳細表示モード
                             st.rerun()
@@ -3565,12 +3583,12 @@ def show_dashboard():
     with col1:
         fig = create_category_chart(materials)
         if fig:
-            st.plotly_chart(fig, width='stretch')
+            st.plotly_chart(fig, use_container_width=True)
     
     with col2:
         fig = create_timeline_chart(materials)
         if fig:
-            st.plotly_chart(fig, width='stretch')
+            st.plotly_chart(fig, use_container_width=True)
     
     # カテゴリ別詳細
     st.markdown("### カテゴリ別詳細")
@@ -3989,7 +4007,7 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
         with col_img:
             if image_src:
                 # st.imageを使用（最も堅い実装）
-                st.image(image_src, width='stretch')
+                st.image(image_src, use_container_width=True)
             else:
                 # 画像がない場合は小さな灰色枠を表示
                 st.markdown("<div style='width:100%;height:120px;background:#f0f0f0;'></div>", unsafe_allow_html=True)
@@ -5634,7 +5652,7 @@ def show_material_cards():
                 data=card_html,
                 file_name=f"material_card_{material.id}.html",
                 mime="text/html",
-                width='stretch'
+                use_container_width=True
             )
     except Exception as e:
         logger.exception(f"[MATERIAL CARDS] Error: {e}")
