@@ -89,7 +89,7 @@ import uuid
 import logging
 import textwrap
 
-from database import SessionLocal, Material, Property, Image, MaterialMetadata, ReferenceURL, UseExample, ProcessExampleImage, MaterialSubmission, init_db
+from database import Material, Property, Image, MaterialMetadata, ReferenceURL, UseExample, ProcessExampleImage, MaterialSubmission, init_db
 
 # ロガーを設定（Cloudで確実に追えるように）
 logger = logging.getLogger(__name__)
@@ -235,16 +235,14 @@ def get_material_image_url(material) -> Optional[str]:
         return primary_image_url
     
     # imagesテーブルから直接取得（primaryのみ）
-    db = SessionLocal()
-    try:
+    from utils.db import get_session
+    with get_session() as db:
         primary_img = db.query(Image).filter(
             Image.material_id == material_id,
             Image.kind == 'primary'
         ).first()
         if primary_img and primary_img.public_url:
             return primary_img.public_url
-    finally:
-        db.close()
     
     return None
 
@@ -937,9 +935,12 @@ def maybe_init_sample_data():
         # 成功/失敗問わず、セッション内で1回だけ実行するフラグを立てる
         st.session_state["_seed_done"] = True
 
-def get_db():
-    """データベースセッションを取得"""
-    return SessionLocal()
+# Phase 2: get_db() を削除し、統一APIを使用
+# 旧: def get_db(): return SessionLocal()
+# 新: from utils.db import get_session, session_scope
+# 
+# 読み取り専用: with get_session() as db: ...
+# 書き込み: with session_scope() as db: ...
 
 
 @st.cache_data(ttl=60)
@@ -965,9 +966,8 @@ def get_material_count_cached(db_url: str, include_unpublished: bool = False, in
     
     from utils.db import get_sessionmaker
     from sqlalchemy import select, func
-    SessionLocal = get_sessionmaker(db_url)
-    db = SessionLocal()
-    try:
+    from utils.db import get_session
+    with get_session() as db:
         stmt = select(func.count()).select_from(Material)
         
         if not include_deleted:
@@ -984,8 +984,6 @@ def get_material_count_cached(db_url: str, include_unpublished: bool = False, in
             print(f"[PERF] get_material_count_cached: {time.perf_counter() - t0:.3f}s")
         
         return count
-    finally:
-        db.close()
 
 
 @st.cache_data(ttl=60)
@@ -1025,10 +1023,9 @@ def fetch_materials_page_cached(
     from sqlalchemy.orm import noload, load_only
     from database import Image
     from database import Image
+    from utils.db import get_session
     
-    SessionLocal = get_sessionmaker(db_url)
-    db = SessionLocal()
-    try:
+    with get_session() as db:
         # 一覧表示用：必要な列だけをロードし、リレーションは全てnoload（高速化）
         stmt = (
             select(Material)
@@ -1130,8 +1127,6 @@ def fetch_materials_page_cached(
             print(f"[PERF] fetch_materials_page_cached(limit={limit}, offset={offset}): {time.perf_counter() - t0:.3f}s")
         
         return material_dicts
-    finally:
-        db.close()
 
 
 def get_all_materials(include_unpublished: bool = False, include_deleted: bool = False):
@@ -1169,53 +1164,55 @@ def get_all_materials(include_unpublished: bool = False, include_deleted: bool =
         if os.getenv("DEBUG", "0") == "1":
             print(f"[SCHEMA] schema check exception, using safe mode: {e}")
     
-    db = get_db()
+    # Phase 2: 統一APIを使用（読み取り専用）
+    from utils.db import get_session
     try:
-        # 安全モード: images の必須列が欠けている場合は images をロードしない
-        if images_ok:
-            # 通常モード: 全リレーションを先読み
-            stmt = (
-                select(Material)
-                .options(
-                    selectinload(Material.properties),
-                    selectinload(Material.images),
-                    selectinload(Material.metadata_items),
-                    selectinload(Material.reference_urls),
-                    selectinload(Material.use_examples),
-                    selectinload(Material.process_example_images),  # 加工例画像
+        with get_session() as db:
+            # 安全モード: images の必須列が欠けている場合は images をロードしない
+            if images_ok:
+                # 通常モード: 全リレーションを先読み
+                stmt = (
+                    select(Material)
+                    .options(
+                        selectinload(Material.properties),
+                        selectinload(Material.images),
+                        selectinload(Material.metadata_items),
+                        selectinload(Material.reference_urls),
+                        selectinload(Material.use_examples),
+                        selectinload(Material.process_example_images),  # 加工例画像
+                    )
                 )
-            )
-        else:
-            # 安全モード: images をロードしない（スキーマ不整合を回避）
-            from sqlalchemy.orm import noload
-            stmt = (
-                select(Material)
-                .options(
-                    selectinload(Material.properties),
-                    noload(Material.images),  # images をロードしない
-                    selectinload(Material.metadata_items),
-                    selectinload(Material.reference_urls),
-                    selectinload(Material.use_examples),
-                    selectinload(Material.process_example_images),
+            else:
+                # 安全モード: images をロードしない（スキーマ不整合を回避）
+                from sqlalchemy.orm import noload
+                stmt = (
+                    select(Material)
+                    .options(
+                        selectinload(Material.properties),
+                        noload(Material.images),  # images をロードしない
+                        selectinload(Material.metadata_items),
+                        selectinload(Material.reference_urls),
+                        selectinload(Material.use_examples),
+                        selectinload(Material.process_example_images),
+                    )
                 )
-            )
-        
-        # is_deletedフィルタ（デフォルトで削除されていないもののみ）
-        if not include_deleted:
-            if hasattr(Material, 'is_deleted'):
-                stmt = stmt.filter(Material.is_deleted == 0)
-        
-        # is_publishedフィルタ（デフォルトで公開のみ）
-        if not include_unpublished:
-            if hasattr(Material, 'is_published'):
-                stmt = stmt.filter(Material.is_published == 1)
-        
-        stmt = stmt.order_by(Material.created_at.desc() if hasattr(Material, 'created_at') else Material.id.desc())
-        
-        # SQLAlchemy 2.0のunique()で重複を除去
-        result = db.execute(stmt)
-        materials = result.unique().scalars().all()
-        return materials
+            
+            # is_deletedフィルタ（デフォルトで削除されていないもののみ）
+            if not include_deleted:
+                if hasattr(Material, 'is_deleted'):
+                    stmt = stmt.filter(Material.is_deleted == 0)
+            
+            # is_publishedフィルタ（デフォルトで公開のみ）
+            if not include_unpublished:
+                if hasattr(Material, 'is_published'):
+                    stmt = stmt.filter(Material.is_published == 1)
+            
+            stmt = stmt.order_by(Material.created_at.desc() if hasattr(Material, 'created_at') else Material.id.desc())
+            
+            # SQLAlchemy 2.0のunique()で重複を除去
+            result = db.execute(stmt)
+            materials = result.unique().scalars().all()
+            return materials
     except Exception as e:
         from sqlalchemy.exc import OperationalError
         import sqlite3
@@ -1242,8 +1239,6 @@ def get_all_materials(include_unpublished: bool = False, include_deleted: bool =
                     st.exception(inner_e)
             st.stop()  # 以降のUIを止める（崩壊させない）
         raise  # その他のエラーは再発生
-    finally:
-        db.close()
 
 def get_material_by_id(material_id: int):
     """
@@ -1269,8 +1264,9 @@ def get_material_by_id(material_id: int):
         # スキーマチェック失敗時は安全側に倒す
         images_ok = False
     
-    db = get_db()
-    try:
+    # Phase 2: 統一APIを使用（読み取り専用）
+    from utils.db import get_session
+    with get_session() as db:
         # 安全モード: images の必須列が欠けている場合は images をロードしない
         if images_ok:
             # 通常モード: 全リレーションを先読み
@@ -1303,13 +1299,12 @@ def get_material_by_id(material_id: int):
             )
         material = db.execute(stmt).scalar_one_or_none()
         return material
-    finally:
-        db.close()
 
 def create_material(name, category, description, properties_data):
     """材料を作成"""
-    db = get_db()
-    try:
+    # Phase 2: 統一APIを使用（書き込み、自動commit/rollback）
+    from utils.db import session_scope
+    with session_scope() as db:
         material = Material(
             name=name,
             category=category,
@@ -1328,13 +1323,8 @@ def create_material(name, category, description, properties_data):
                 )
                 db.add(db_property)
         
-        db.commit()
+        # session_scopeが自動commit（例外時は自動rollback）
         return material
-    except Exception as e:
-        db.rollback()
-        raise e
-    finally:
-        db.close()
 
 def generate_qr_code(material_id: int):
     """QRコードを生成（後方互換性のため残すが、新しいコードではgenerate_qr_png_bytesを使用）"""
@@ -1412,8 +1402,9 @@ def show_materials_duplicate_diagnostics():
     st.markdown("材料の重複状況を診断します")
     st.markdown("---")
     
-    db = get_db()
-    try:
+    # Phase 2: 統一APIを使用（読み取り専用）
+    from utils.db import get_session
+    with get_session() as db:
         # DB materials count
         db_count = db.execute(select(func.count(Material.id))).scalar() or 0
         
@@ -1481,12 +1472,14 @@ def show_materials_duplicate_diagnostics():
         # 詳細情報
         with st.expander("詳細情報"):
             st.markdown("#### 全材料名リスト")
-            all_names = sorted([m.name_official or m.name or "名称不明" for m in materials])
+            # 全材料名を取得（軽量クエリ）
+            all_names_stmt = select(Material.name_official).filter(
+                Material.is_deleted == 0,
+                Material.is_published == 1
+            ).order_by(Material.name_official).limit(100)
+            all_names = [row[0] for row in db.execute(all_names_stmt).all() if row[0]]
             for name in all_names:
                 st.text(f"- {name}")
-    
-    finally:
-        db.close()
 
 
 def show_asset_diagnostics(asset_stats: dict):
@@ -1594,8 +1587,9 @@ def get_assets_mode_stats():
     Returns:
         (mode, url_count, total_count) のタプル
     """
-    db = get_db()
-    try:
+    # Phase 2: 統一APIを使用（読み取り専用）
+    from utils.db import get_session
+    with get_session() as db:
         # Imageテーブル
         total_images = db.query(func.count(Image.id)).scalar() or 0
         url_images = db.query(func.count(Image.id)).filter(
@@ -1642,8 +1636,6 @@ def get_assets_mode_stats():
             mode = "local"
         
         return mode, url_count, total_count
-    finally:
-        db.close()
 
 
 def render_debug_sidebar_early():
@@ -2335,11 +2327,10 @@ def main():
                     st.caption(f"materials取得エラー（統計表示は続行）: {e}")
             
             # SQLで直接カウント（DetachedInstanceError回避）
-            db = get_db()
-            try:
+            # Phase 2: 統一APIを使用（読み取り専用）
+            from utils.db import get_session
+            with get_session() as db:
                 total_properties = db.execute(select(func.count(Property.id))).scalar() or 0
-            finally:
-                db.close()
             
             # 平均物性数を計算（使用している場合）
             if materials and len(materials) > 0:
@@ -2391,16 +2382,7 @@ def main():
     elif page == "材料一覧":
         show_materials_list(include_unpublished=include_unpublished, include_deleted=include_deleted)
     elif page == "材料登録":
-        # 編集モードの場合はmaterial_idを渡す
-        edit_material_id = st.session_state.get("edit_material_id")
-        if edit_material_id:
-            show_detailed_material_form(material_id=edit_material_id)
-            # 編集完了後はedit_material_idをクリア
-            if st.session_state.get("edit_completed"):
-                st.session_state.edit_material_id = None
-                st.session_state.edit_completed = False
-        else:
-            show_detailed_material_form()
+        _handle_material_registration()
     elif page == "ダッシュボード":
         show_dashboard()
     elif page == "検索":
@@ -2409,20 +2391,14 @@ def main():
         show_material_cards()
     elif page == "元素周期表":
         show_periodic_table()
-    elif page == "承認待ち一覧":
-        # 管理者のみアクセス可能
-        if is_admin:
-            show_approval_queue()
-        else:
-            st.error("❌ このページは管理者のみアクセス可能です。")
     elif page == "投稿ステータス確認":
         show_submission_status()
+    elif page == "承認待ち一覧":
+        _handle_approval_queue(is_admin)
     elif page == "一括登録":
-        # 管理者のみアクセス可能
-        if is_admin:
-            show_bulk_import()
-        else:
-            st.error("❌ このページは管理者のみアクセス可能です。")
+        _handle_bulk_import(is_admin)
+    else:
+        st.error(f"❌ ページ '{page}' が見つかりません")
 
 def resolve_home_main_visual(project_root: Optional[Path] = None) -> tuple[Optional[Path], Optional[bytes]]:
     """
@@ -2619,7 +2595,7 @@ def get_main_visual_debug_info() -> Dict[str, Any]:
 def show_home():
     """ホームページ"""
     # 実行順序の安全策: is_debug_flag が存在することを確認
-    if "is_debug_flag" not in globals() or not callable(globals().get("is_debug_flag")):
+    if not callable(is_debug_flag):
         # 万が一 is_debug_flag が存在しない場合は fallback
         debug_enabled = os.getenv("DEBUG", "0") == "1"
     else:
@@ -2943,6 +2919,7 @@ def show_home():
             </div>
             """, unsafe_allow_html=True)
 
+
 def clear_material_cache():
     """材料関連のキャッシュをクリア（承認/編集/削除後に呼ぶ）"""
     try:
@@ -3012,7 +2989,8 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                 st.markdown(f"# {material.name_official or material.name}")
                 
                 # 用途画像（space/product）を表示（材料名の直下）
-                from database import SessionLocal, Image
+                from database import Image
+                from utils.db import get_session
                 
                 # imagesテーブルから用途画像を取得
                 images = []
@@ -3020,8 +2998,7 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                     images = list(material.images)
                 else:
                     # データベースから直接取得（kind/image_typeの両方に対応）
-                    db_images = SessionLocal()
-                    try:
+                    with get_session() as db_images:
                         # kind列またはimage_type列でspace/productを検索
                         try:
                             images = db_images.query(Image).filter(
@@ -3048,8 +3025,6 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                                     k = getattr(img, "kind", None) or getattr(img, "image_type", None)
                                     if k in ('space', 'product'):
                                         images.append(img)
-                    finally:
-                        db_images.close()
                 
                 # images を {kind: public_url} にする（kind名やurl列名の揺れを吸収）
                 images_by_kind: dict[str, str] = {}
@@ -3098,24 +3073,19 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                     with col1:
                         if st.button("✅ 削除を実行", key=f"confirm_delete_{material.id}", type="primary"):
                             # 論理削除を実行
-                            db = SessionLocal()
-                            try:
+                            from utils.db import session_scope
+                            with session_scope() as db:
                                 db_material = db.query(Material).filter(Material.id == material.id).first()
                                 if db_material:
                                     db_material.is_deleted = 1
                                     db_material.deleted_at = datetime.utcnow()
-                                    db.commit()
+                                    # commitはsession_scopeが自動実行
                                     clear_material_cache()  # キャッシュをクリア
                                     st.success("✅ 材料を削除しました")
                                     st.session_state.delete_material_id = None
                                     st.session_state.selected_material_id = None
                                     st.rerun()
-                            except Exception as e:
-                                logger.exception(f"[DELETE] Failed to delete material {material.id}: {e}")
-                                st.error(f"❌ 削除エラー: {e}")
-                                db.rollback()
-                            finally:
-                                db.close()
+                            # 例外時はsession_scopeが自動rollback
                     with col2:
                         if st.button("❌ キャンセル", key=f"cancel_delete_{material.id}"):
                             st.session_state.delete_material_id = None
@@ -3125,9 +3095,9 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                 # 復活確認（is_deleted=1 の場合のみ表示）
                 if material.is_deleted == 1 and st.session_state.get("restore_material_id") == material.id:
                     # 復活前に active同名がいないかチェック
-                    db_check = SessionLocal()
-                    try:
-                        from sqlalchemy import select
+                    from utils.db import get_session
+                    from sqlalchemy import select
+                    with get_session() as db_check:
                         active_check_stmt = (
                             select(Material.id)
                             .where(Material.name_official == material.name_official)
@@ -3143,23 +3113,19 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                             with col1:
                                 if st.button("✅ リネームして復活", key=f"confirm_restore_rename_{material.id}", type="primary"):
                                     if new_name and new_name.strip() and new_name.strip() != material.name_official:
-                                        db_restore = SessionLocal()
-                                        try:
+                                        from utils.db import session_scope
+                                        with session_scope() as db_restore:
                                             db_material_restore = db_restore.query(Material).filter(Material.id == material.id).first()
                                             if db_material_restore:
                                                 db_material_restore.is_deleted = 0
                                                 db_material_restore.deleted_at = None
                                                 db_material_restore.name_official = new_name.strip()
-                                                db_restore.commit()
+                                                # commitはsession_scopeが自動実行
                                                 st.success(f"✅ 材料を復活しました（名称変更: {material.name_official} → {new_name.strip()}）")
                                                 st.session_state.restore_material_id = None
                                                 st.session_state.selected_material_id = None
                                                 st.rerun()
-                                        except Exception as e:
-                                            st.error(f"❌ 復活エラー: {e}")
-                                            db_restore.rollback()
-                                        finally:
-                                            db_restore.close()
+                                        # 例外時はsession_scopeが自動rollback
                                     else:
                                         st.warning("⚠️ 新しい材料名を入力してください（現在の名前と異なる必要があります）")
                             with col2:
@@ -3172,28 +3138,22 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                             col1, col2 = st.columns(2)
                             with col1:
                                 if st.button("✅ 復活を実行", key=f"confirm_restore_{material.id}", type="primary"):
-                                    db_restore = SessionLocal()
-                                    try:
+                                    from utils.db import session_scope
+                                    with session_scope() as db_restore:
                                         db_material_restore = db_restore.query(Material).filter(Material.id == material.id).first()
                                         if db_material_restore:
                                             db_material_restore.is_deleted = 0
                                             db_material_restore.deleted_at = None
-                                            db_restore.commit()
+                                            # commitはsession_scopeが自動実行
                                             st.success("✅ 材料を復活しました")
                                             st.session_state.restore_material_id = None
                                             st.session_state.selected_material_id = None
                                             st.rerun()
-                                    except Exception as e:
-                                        st.error(f"❌ 復活エラー: {e}")
-                                        db_restore.rollback()
-                                    finally:
-                                        db_restore.close()
+                                    # 例外時はsession_scopeが自動rollback
                             with col2:
                                 if st.button("❌ キャンセル", key=f"cancel_restore_{material.id}"):
                                     st.session_state.restore_material_id = None
                                     st.rerun()
-                    finally:
-                        db_check.close()
                     return
                 
                 # 削除済み材料の場合は復活ボタンを表示
@@ -3376,23 +3336,16 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                                 )
                                 if new_status != (current_status == 1):
                                     # ステータス変更
-                                    from database import SessionLocal
-                                    db = SessionLocal()
-                                    try:
+                                    from utils.db import session_scope
+                                    from database import Material
+                                    with session_scope() as db:
                                         # データベースから再取得して更新
-                                        from database import Material
                                         db_material = db.query(Material).filter(Material.id == material.id).first()
                                         if db_material:
                                             db_material.is_published = 1 if new_status else 0
-                                            db.commit()
+                                            # commitはsession_scopeが自動実行
                                             st.rerun()
-                                    except Exception as e:
-                                        st.error(f"更新エラー: {e}")
-                                        import traceback
-                                        st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
-                                        db.rollback()
-                                    finally:
-                                        db.close()
+                                    # 例外時はsession_scopeが自動rollback
                         
                         # 管理者モードの場合は編集・削除ボタンを表示
                         is_admin = os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1"
@@ -3427,24 +3380,19 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                             with col1:
                                 if st.button("✅ 削除を実行", key=f"confirm_delete_list_{material.id}", type="primary"):
                                     # 論理削除を実行
-                                    from database import SessionLocal, Material
-                                    db = SessionLocal()
-                                    try:
+                                    from utils.db import session_scope
+                                    from database import Material
+                                    with session_scope() as db:
                                         db_material = db.query(Material).filter(Material.id == material.id).first()
                                         if db_material:
                                             db_material.is_deleted = 1
                                             db_material.deleted_at = datetime.utcnow()
-                                            db.commit()
+                                            # commitはsession_scopeが自動実行
                                             clear_material_cache()  # キャッシュをクリア
                                             st.success("✅ 材料を削除しました")
                                             st.session_state.delete_material_id = None
                                             st.rerun()
-                                    except Exception as e:
-                                        logger.exception(f"[DELETE] Failed to delete material {material.id}: {e}")
-                                        st.error(f"❌ 削除エラー: {e}")
-                                        db.rollback()
-                                    finally:
-                                        db.close()
+                                    # 例外時はsession_scopeが自動rollback
                             with col2:
                                 if st.button("❌ キャンセル", key=f"cancel_delete_list_{material.id}"):
                                     st.session_state.delete_material_id = None
@@ -3453,9 +3401,9 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                         # 復活確認（is_deleted=1 の場合のみ表示）
                         if material.is_deleted == 1 and st.session_state.get("restore_material_id") == material.id:
                             # 復活前に active同名がいないかチェック
-                            db_check = SessionLocal()
-                            try:
-                                from sqlalchemy import select
+                            from utils.db import get_session, session_scope
+                            from sqlalchemy import select
+                            with get_session() as db_check:
                                 active_check_stmt = (
                                     select(Material.id)
                                     .where(Material.name_official == material.name_official)
@@ -3471,22 +3419,17 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                                     with col1:
                                         if st.button("✅ リネームして復活", key=f"confirm_restore_rename_list_{material.id}", type="primary"):
                                             if new_name and new_name.strip() and new_name.strip() != material.name_official:
-                                                db_restore = SessionLocal()
-                                                try:
+                                                with session_scope() as db_restore:
                                                     db_material_restore = db_restore.query(Material).filter(Material.id == material.id).first()
                                                     if db_material_restore:
                                                         db_material_restore.is_deleted = 0
                                                         db_material_restore.deleted_at = None
                                                         db_material_restore.name_official = new_name.strip()
-                                                        db_restore.commit()
+                                                        # commitはsession_scopeが自動実行
                                                         st.success(f"✅ 材料を復活しました（名称変更: {material.name_official} → {new_name.strip()}）")
                                                         st.session_state.restore_material_id = None
                                                         st.rerun()
-                                                except Exception as e:
-                                                    st.error(f"❌ 復活エラー: {e}")
-                                                    db_restore.rollback()
-                                                finally:
-                                                    db_restore.close()
+                                                # 例外時はsession_scopeが自動rollback
                                             else:
                                                 st.warning("⚠️ 新しい材料名を入力してください（現在の名前と異なる必要があります）")
                                     with col2:
@@ -3499,27 +3442,20 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                                     col1, col2 = st.columns(2)
                                     with col1:
                                         if st.button("✅ 復活を実行", key=f"confirm_restore_list_{material.id}", type="primary"):
-                                            db_restore = SessionLocal()
-                                            try:
+                                            with session_scope() as db_restore:
                                                 db_material_restore = db_restore.query(Material).filter(Material.id == material.id).first()
                                                 if db_material_restore:
                                                     db_material_restore.is_deleted = 0
                                                     db_material_restore.deleted_at = None
-                                                    db_restore.commit()
+                                                    # commitはsession_scopeが自動実行
                                                     st.success("✅ 材料を復活しました")
                                                     st.session_state.restore_material_id = None
                                                     st.rerun()
-                                            except Exception as e:
-                                                st.error(f"❌ 復活エラー: {e}")
-                                                db_restore.rollback()
-                                            finally:
-                                                db_restore.close()
+                                            # 例外時はsession_scopeが自動rollback
                                     with col2:
                                         if st.button("❌ キャンセル", key=f"cancel_restore_list_{material.id}"):
                                             st.session_state.restore_material_id = None
                                             st.rerun()
-                            finally:
-                                db_check.close()
                         
                         # 削除済み材料の場合は復活ボタンを表示
                         if material.is_deleted == 1:
@@ -3608,11 +3544,10 @@ def show_dashboard():
     
     with col3:
         # SQLで直接カウント（DetachedInstanceError回避）
-        db = get_db()
-        try:
+        # Phase 2: 統一APIを使用（読み取り専用）
+        from utils.db import get_session
+        with get_session() as db:
             total_properties = db.execute(select(func.count(Property.id))).scalar() or 0
-        finally:
-            db.close()
         st.markdown(f"""
         <div class="stat-card">
             <div class="stat-value">{total_properties}</div>
@@ -3655,14 +3590,13 @@ def show_dashboard():
         with st.expander(f"📁 {category} ({len(mats)}件)", expanded=False):
             for mat in mats:
                 # SQLで直接カウント（DetachedInstanceError回避）
-                db = get_db()
-                try:
+                # Phase 2: 統一APIを使用（読み取り専用）
+                from utils.db import get_session
+                with get_session() as db:
                     prop_count = db.execute(
                         select(func.count(Property.id))
                         .where(Property.material_id == mat.id)
                     ).scalar() or 0
-                finally:
-                    db.close()
                 st.write(f"• **{mat.name}** - {prop_count}個の物性データ")
 
 def show_search():
@@ -3781,13 +3715,12 @@ def show_search():
     
     # 検索実行（クエリまたはフィルタがある場合）
     if (search_query and search_query.strip()) or filters:
-        from database import SessionLocal
+        from utils.db import get_session
         
         # ハイブリッド検索を無効化できるフラグ（ENABLE_VECTOR_SEARCH=0で無効化）
         enable_vector_search = os.getenv("ENABLE_VECTOR_SEARCH", "0") == "1"
         
-        db = SessionLocal()
-        try:
+        with get_session() as db:
             if enable_vector_search:
                 # ハイブリッド検索（全文検索 + ベクトル検索、フィルタ対応）を使用
                 from utils.search import search_materials_hybrid
@@ -3823,10 +3756,7 @@ def show_search():
                         search_info['method'] = 'fulltext_fallback'
                         search_info['fallback_reason'] = str(e)
                     except Exception as e2:
-                        # トランザクションエラーを防ぐため、必ずrollbackする
-                        db.rollback()
-                        
-                        # 全文検索も失敗した場合は空結果を返す
+                        # 全文検索も失敗した場合は空結果を返す（get_sessionは読み取り専用なのでrollback不要）
                         if is_debug:
                             st.error(f"全文検索も失敗: {e2}")
                         results = []
@@ -3851,9 +3781,7 @@ def show_search():
                     )
                     search_info['method'] = 'fulltext_only'
                 except Exception as e:
-                    # トランザクションエラーを防ぐため、必ずrollbackする
-                    db.rollback()
-                    
+                    # get_sessionは読み取り専用なのでrollback不要
                     if is_debug:
                         st.error(f"全文検索が失敗: {e}")
                     results = []
@@ -3864,8 +3792,7 @@ def show_search():
                         'method': 'error',
                         'error': str(e)
                     }
-        finally:
-            db.close()
+        # 例外時はget_sessionが自動close（rollbackは不要、読み取り専用）
         
         # DEBUG=1のときだけ検索の詳細情報を表示
         if is_debug:
@@ -3887,8 +3814,8 @@ def show_search():
             primary_images_dict = {}  # {material_id: public_url}
             
             if material_ids:
-                db_images = SessionLocal()
-                try:
+                from utils.db import get_session
+                with get_session() as db_images:
                     images_stmt = select(Image).filter(
                         Image.material_id.in_(material_ids),
                         Image.kind == "primary"
@@ -3898,8 +3825,6 @@ def show_search():
                     for img in images:
                         if img.public_url:
                             primary_images_dict[img.material_id] = img.public_url
-                finally:
-                    db_images.close()
             
             # 検索結果をカード形式で表示
             for idx, material in enumerate(results):
@@ -3931,18 +3856,24 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
         search_query: 検索クエリ（ハイライト用）
         image_url: primary画像URL（一括取得済み、Noneの場合は個別取得を試みる）
     """
-    # SQLで直接カウント（DetachedInstanceError回避）
-    from database import get_db
+                        # SQLで直接カウント（DetachedInstanceError回避）
+    # Phase 2: 統一APIを使用（get_db generatorは使用禁止）
     from sqlalchemy import select, func
     from database import Property
-
-    db = get_db()
+    from utils.db import get_session
+    
+    prop_count = 0
     try:
-        prop_count = db.execute(
-            select(func.count(Property.id)).where(Property.material_id == material.id)
-        ).scalar() or 0
-    finally:
-        db.close()
+        with get_session() as db_sess:
+            prop_count = db_sess.execute(
+                select(func.count(Property.id)).where(Property.material_id == material.id)
+                            ).scalar() or 0
+    except Exception as e:
+        # prop_count取得失敗は警告のみ（カード描画は継続）
+        from utils.settings import is_debug
+        if is_debug():
+            logger.exception(f"[search_card] prop_count failed material_id={material.id}: {e}")
+        prop_count = 0
 
     # 素材画像を取得（image_urlが渡されている場合はそれを使用）
     image_src = None
@@ -4014,7 +3945,6 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
             st.caption(f"物性データ: {prop_count}個")
         
         # 詳細を見るボタン
-        # 詳細を見るボタン
         if st.button(f"詳細を見る", key=f"search_detail_{material.id}_{idx}"):
             st.session_state.selected_material_id = material.id
             st.session_state.page = "材料一覧"
@@ -4033,8 +3963,8 @@ def show_approval_queue():
     st.markdown(render_site_header(debug=debug_enabled), unsafe_allow_html=True)
     st.markdown('<h2 class="section-title">📋 承認待ち一覧</h2>', unsafe_allow_html=True)
     
-    db = SessionLocal()
-    try:
+    from utils.db import get_session
+    with get_session() as db:
         # フィルタ：rejectedも表示するか
         # 初期化はwidget作成前にのみ行う
         if "approval_show_rejected" not in st.session_state:
@@ -4148,10 +4078,15 @@ def show_approval_queue():
                         placeholder="編集者メモを入力・編集できます"
                     )
                     if st.button("💾 メモを保存", key=f"save_note_{submission.id}"):
-                        submission.editor_note = editor_note_value.strip() if editor_note_value.strip() else None
-                        db.commit()
+                        from utils.db import session_scope
+                        with session_scope() as db_note:
+                            db_submission = db_note.query(MaterialSubmission).filter(MaterialSubmission.id == submission.id).first()
+                            if db_submission:
+                                db_submission.editor_note = editor_note_value.strip() if editor_note_value.strip() else None
+                                # commitはsession_scopeが自動実行
                         st.success("✅ メモを保存しました")
                         st.rerun()
+                        # 例外時はsession_scopeが自動rollback
                     
                     # 却下理由を表示（rejectedの場合）
                     if submission.status == "rejected" and submission.reject_reason:
@@ -4162,7 +4097,9 @@ def show_approval_queue():
                     # 差分表示（既存materialsとの比較）
                     st.markdown("---")
                     st.markdown("### 差分表示（既存材料との比較）")
-                    existing_material = db.query(Material).filter(
+                    from utils.db import get_session
+                    with get_session() as db_diff:
+                        existing_material = db_diff.query(Material).filter(
                         Material.name_official == payload.get('name_official')
                     ).first()
                     
@@ -4245,7 +4182,7 @@ def show_approval_queue():
                                 placeholder="却下理由を入力してください"
                             )
                             if st.button("❌ 却下", key=f"reject_{submission.id}"):
-                                result = reject_submission(submission.id, reject_reason, db)
+                                result = reject_submission(submission.id, reject_reason, db=None)
                                 if result.get("ok"):
                                     st.success("❌ 却下しました。")
                                     st.cache_data.clear()  # キャッシュをクリア
@@ -4255,7 +4192,7 @@ def show_approval_queue():
                     
                     elif submission.status == "rejected":
                         if st.button("🔄 再審査（pendingに戻す）", key=f"reopen_{submission.id}", type="primary"):
-                            result = reopen_submission(submission.id, db)
+                            result = reopen_submission(submission.id, db=None)
                             if result.get("ok"):
                                 st.success("🔄 再審査に戻しました。")
                                 st.cache_data.clear()
@@ -4265,7 +4202,9 @@ def show_approval_queue():
                     
                     elif submission.status == "approved":
                         if submission.approved_material_id:
-                            material = db.query(Material).filter(Material.id == submission.approved_material_id).first()
+                            from utils.db import get_session
+                            with get_session() as db_approved:
+                                material = db_approved.query(Material).filter(Material.id == submission.approved_material_id).first()
                             if material:
                                 st.info(f"✅ 承認済み材料: {material.name_official} (ID: {material.id})")
                                 st.info(f"📢 公開状態: {'公開' if material.is_published == 1 else '非公開'}")
@@ -4277,52 +4216,385 @@ def show_approval_queue():
                     st.error(f"❌ payload_jsonのパースに失敗しました: {e}")
                     st.code(submission.payload_json)
     
-    finally:
-        db.close()
 
+# ===== Phase 3: 承認フローのTx分離固定 =====
 
-def _apply_not_null_defaults_for_approval(material: Material, form_data: dict) -> None:
+def _tx1_upsert_material_core(submission: MaterialSubmission, form_data: dict, update_existing: bool = True) -> tuple[int, str]:
     """
-    NOT NULL列にデフォルト値を設定（値が無い場合のみ）
-    approve_submission()内で使用
+    Tx1: materials本体のみ。副作用（images/properties/embeddings/submission更新）は禁止。
     
     Args:
-        material: Materialオブジェクト
-        form_data: フォームデータの辞書
+        submission: MaterialSubmissionオブジェクト
+        form_data: フォームデータの辞書（payload_jsonからパース済み）
+        update_existing: True なら同名素材（is_deleted=0）があれば更新、False なら常に新規作成
+    
+    Returns:
+        material_id: 作成/更新されたMaterialのID
+    
+    Raises:
+        Exception: Tx1失敗時（呼び出し元でcatchして即return）
+    
+    Note:
+        - NOT NULL補完を flush前に行う
+        - commit成功後、material_idを返す
+        - 副作用（images/properties/embeddings/submission更新）は絶対に含めない
     """
-    # NOT NULL列のデフォルト値マップ
-    defaults = {
-        'origin_type': '不明',
-        'origin_detail': '不明',
-        'transparency': '不明',
-        'hardness_qualitative': '不明',
-        'weight_qualitative': '不明',
-        'water_resistance': '不明',
-        'heat_resistance_range': '不明',
-        'weather_resistance': '不明',
-        'procurement_status': '不明',
-        'cost_level': '不明',
-        'visibility': '非公開（管理者のみ）',
-        'is_deleted': 0,
-    }
+    from utils.db import session_scope
+    from sqlalchemy import select
+    import uuid
     
-    # 各フィールドに対して、値が無い場合のみデフォルトを設定
-    for field, default_value in defaults.items():
-        if hasattr(material, field):
-            current_value = getattr(material, field)
-            # None、空文字列、または未設定の場合のみデフォルトを設定
-            if current_value is None or (isinstance(current_value, str) and not current_value.strip()):
-                setattr(material, field, default_value)
+    with session_scope() as db:
+        # name_official の必須チェック
+        name_official = form_data.get("name_official", "").strip()
+        if not name_official:
+            raise ValueError("材料名（正式）が空です。承認できません。")
+        
+        # Phase 4: NOT NULL補完を最初に実行（flush前）
+        from utils.material_defaults import apply_material_defaults
+        form_data = apply_material_defaults(form_data)
+        
+        # payload をサニタイズ：Material カラムだけに絞る（補完済みform_dataから）
+        allowed_columns = {c.name for c in Material.__table__.columns}
+        relationship_keys = {"images", "uploaded_images", "reference_urls", "use_examples", "properties", "metadata_items", "process_example_images"}
+        system_keys = {"id", "created_at", "updated_at", "deleted_at", "uuid"}
+        payload_for_material = {
+            k: v for k, v in form_data.items()
+            if k in allowed_columns 
+            and k not in relationship_keys 
+            and k not in system_keys
+            and v is not None
+        }
+        
+        # 既存Materialを検索（update_existing=True の場合のみ、is_deleted=0 のみ対象）
+        material = None
+        action = None
+        
+        if update_existing and name_official:
+            existing_stmt = (
+                select(Material)
+                .where(Material.name_official == name_official)
+                .where(Material.is_deleted == 0)
+            )
+            existing = db.execute(existing_stmt).scalar_one_or_none()
+            
+            if existing is not None:
+                material = existing
+                action = "updated"
+                logger.info(f"[APPROVE][Tx1] Updating existing material (id={material.id}, name_official='{name_official}')")
+        
+        if material is None:
+            # 新規作成前に、同名の active があるかチェック
+            if name_official:
+                active_check_stmt = (
+                    select(Material.id)
+                    .where(Material.name_official == name_official)
+                    .where(Material.is_deleted == 0)
+                    .limit(1)
+                )
+                active_existing = db.execute(active_check_stmt).scalar_one_or_none()
+                if active_existing is not None:
+                    if update_existing:
+                        raise ValueError(f"同名の材料が既に存在します（ID: {active_existing}）。「既存へ反映」モードで承認してください。")
+                    else:
+                        raise ValueError(f"同名の材料が既に存在します（ID: {active_existing}）。材料名を変更して再投稿してください。")
+            
+            # 新規作成
+            material_uuid = str(uuid.uuid4())
+            material = Material(uuid=material_uuid)
+            db.add(material)
+            action = 'created'
+            logger.info(f"[APPROVE][Tx1] Creating new material (name_official='{name_official}')")
+        
+        # 補完済みのpayload_for_materialをMaterialオブジェクトに設定（システム列は除外）
+        for field, value in payload_for_material.items():
+            if hasattr(material, field) and field not in system_keys:
+                if value is not None:
+                    setattr(material, field, value)
+        
+        # JSON配列フィールドの処理（補完後に上書き、リストの場合はJSON文字列に変換）
+        json_fields = ['name_aliases', 'material_forms', 'color_tags', 'processing_methods',
+                      'use_categories', 'safety_tags', 'question_templates', 'main_elements']
+        for field in json_fields:
+            if field in form_data and form_data[field]:
+                if isinstance(form_data[field], list):
+                    material.__setattr__(field, json.dumps(form_data[field], ensure_ascii=False))
+                elif isinstance(form_data[field], str) and not form_data[field].startswith('['):
+                    # 文字列の場合はそのまま（既にJSON文字列の可能性）
+                    material.__setattr__(field, form_data[field])
+        
+        # 後方互換フィールド
+        if form_data.get('name_official'):
+            material.name = form_data.get('name_official')
+        if form_data.get('category_main'):
+            material.category = form_data.get('category_main')
+        
+        # search_textを生成して設定
+        from utils.search import generate_search_text
+        material.search_text = generate_search_text(material)
+        
+        db.flush()
+        
+        # 参照URL保存（更新モードの場合は既存を削除して置き換え）
+        if action == "updated":
+            db.query(ReferenceURL).filter(ReferenceURL.material_id == material.id).delete()
+            db.query(UseExample).filter(UseExample.material_id == material.id).delete()
+            db.flush()
+        
+        # 参照URL保存
+        for ref in form_data.get('reference_urls', []):
+            if ref.get('url'):
+                ref_url = ReferenceURL(
+                    material_id=material.id,
+                    url=ref['url'],
+                    url_type=ref.get('type'),
+                    description=ref.get('desc')
+                )
+                db.add(ref_url)
+        
+        # 使用例保存
+        for ex in form_data.get('use_examples', []):
+            if ex.get('name'):
+                use_ex = UseExample(
+                    material_id=material.id,
+                    example_name=ex['name'],
+                    example_url=ex.get('url'),
+                    description=ex.get('desc')
+                )
+                db.add(use_ex)
+        
+        # material.id を確定（flush してから取得）
+        db.flush()
+        material_id = material.id
+        if not material_id:
+            raise ValueError("material.id is None after flush")
+        
+        # session_scopeが自動commit（例外時は自動rollback）
+        logger.info(f"[APPROVE][Tx1] commit success: material_id={material_id}, action={action}, uuid={material.uuid}")
+        return material_id, action
+
+
+def _tx2_upsert_images(material_id: int, uploaded_images: list, payload_dict: dict, *, submission_id: int = None) -> None:
+    """
+    Tx2: images upsert。失敗しても承認は継続。
     
-    # is_publishedはvisibilityから決定（既存ロジック）
-    visibility = getattr(material, 'visibility', '')
-    if visibility in ["公開", "公開（誰でも閲覧可）"]:
-        material.is_published = 1
-    elif visibility in ["非公開", "非公開（管理者のみ）"]:
-        material.is_published = 0
-    else:
-        # デフォルトは非公開（安全側に倒す）
-        material.is_published = 0
+    Args:
+        material_id: MaterialのID
+        uploaded_images: アップロード済み画像情報のリスト
+        payload_dict: submissionのpayload_json（images_info取得用）
+        submission_id: オプション（ログ用）
+    
+    Note:
+        - R2 upload は DB Tx の外で行う（ネットワークI/OでTxを長引かせない）
+        - DB upsert のみ session_scope() を使う
+        - 失敗しても承認は継続（ログは残す）
+    """
+    from utils.db import session_scope
+    import base64
+    import hashlib
+    
+    # 一括登録の承認待ち送信で保存した images_info を処理（R2 upload）
+    images_info = payload_dict.get("images_info", [])
+    if isinstance(images_info, list) and len(images_info) > 0:
+        from utils.bulk_import import upload_image_to_r2
+        
+        for img_info in images_info:
+            if not isinstance(img_info, dict):
+                continue
+            
+            kind = img_info.get('kind', 'primary')
+            file_name = img_info.get('file_name', '')
+            data_base64 = img_info.get('data_base64', '')
+            
+            if not data_base64:
+                continue
+            
+            try:
+                # base64デコード
+                image_data = base64.b64decode(data_base64)
+                
+                # R2にアップロード（DB Txの外）
+                r2_result = upload_image_to_r2(material_id, image_data, kind, file_name)
+                
+                if r2_result:
+                    uploaded_images.append({
+                        'kind': kind,
+                        'r2_key': r2_result['r2_key'],
+                        'public_url': r2_result['public_url'],
+                        'mime': r2_result.get('mime', 'image/jpeg'),
+                        'sha256': hashlib.sha256(image_data).hexdigest(),
+                        'bytes': len(image_data)
+                    })
+                    logger.info(f"[APPROVE][Tx2] Uploaded image from images_info: kind={kind}, file_name={file_name}")
+            except Exception as e:
+                logger.warning(f"[APPROVE][Tx2] Failed to process image from images_info: {e}")
+    
+    uploaded_images_count = len(uploaded_images)
+    if uploaded_images_count == 0:
+        logger.info(f"[APPROVE][Tx2] No images to upsert (uploaded_images_count=0), skipping Tx2")
+        return
+    
+    # DB upsert（session_scope内）
+    with session_scope() as db:
+        from utils.image_repo import upsert_image
+        
+        for idx, img_info in enumerate(uploaded_images):
+            if not isinstance(img_info, dict):
+                logger.warning(f"[APPROVE][Tx2] Image {idx+1} is not a dict: type={type(img_info)}, skipping")
+                continue
+            
+            kind = img_info.get('kind', 'primary')
+            r2_key = img_info.get('r2_key')
+            public_url = img_info.get('public_url')
+            mime = img_info.get('mime')
+            sha256 = img_info.get('sha256')
+            bytes_value = img_info.get('bytes')
+            
+            # bytes が None でない場合は int に変換（bigint対応）
+            if bytes_value is not None:
+                try:
+                    bytes_value = int(bytes_value)
+                except (ValueError, TypeError):
+                    logger.warning(f"[APPROVE][Tx2] Image {idx+1} bytes value is not int-convertible: {bytes_value}, using None")
+                    bytes_value = None
+            
+            logger.info(f"[APPROVE][Tx2] Upserting image {idx+1}/{uploaded_images_count}: kind={kind}, r2_key={r2_key}, public_url={public_url}, mime={mime}, sha256={sha256[:16] if sha256 else None}...")
+            
+            upsert_image(
+                db=db,
+                material_id=material_id,
+                kind=kind,
+                r2_key=r2_key,
+                public_url=public_url,
+                bytes=bytes_value,
+                mime=mime,
+                sha256=sha256,
+            )
+                
+        # session_scopeが自動commit（例外時は自動rollback）
+        logger.info(f"[APPROVE][Tx2] success: images upserted for material_id={material_id} (count={uploaded_images_count})")
+
+
+def _txprops_upsert_properties(material_id: int, properties_list: list, *, submission_id: int = None) -> None:
+    """
+    TxProps: properties upsert。失敗しても承認は継続。
+    
+    Args:
+        material_id: MaterialのID
+        properties_list: 物性データのリスト [{"key": str, "value": float, "unit": str}, ...]
+        submission_id: オプション（ログ用）
+    
+    Note:
+        - 失敗しても承認は継続（ログは残す）
+    """
+    from utils.db import session_scope
+    
+    if not properties_list:
+        return
+    
+    with session_scope() as db:
+        property_keys = [prop.get('key') for prop in properties_list if prop.get('key')]
+        if property_keys:
+            db.query(Property).filter(
+                Property.material_id == material_id,
+                Property.property_name.in_(property_keys)
+            ).delete(synchronize_session=False)
+            db.flush()
+        
+        for prop in properties_list:
+            prop_key = prop.get('key')
+            prop_value = prop.get('value')
+            prop_unit = prop.get('unit')
+            if not prop_key or prop_value is None:
+                continue
+            try:
+                new_property = Property(
+                    material_id=material_id,
+                    property_name=prop_key,
+                    value=float(prop_value),
+                    unit=prop_unit,
+                )
+                db.add(new_property)
+            except (ValueError, TypeError) as prop_convert_error:
+                logger.warning(f"[APPROVE][TxProps] Failed to convert property value for {prop_key}: {prop_convert_error}, skipping")
+        
+        # session_scopeが自動commit（例外時は自動rollback）
+        logger.info(f"[APPROVE][TxProps] success: properties upserted for material_id={material_id} (count={len(properties_list)})")
+
+
+def _txemb_update_embeddings(material_id: int, *, force: bool = False) -> None:
+    """
+    TxEmb: ENABLE_VECTOR_SEARCH==1 のときだけ実行。失敗しても承認は継続。
+    
+    Args:
+        material_id: MaterialのID
+        force: True なら ENABLE_VECTOR_SEARCH を無視して実行
+    
+    Note:
+        - ENABLE_VECTOR_SEARCH=0 のときはスキップ
+        - 失敗しても承認は継続（ログは残す）
+    """
+    import os
+    from utils.db import session_scope
+    
+    enable_vector_search = os.getenv("ENABLE_VECTOR_SEARCH", "0") == "1"
+    if not enable_vector_search and not force:
+        return
+    
+    with session_scope() as db:
+        from utils.search import update_material_embedding
+        # materialを再取得（Tx1とは別セッション）
+        material_for_emb = db.query(Material).filter(Material.id == material_id).first()
+        if material_for_emb:
+            update_material_embedding(db, material_for_emb)
+            # session_scopeが自動commit（例外時は自動rollback）
+            logger.info(f"[APPROVE][TxEmb] success: embedding updated for material_id={material_id}")
+        else:
+            logger.warning(f"[APPROVE][TxEmb] skipped: material_id={material_id} not found")
+
+
+def _txsub_mark_submission_approved(submission_id: int, material_id: int, editor_note: str = None) -> None:
+    """
+    TxSub: submissionsを approved にし、approved_material_id を設定する。Tx1成功後にのみ呼ぶ。
+    
+    Args:
+        submission_id: MaterialSubmissionのID
+        material_id: 承認されたMaterialのID（FK整合性のため必須）
+        editor_note: 承認メモ（任意）
+    
+    Raises:
+        Exception: TxSub失敗時（呼び出し元でcatchして承認失敗扱い）
+    
+    Note:
+        - material_idの存在確認は呼び出し元で済んでいる前提
+        - status='approved', approved_material_id=material_id を設定
+        - このTxは必須（失敗時は承認全体を失敗扱い）
+    """
+    from utils.db import session_scope
+    from datetime import datetime
+    
+    with session_scope() as db:
+        submission = db.query(MaterialSubmission).filter(
+                MaterialSubmission.id == submission_id
+            ).first()
+            
+        if not submission:
+            raise ValueError(f"Submission {submission_id} not found in TxSub")
+        
+        # statusがpendingのままか確認
+        if submission.status != "pending":
+            raise ValueError(f"Submission {submission_id} status is '{submission.status}', not 'pending'. Cannot approve.")
+        
+        submission.status = "approved"
+        submission.approved_material_id = material_id
+        if editor_note and editor_note.strip():
+            submission.editor_note = editor_note.strip()
+        
+        # session_scopeが自動commit（例外時は自動rollback）
+        logger.info(f"[APPROVE][TxSub] success: submission_id={submission_id}, approved_material_id={material_id}")
+
+
+# Phase 4: 旧関数は削除済み（utils/material_defaults.py に集約）
+# 補完ロジックは utils.material_defaults.apply_material_defaults() のみを使用
 
 
 def approve_submission(submission_id: int, editor_note: str = None, update_existing: bool = True, db=None):
@@ -4346,50 +4618,48 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
     """
     import traceback as tb
     
-    # セッションは都度生成（使い回さない）
-    db_tx1 = SessionLocal()
-    db_tx2 = SessionLocal()
-    db_tx3 = SessionLocal()
-    
+    # Phase 3: セッション管理を統一APIに移行（Tx1は関数化済み、Tx2以降は後で関数化）
     material_id = None
     image_upsert_error = None
     
     try:
-        # ===== Tx1: submission取得とpayloadパース =====
-        submission = db_tx1.query(MaterialSubmission).filter(
-            MaterialSubmission.id == submission_id
-        ).first()
-        
-        if not submission:
-            return {"ok": False, "error": "Submission not found"}
-        
-        if submission.status != "pending":
-            return {"ok": False, "error": f"Submission is not pending (status: {submission.status})"}
-        
-        # payload_jsonを必ずdictにする（失敗時は uploaded_images=[] として警告、承認は継続）
-        payload_dict = None
-        uploaded_images_fallback = []
-        
-        if isinstance(submission.payload_json, dict):
-            payload_dict = submission.payload_json
-        elif isinstance(submission.payload_json, str):
-            try:
-                payload_dict = json.loads(submission.payload_json)
-            except json.JSONDecodeError as e:
-                logger.warning(f"[APPROVE] Failed to parse payload_json (str): {e}, using empty dict and uploaded_images=[]")
-                logger.exception(f"[APPROVE] payload_json parse error details")
+        # ===== Tx1前処理: submission取得とpayloadパース =====
+        from utils.db import get_session
+        with get_session() as db_pre:
+            submission = db_pre.query(MaterialSubmission).filter(
+                MaterialSubmission.id == submission_id
+            ).first()
+            
+            if not submission:
+                return {"ok": False, "error": "Submission not found"}
+            
+            if submission.status != "pending":
+                return {"ok": False, "error": f"Submission is not pending (status: {submission.status})"}
+            
+            # payload_jsonを必ずdictにする（失敗時は uploaded_images=[] として警告、承認は継続）
+            payload_dict = None
+            uploaded_images_fallback = []
+            
+            if isinstance(submission.payload_json, dict):
+                payload_dict = submission.payload_json
+            elif isinstance(submission.payload_json, str):
+                try:
+                    payload_dict = json.loads(submission.payload_json)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"[APPROVE] Failed to parse payload_json (str): {e}, using empty dict and uploaded_images=[]")
+                    logger.exception(f"[APPROVE] payload_json parse error details")
+                    payload_dict = {}  # 空dictとして継続
+                    uploaded_images_fallback = []  # uploaded_images は空として扱う
+            else:
+                logger.warning(f"[APPROVE] payload_json is neither dict nor str: type={type(submission.payload_json)}, using empty dict")
                 payload_dict = {}  # 空dictとして継続
                 uploaded_images_fallback = []  # uploaded_images は空として扱う
-        else:
-            logger.warning(f"[APPROVE] payload_json is neither dict nor str: type={type(submission.payload_json)}, using empty dict")
-            payload_dict = {}  # 空dictとして継続
-            uploaded_images_fallback = []  # uploaded_images は空として扱う
-        
-        if not payload_dict:
-            logger.warning(f"[APPROVE] payload_dict is None or empty, using empty dict")
-            payload_dict = {}
-        
-        form_data = payload_dict
+            
+            if not payload_dict:
+                logger.warning(f"[APPROVE] payload_dict is None or empty, using empty dict")
+                payload_dict = {}
+            
+            form_data = payload_dict
         
         # 必須フィールドの補完
         form_data = _normalize_required(form_data, existing=None)
@@ -4405,277 +4675,24 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 "error_code": "name_official_empty",
             }
         
-        # payload をサニタイズ：Material カラムだけに絞る（relationship キーとシステム列を除去）
-        allowed_columns = {c.name for c in Material.__table__.columns}
-        relationship_keys = {"images", "uploaded_images", "reference_urls", "use_examples", "properties", "metadata_items", "process_example_images"}
-        # システム列を明示的に除外（id混入を防ぐ）
-        system_keys = {"id", "created_at", "updated_at", "deleted_at", "uuid"}
-        payload_for_material = {
-            k: v for k, v in form_data.items()
-            if k in allowed_columns 
-            and k not in relationship_keys 
-            and k not in system_keys
-            and v is not None
-        }
-        
         # ===== Tx1: materialsテーブルに新規作成 or 既存更新（commit） =====
-        # material_idを初期化（Tx1失敗時にNoneに戻すため）
+        # Phase 3: Tx1を関数化して副作用を排除
         material_id = None
+        action = None
         
         try:
-            from sqlalchemy import select
+            material_id, action = _tx1_upsert_material_core(submission, form_data, update_existing)
             
-            # Tx1の冒頭で既存Materialを検索（update_existing=True の場合のみ、is_deleted=0 のみ対象）
-            name_official = payload_for_material.get("name_official", "").strip()
-            material = None
-            action = None
-            
-            if update_existing and name_official:
-                # 同名の既存Materialを検索（is_deleted=0 のみ対象）
-                existing_stmt = (
-                    select(Material)
-                    .where(Material.name_official == name_official)
-                    .where(Material.is_deleted == 0)
-                )
-                existing = db_tx1.execute(existing_stmt).scalar_one_or_none()
-                
-                if existing is not None:
-                    # 既存Materialを更新
-                    material = existing
-                    action = "updated"
-                    logger.info(f"[APPROVE] Tx1: Updating existing material (id={material.id}, name_official='{name_official}')")
-                else:
-                    # 同名が存在しない場合は新規作成
-                    material = None
-                    action = None
-            
-            if material is None:
-                # 新規作成前に、同名の active があるかチェック（UNIQUEで落ちる前に弾く）
-                # update_existing=False の場合も必ずチェック（同名が存在する場合はエラー）
-                if name_official:
-                    active_check_stmt = (
-                        select(Material.id)
-                        .where(Material.name_official == name_official)
-                        .where(Material.is_deleted == 0)
-                        .limit(1)
-                    )
-                    active_existing = db_tx1.execute(active_check_stmt).scalar_one_or_none()
-                    if active_existing is not None:
-                        if update_existing:
-                            error_msg = f"同名の材料が既に存在します（ID: {active_existing}）。「既存へ反映」モードで承認してください。"
-                        else:
-                            error_msg = f"同名の材料が既に存在します（ID: {active_existing}）。材料名を変更して再投稿してください。"
-                        return {
-                            "ok": False,
-                            "error": error_msg,
-                            "error_code": "duplicate_active_material",
-                        }
-                
-                # 新規作成
-                material_uuid = str(uuid.uuid4())
-                material = Material(uuid=material_uuid)
-                db_tx1.add(material)
-                action = 'created'
-                logger.info(f"[APPROVE] Tx1: Creating new material (name_official='{name_official}')")
-            
-            # Material カラムのみを設定（システム列は除外済み）
-            for k, v in payload_for_material.items():
-                # 念のため再度システム列チェック（二重防御）
-                if k not in system_keys:
-                    setattr(material, k, v)
-            
-            # visibility に基づいて is_published を設定
-            visibility = form_data.get('visibility', '')
-            if visibility in ["公開", "公開（誰でも閲覧可）"]:
-                material.is_published = 1
-            elif visibility in ["非公開", "非公開（管理者のみ）"]:
-                material.is_published = 0
-            else:
-                # デフォルトは非公開（安全側に倒す）
-                material.is_published = 0
-            
-            material.is_deleted = 0
-            
-            # Materialデータを設定（存在するキーのみ、値が空でない場合のみ）
-            # 必須フィールド（validate_csv_rowでチェック済み、ただし存在チェックを追加）
-            if form_data.get('name_official'):
-                material.name_official = form_data.get('name_official')
-            if form_data.get('supplier_org'):
-                material.supplier_org = form_data.get('supplier_org')
-            if form_data.get('supplier_type'):
-                material.supplier_type = form_data.get('supplier_type')
-            if form_data.get('category_main'):
-                material.category_main = form_data.get('category_main')
-            if form_data.get('origin_type'):
-                material.origin_type = form_data.get('origin_type')
-            if form_data.get('origin_detail'):
-                material.origin_detail = form_data.get('origin_detail')
-            if form_data.get('transparency'):
-                material.transparency = form_data.get('transparency')
-            if form_data.get('hardness_qualitative'):
-                material.hardness_qualitative = form_data.get('hardness_qualitative')
-            if form_data.get('weight_qualitative'):
-                material.weight_qualitative = form_data.get('weight_qualitative')
-            if form_data.get('water_resistance'):
-                material.water_resistance = form_data.get('water_resistance')
-            if form_data.get('weather_resistance'):
-                material.weather_resistance = form_data.get('weather_resistance')
-            if form_data.get('equipment_level'):
-                material.equipment_level = form_data.get('equipment_level')
-            if form_data.get('cost_level'):
-                material.cost_level = form_data.get('cost_level')
-            if form_data.get('procurement_status'):
-                material.procurement_status = form_data.get('procurement_status')
-            if form_data.get('visibility'):
-                material.visibility = form_data.get('visibility')
-            
-            # オプショナルフィールド（存在する場合のみ設定）
-            if form_data.get('name_aliases'):
-                material.name_aliases = json.dumps(form_data.get('name_aliases', []), ensure_ascii=False)
-            if form_data.get('supplier_other'):
-                material.supplier_other = form_data.get('supplier_other')
-            if form_data.get('category_other'):
-                material.category_other = form_data.get('category_other')
-            if form_data.get('material_forms'):
-                material.material_forms = json.dumps(form_data.get('material_forms', []), ensure_ascii=False)
-            if form_data.get('material_forms_other'):
-                material.material_forms_other = form_data.get('material_forms_other')
-            if form_data.get('origin_other'):
-                material.origin_other = form_data.get('origin_other')
-            if form_data.get('recycle_bio_rate'):
-                material.recycle_bio_rate = form_data.get('recycle_bio_rate')
-            if form_data.get('recycle_bio_basis'):
-                material.recycle_bio_basis = form_data.get('recycle_bio_basis')
-            if form_data.get('color_tags'):
-                material.color_tags = json.dumps(form_data.get('color_tags', []), ensure_ascii=False)
-            if form_data.get('hardness_value'):
-                material.hardness_value = form_data.get('hardness_value')
-            if form_data.get('specific_gravity'):
-                material.specific_gravity = form_data.get('specific_gravity')
-            if form_data.get('heat_resistance_temp'):
-                material.heat_resistance_temp = form_data.get('heat_resistance_temp')
-            if form_data.get('heat_resistance_range'):
-                material.heat_resistance_range = form_data.get('heat_resistance_range')
-            if form_data.get('processing_methods'):
-                material.processing_methods = json.dumps(form_data.get('processing_methods', []), ensure_ascii=False)
-            if form_data.get('processing_other'):
-                material.processing_other = form_data.get('processing_other')
-            if form_data.get('prototyping_difficulty'):
-                material.prototyping_difficulty = form_data.get('prototyping_difficulty')
-            if form_data.get('use_categories'):
-                material.use_categories = json.dumps(form_data.get('use_categories', []), ensure_ascii=False)
-            if form_data.get('use_other'):
-                material.use_other = form_data.get('use_other')
-            if form_data.get('cost_value'):
-                material.cost_value = form_data.get('cost_value')
-            if form_data.get('cost_unit'):
-                material.cost_unit = form_data.get('cost_unit')
-            if form_data.get('safety_tags'):
-                material.safety_tags = json.dumps(form_data.get('safety_tags', []), ensure_ascii=False)
-            if form_data.get('safety_other'):
-                material.safety_other = form_data.get('safety_other')
-            if form_data.get('restrictions'):
-                material.restrictions = form_data.get('restrictions')
-            # visibility に基づいて is_published を設定（既存更新の場合も適用）
-            visibility = form_data.get('visibility', '')
-            if visibility in ["公開", "公開（誰でも閲覧可）"]:
-                material.is_published = 1
-            elif visibility in ["非公開", "非公開（管理者のみ）"]:
-                material.is_published = 0
-            else:
-                # デフォルトは非公開（安全側に倒す）
-                material.is_published = 0
-            
-            material.is_deleted = 0
-            
-            # オプショナルフィールド（存在する場合のみ設定）
-            if form_data.get('development_motives'):
-                material.development_motives = json.dumps(form_data.get('development_motives', []), ensure_ascii=False)
-            if form_data.get('development_motive_other'):
-                material.development_motive_other = form_data.get('development_motive_other')
-            if form_data.get('development_background_short'):
-                material.development_background_short = form_data.get('development_background_short')
-            if form_data.get('development_story'):
-                material.development_story = form_data.get('development_story')
-            if form_data.get('tactile_tags'):
-                material.tactile_tags = json.dumps(form_data.get('tactile_tags', []), ensure_ascii=False)
-            if form_data.get('tactile_other'):
-                material.tactile_other = form_data.get('tactile_other')
-            if form_data.get('visual_tags'):
-                material.visual_tags = json.dumps(form_data.get('visual_tags', []), ensure_ascii=False)
-            if form_data.get('visual_other'):
-                material.visual_other = form_data.get('visual_other')
-            if form_data.get('sound_smell'):
-                material.sound_smell = form_data.get('sound_smell')
-            if form_data.get('circularity'):
-                material.circularity = form_data.get('circularity')
-            if form_data.get('certifications'):
-                material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
-            if form_data.get('certifications_other'):
-                material.certifications_other = form_data.get('certifications_other')
-            if form_data.get('main_elements'):
-                material.main_elements = form_data.get('main_elements')
-            
-            # 後方互換フィールド（存在する場合のみ設定）
-            if form_data.get('name_official'):
-                material.name = form_data.get('name_official')
-            if form_data.get('category_main'):
-                material.category = form_data.get('category_main')
-            
-            # NOT NULL補完を確実に適用（最初のflush()より前に実行）
-            _apply_not_null_defaults_for_approval(material, form_data)
-            
-            # search_textを生成して設定
-            from utils.search import generate_search_text
-            material.search_text = generate_search_text(material)
-            
-            db_tx1.flush()
-            
-            # 参照URL保存（更新モードの場合は既存を削除して置き換え）
-            if action == "updated":
-                # 既存の参照URLを削除
-                db_tx1.query(ReferenceURL).filter(ReferenceURL.material_id == material.id).delete()
-                # 既存の使用例を削除
-                db_tx1.query(UseExample).filter(UseExample.material_id == material.id).delete()
-                db_tx1.flush()
-            
-            # 参照URL保存
-            for ref in form_data.get('reference_urls', []):
-                if ref.get('url'):
-                    ref_url = ReferenceURL(
-                        material_id=material.id,
-                        url=ref['url'],
-                        url_type=ref.get('type'),
-                        description=ref.get('desc')
-                    )
-                    db_tx1.add(ref_url)
-            
-            # 使用例保存
-            for ex in form_data.get('use_examples', []):
-                if ex.get('name'):
-                    use_ex = UseExample(
-                        material_id=material.id,
-                        example_name=ex['name'],
-                        example_url=ex.get('url'),
-                        description=ex.get('desc')
-                    )
-                    db_tx1.add(use_ex)
-            
-            # material.id を確定（flush してから取得）
-            db_tx1.flush()
-            material_id = material.id
-            if not material_id:
-                raise ValueError("material.id is None after flush")
-            
-            # commit()を必ず先に実行（存在確認の前に）
-            # properties upsertはTx1から外し、別トランザクション（TxProps）で実行
-            db_tx1.commit()
-            logger.info(f"[APPROVE] Tx1 commit success: material_id={material_id}, action={action}, uuid={material.uuid}")
-            
+        except ValueError as ve:
+            # バリデーションエラー（name_official空、重複など）
+            logger.warning(f"[APPROVE] Tx1 validation error: {ve}")
+            return {
+                "ok": False,
+                "error": str(ve),
+                "error_code": "tx1_validation_error",
+            }
         except Exception as e:
-            db_tx1.rollback()
-            # material_idをNoneに戻す（Tx1失敗時はmaterialが作成されていない）
-            material_id = None
+            # Tx1失敗時は即return（Tx2以降へ進まない）
             logger.exception(f"[APPROVE] Tx1 failed (materials upsert): {e}")
             error_msg = f"Tx1 failed: {e}"
             if is_debug():
@@ -4685,281 +4702,82 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
                 "error": error_msg,
                 "traceback": tb.format_exc() if is_debug() else None,
             }
-        finally:
-            db_tx1.close()
         
-        # Tx1 commit成功後、material_idが実際に存在するか確認（別セッションで、任意）
-        # material_idがNoneの場合は既にreturnしているので、ここに来る時点では必ず存在するはず
+        # Tx1成功後、material_idの存在確認（別セッションで、commit成功後）
+        # Phase 3: 統一APIを使用
         if not material_id:
-            logger.error(f"[APPROVE] material_id is None after Tx1 commit, cannot proceed")
+            logger.error(f"[APPROVE] material_id is None after Tx1, cannot proceed")
             return {
                 "ok": False,
-                "error": "material_id is None after Tx1 commit. Material creation may have failed.",
+                "error": "material_id is None after Tx1. Material creation may have failed.",
                 "error_code": "material_id_none_after_tx1",
             }
         
-        # material_idの存在確認（別セッションで、commit成功後）
-        # commit()が成功したので、通常は存在するはずだが、念のため確認
-        db_check = SessionLocal()
+        from utils.db import get_session
+        from sqlalchemy import select
         try:
-            from sqlalchemy import select
-            check_stmt = select(Material.id).where(Material.id == material_id).limit(1)
-            material_exists = db_check.execute(check_stmt).scalar_one_or_none()
-            if not material_exists:
-                # commit成功後に存在しない場合は異常（通常は発生しない）
-                logger.error(f"[APPROVE] Material {material_id} does not exist after Tx1 commit (unexpected)")
-                return {
-                    "ok": False,
-                    "error": f"Material {material_id} does not exist after commit. This is unexpected - please check database state.",
-                    "error_code": "material_not_found_after_commit",
-                }
-            logger.info(f"[APPROVE] Verified material_id={material_id} exists after Tx1 commit")
+            with get_session() as db_check:
+                check_stmt = select(Material.id).where(Material.id == material_id).limit(1)
+                material_exists = db_check.execute(check_stmt).scalar_one_or_none()
+                if not material_exists:
+                    logger.error(f"[APPROVE] Material {material_id} does not exist after Tx1 commit (unexpected)")
+                    return {
+                        "ok": False,
+                        "error": f"Material {material_id} does not exist after commit. This is unexpected - please check database state.",
+                        "error_code": "material_not_found_after_commit",
+                    }
+                logger.info(f"[APPROVE] Verified material_id={material_id} exists after Tx1 commit")
         except Exception as check_error:
             # 存在確認の失敗は警告のみ（commit成功しているので、通常は問題ない）
             logger.warning(f"[APPROVE] Failed to verify material_id={material_id} existence after commit: {check_error}")
             # 確認失敗でも続行（commit成功しているので）
-        finally:
-            db_check.close()
         
-        # ===== TxEmb: embedding upsert（別トランザクション、失敗しても承認は継続） =====
-        # ENABLE_VECTOR_SEARCH=0のときはスキップ（後でbackfill_embeddingsで作成可能）
-        enable_vector_search = os.getenv("ENABLE_VECTOR_SEARCH", "0") == "1"
-        if enable_vector_search and material_id:
-            db_emb = SessionLocal()
-            try:
-                from utils.search import update_material_embedding
-                # materialを再取得（Tx1とは別セッション）
-                material_for_emb = db_emb.query(Material).filter(Material.id == material_id).first()
-                if material_for_emb:
-                    update_material_embedding(db_emb, material_for_emb)
-                    db_emb.commit()
-                    logger.info(f"[APPROVE] TxEmb success: embedding updated for material_id={material_id}")
-                else:
-                    logger.warning(f"[APPROVE] TxEmb skipped: material_id={material_id} not found")
-            except Exception as emb_error:
-                db_emb.rollback()
-                logger.warning(f"[APPROVE] TxEmb failed (embedding upsert): {emb_error}, continuing approval")
-                # embedding の upsert 失敗は警告のみ（承認は継続）
-            finally:
-                db_emb.close()
+        # ===== TxSub: submissionを更新（必須Tx、失敗時は承認全体を失敗扱い） =====
+        # Phase 3: TxSubを独立関数化、Tx1成功後・material存在確認後に実行
+        try:
+            _txsub_mark_submission_approved(submission_id, material_id, editor_note)
+        except Exception as e:
+            logger.exception(f"[APPROVE] TxSub failed (submission update): {e}")
+            # TxSub失敗時は承認全体を失敗扱い（status更新ができないのは整合性のため致命）
+            return {
+                "ok": False,
+                "error": f"Failed to update submission status: {e}",
+                "traceback": tb.format_exc() if is_debug() else None,
+            }
         
-        # ===== TxProps: properties upsert（別トランザクション、失敗しても承認は継続） =====
-        properties_list = form_data.get('properties', [])
-        if properties_list and material_id:
-            db_props = SessionLocal()
-            try:
-                property_keys = [prop.get('key') for prop in properties_list if prop.get('key')]
-                if property_keys:
-                    db_props.query(Property).filter(
-                        Property.material_id == material_id,
-                        Property.property_name.in_(property_keys)
-                    ).delete(synchronize_session=False)
-                    db_props.flush()
-                
-                for prop in properties_list:
-                    prop_key = prop.get('key')
-                    prop_value = prop.get('value')
-                    prop_unit = prop.get('unit')
-                    if not prop_key or prop_value is None:
-                        continue
-                    try:
-                        new_property = Property(
-                            material_id=material_id,
-                            property_name=prop_key,
-                            value=float(prop_value),
-                            unit=prop_unit,
-                        )
-                        db_props.add(new_property)
-                    except (ValueError, TypeError) as prop_convert_error:
-                        logger.warning(f"[APPROVE][TxProps] Failed to convert property value for {prop_key}: {prop_convert_error}, skipping")
-                
-                db_props.commit()
-                logger.info(f"[APPROVE] TxProps success: properties upserted for material_id={material_id} (count={len(properties_list)})")
-            except Exception as props_error:
-                db_props.rollback()
-                logger.warning(f"[APPROVE] TxProps failed (properties upsert): {props_error}, continuing approval")
-            finally:
-                db_props.close()
-
-        # ===== Tx2: images upsert（失敗しても rollback、全体は落とさない） =====
-        # Tx2 の先頭で uploaded_images を確実に取り出す
-        uploaded_images = payload_dict.get("uploaded_images", uploaded_images_fallback)  # KEY固定: "uploaded_images"
+        # ===== Tx2/TxProps/TxEmb: 副作用Tx（失敗しても承認は継続） =====
+        # Phase 3: これらは任意Tx（失敗しても承認は成功）
+        
+        # Tx2: images upsert
+        uploaded_images = payload_dict.get("uploaded_images", uploaded_images_fallback)
         if not isinstance(uploaded_images, list):
             logger.warning(f"[APPROVE][Tx2] uploaded_images is not a list: type={type(uploaded_images)}, using empty list")
             uploaded_images = []
         
-        # 一括登録の承認待ち送信で保存した images_info を処理
-        images_info = payload_dict.get("images_info", [])
-        if isinstance(images_info, list) and len(images_info) > 0 and material_id:
-            # base64エンコードされた画像データをデコードしてアップロード
-            import base64
-            import hashlib
-            from utils.bulk_import import upload_image_to_r2
-            
-            for img_info in images_info:
-                if not isinstance(img_info, dict):
-                    continue
-                
-                kind = img_info.get('kind', 'primary')
-                file_name = img_info.get('file_name', '')
-                data_base64 = img_info.get('data_base64', '')
-                
-                if not data_base64:
-                    continue
-                
-                try:
-                    # base64デコード
-                    image_data = base64.b64decode(data_base64)
-                    
-                    # R2にアップロード
-                    r2_result = upload_image_to_r2(material_id, image_data, kind, file_name)
-                    
-                    if r2_result:
-                        uploaded_images.append({
-                            'kind': kind,
-                            'r2_key': r2_result['r2_key'],
-                            'public_url': r2_result['public_url'],
-                            'mime': r2_result.get('mime', 'image/jpeg'),
-                            'sha256': hashlib.sha256(image_data).hexdigest(),
-                            'bytes': len(image_data)
-                        })
-                        logger.info(f"[APPROVE][Tx2] Uploaded image from images_info: kind={kind}, file_name={file_name}")
-                except Exception as e:
-                    logger.warning(f"[APPROVE][Tx2] Failed to process image from images_info: {e}")
-        
-        uploaded_images_count = len(uploaded_images)
-        logger.info(f"[APPROVE][Tx2] uploaded_images_count={uploaded_images_count} submission_id={submission_id} material_id={material_id}")
-        
         image_upsert_error = None
-        
-        if uploaded_images_count == 0:
-            # 0件なら、Tx2 は何もしないで終了（ログに残す）
-            logger.info(f"[APPROVE][Tx2] No images to upsert (uploaded_images_count=0), skipping Tx2")
-        elif not material_id:
-            # material_id が確定していない場合はスキップ
-            logger.warning(f"[APPROVE][Tx2] material_id is None, cannot upsert images (uploaded_images_count={uploaded_images_count})")
-        else:
-            # 1件以上なら for で upsert_image を呼ぶ
+        if material_id:
             try:
-                from utils.image_repo import upsert_image
-                
-                for idx, img_info in enumerate(uploaded_images):
-                    if not isinstance(img_info, dict):
-                        logger.warning(f"[APPROVE][Tx2] Image {idx+1} is not a dict: type={type(img_info)}, skipping")
-                        continue
-                    
-                    kind = img_info.get('kind', 'primary')
-                    r2_key = img_info.get('r2_key')
-                    public_url = img_info.get('public_url')
-                    mime = img_info.get('mime')
-                    sha256 = img_info.get('sha256')
-                    bytes_value = img_info.get('bytes')  # DBがbigintなら int でOK、使わないなら None 固定でもOK
-                    
-                    # bytes が None でない場合は int に変換（bigint対応）
-                    if bytes_value is not None:
-                        try:
-                            bytes_value = int(bytes_value)
-                        except (ValueError, TypeError):
-                            logger.warning(f"[APPROVE][Tx2] Image {idx+1} bytes value is not int-convertible: {bytes_value}, using None")
-                            bytes_value = None
-                    
-                    logger.info(f"[APPROVE][Tx2] Upserting image {idx+1}/{uploaded_images_count}: kind={kind}, r2_key={r2_key}, public_url={public_url}, mime={mime}, sha256={sha256[:16] if sha256 else None}...")
-                    
-                    upsert_image(
-                        db=db_tx2,
-                        material_id=material_id,
-                        kind=kind,
-                        r2_key=r2_key,
-                        public_url=public_url,
-                        bytes=bytes_value,  # DBがbigintなら int、使わないなら None 固定でもOK
-                        mime=mime,
-                        sha256=sha256,
-                    )
-                
-                # Tx2 は最後に必ず commit する
-                db_tx2.commit()
-                logger.info(f"[APPROVE] Tx2 success: images upserted for material_id={material_id} (count={uploaded_images_count})")
-                
+                _tx2_upsert_images(material_id, uploaded_images, payload_dict, submission_id=submission_id)
             except Exception as e:
-                db_tx2.rollback()
                 image_upsert_error = str(e)
                 logger.exception(f"[APPROVE] Tx2 failed (images upsert): {e}")
                 # 画像保存失敗は警告のみ（承認は成功させる）
-            finally:
-                db_tx2.close()
         
-        # ===== Tx3: submissionを更新（commit） =====
-        # Tx3実行前に、material_idが存在することを再確認（FK違反防止）
-        # ここに来る時点では、既にTx1成功後の存在確認を通過しているはずだが、念のため再確認
-        if not material_id:
-            logger.error(f"[APPROVE] material_id is None before Tx3, cannot update submission")
-            return {"ok": False, "error": "material_id is None before Tx3"}
+        # TxProps: properties upsert
+        properties_list = form_data.get('properties', [])
+        if properties_list and material_id:
+            try:
+                _txprops_upsert_properties(material_id, properties_list, submission_id=submission_id)
+            except Exception as props_error:
+                logger.warning(f"[APPROVE] TxProps failed (properties upsert): {props_error}, continuing approval")
         
-        # material_idの存在確認（別セッションで）
-        db_check_tx3 = SessionLocal()
-        try:
-            from sqlalchemy import select
-            check_stmt_tx3 = select(Material.id).where(Material.id == material_id).limit(1)
-            material_exists_tx3 = db_check_tx3.execute(check_stmt_tx3).scalar_one_or_none()
-            if not material_exists_tx3:
-                logger.error(f"[APPROVE] Material {material_id} does not exist before Tx3, cannot set approved_material_id (FK violation prevented)")
-                return {
-                    "ok": False,
-                    "error": f"Material {material_id} does not exist. Cannot update submission with approved_material_id (FK violation prevented).",
-                    "error_code": "material_not_found_before_tx3",
-                }
-            logger.info(f"[APPROVE] Verified material_id={material_id} exists before Tx3")
-        except Exception as check_error_tx3:
-            logger.exception(f"[APPROVE] Failed to verify material_id={material_id} existence before Tx3: {check_error_tx3}")
-            return {
-                "ok": False,
-                "error": f"Failed to verify material existence before Tx3: {check_error_tx3}",
-                "error_code": "material_verification_failed_before_tx3",
-            }
-        finally:
-            db_check_tx3.close()
-        
-        # 存在確認が成功した場合のみ、submissionを更新
-        try:
-            # submissionを再取得（Tx1とは別セッション）
-            submission_tx3 = db_tx3.query(MaterialSubmission).filter(
-                MaterialSubmission.id == submission_id
-            ).first()
-            
-            if not submission_tx3:
-                logger.error(f"[APPROVE] Submission {submission_id} not found in Tx3")
-                return {"ok": False, "error": "Submission not found in Tx3"}
-            
-            # statusがpendingのままか確認（Tx1失敗時にpendingのまま残す）
-            if submission_tx3.status != "pending":
-                logger.warning(f"[APPROVE] Submission {submission_id} status is '{submission_tx3.status}', not 'pending'. Skipping status update.")
-                # status更新はスキップするが、approved_material_idは設定しない（FK違反防止）
-                db_tx3.commit()
-                return {
-                    "ok": False,
-                    "error": f"Submission status is '{submission_tx3.status}', not 'pending'. Cannot approve.",
-                    "error_code": "submission_not_pending",
-                }
-            
-            submission_tx3.status = "approved"
-            submission_tx3.approved_material_id = material_id
-            if editor_note and editor_note.strip():
-                submission_tx3.editor_note = editor_note.strip()
-            
-            db_tx3.commit()
-            logger.info(f"[APPROVE] Tx3 success: submission_id={submission_id}, approved_material_id={material_id}")
-            
-        except Exception as e:
-            db_tx3.rollback()
-            logger.exception(f"[APPROVE] Tx3 failed (submission update): {e}")
-            # Tx3失敗時はpendingのままにする（approvedにしない）
-            return {
-                "ok": False,
-                "error": f"Failed to update submission: {e}",
-                "traceback": tb.format_exc() if is_debug() else None,
-            }
-        finally:
-            db_tx3.close()
+        # TxEmb: embedding upsert
+        if material_id:
+            try:
+                _txemb_update_embeddings(material_id)
+            except Exception as emb_error:
+                logger.warning(f"[APPROVE] TxEmb failed (embedding upsert): {emb_error}, continuing approval")
+                # embedding の upsert 失敗は警告のみ（承認は継続）
         
         # 成功（画像保存失敗があっても承認は成功）
         # material_id は Tx1 で確定した値を使用（関数ローカル変数）
@@ -5049,13 +4867,31 @@ def reopen_submission(submission_id: int, db=None):
     Returns:
         dict: {"ok": True/False, "error": str, "traceback": str}
     """
-    if db is None:
-        db = SessionLocal()
-        should_close = True
-    else:
-        should_close = False
+    from utils.db import session_scope
     
-    try:
+    if db is None:
+        # 書き込み操作なのでsession_scopeを使用
+        with session_scope() as db:
+            # submissionを取得
+            submission = db.query(MaterialSubmission).filter(
+                MaterialSubmission.id == submission_id
+            ).first()
+            
+            if not submission:
+                return {"ok": False, "error": "Submission not found"}
+            
+            if submission.status != "rejected":
+                return {"ok": False, "error": f"Submission is not rejected (status: {submission.status})"}
+            
+            # pendingに戻す
+            submission.status = "pending"
+            submission.reject_reason = None  # 却下理由をクリア
+            
+            # commitはsession_scopeが自動実行
+            return {"ok": True}
+        # 例外時はsession_scopeが自動rollback
+    else:
+        # dbが渡された場合はそのまま使用（既存のトランザクション内で実行）
         # submissionを取得
         submission = db.query(MaterialSubmission).filter(
             MaterialSubmission.id == submission_id
@@ -5071,21 +4907,8 @@ def reopen_submission(submission_id: int, db=None):
         submission.status = "pending"
         submission.reject_reason = None  # 却下理由をクリア
         
-        db.commit()
-        
+        # commitは呼び出し元の責務
         return {"ok": True}
-        
-    except Exception as e:
-        db.rollback()
-        import traceback
-        return {
-            "ok": False,
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-        }
-    finally:
-        if should_close:
-            db.close()
 
 
 def reject_submission(submission_id: int, reject_reason: str = None, db=None):
@@ -5100,13 +4923,31 @@ def reject_submission(submission_id: int, reject_reason: str = None, db=None):
     Returns:
         dict: {"ok": True/False, "error": str, "traceback": str}
     """
-    if db is None:
-        db = SessionLocal()
-        should_close = True
-    else:
-        should_close = False
+    from utils.db import session_scope
     
-    try:
+    if db is None:
+        # 書き込み操作なのでsession_scopeを使用
+        with session_scope() as db:
+            # submissionを取得
+            submission = db.query(MaterialSubmission).filter(
+                MaterialSubmission.id == submission_id
+            ).first()
+            
+            if not submission:
+                return {"ok": False, "error": "Submission not found"}
+            
+            if submission.status != "pending":
+                return {"ok": False, "error": f"Submission is not pending (status: {submission.status})"}
+            
+            # 却下処理
+            submission.status = "rejected"
+            submission.reject_reason = reject_reason if reject_reason and reject_reason.strip() else None
+            
+            # commitはsession_scopeが自動実行
+            return {"ok": True}
+        # 例外時はsession_scopeが自動rollback
+    else:
+        # dbが渡された場合はそのまま使用（既存のトランザクション内で実行）
         # submissionを取得
         submission = db.query(MaterialSubmission).filter(
             MaterialSubmission.id == submission_id
@@ -5122,21 +4963,8 @@ def reject_submission(submission_id: int, reject_reason: str = None, db=None):
         submission.status = "rejected"
         submission.reject_reason = reject_reason if reject_reason and reject_reason.strip() else None
         
-        db.commit()
-        
+        # commitは呼び出し元の責務
         return {"ok": True}
-        
-    except Exception as e:
-        db.rollback()
-        import traceback
-        return {
-            "ok": False,
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-        }
-    finally:
-        if should_close:
-            db.close()
 
 
 def show_bulk_import(embedded: bool = False):
@@ -5247,10 +5075,10 @@ def show_bulk_import(embedded: bool = False):
                 # 管理者の場合は直接実行、非管理者の場合は承認待ちに送信
                 if is_admin:
                     if st.button("🚀 一括登録を実行", type="primary", key="bulk_import_execute"):
-                        db = SessionLocal()
-                        try:
-                            from utils.bulk_import import process_bulk_import, generate_report_csv
-                            
+                        from utils.db import session_scope
+                        from utils.bulk_import import process_bulk_import, generate_report_csv
+                        
+                        with session_scope() as db:
                             with st.spinner("一括登録を実行中..."):
                                 results = process_bulk_import(db, csv_rows, image_files_dict)
                             
@@ -5282,16 +5110,7 @@ def show_bulk_import(embedded: bool = False):
                                 mime="text/csv",
                                 key="bulk_import_report"
                             )
-                        
-                        except Exception as e:
-                            db.rollback()
-                            st.error(f"一括登録中にエラーが発生しました: {e}")
-                            if is_debug:
-                                import traceback
-                                st.code(traceback.format_exc(), language="python")
-                            logger.exception(f"Bulk import error: {e}")
-                        finally:
-                            db.close()
+                        # 例外時はsession_scopeが自動rollback
                 else:
                     # 非管理者の場合は承認待ちに送信
                     submitted_by = st.text_input(
@@ -5301,10 +5120,10 @@ def show_bulk_import(embedded: bool = False):
                     )
                     
                     if st.button("📤 承認待ちに送信", type="primary", key="bulk_import_submit"):
-                        db = SessionLocal()
-                        try:
-                            from utils.bulk_import import create_bulk_submissions, generate_report_csv
-                            
+                        from utils.db import session_scope
+                        from utils.bulk_import import create_bulk_submissions, generate_report_csv
+                        
+                        with session_scope() as db:
                             with st.spinner("承認待ちに送信中..."):
                                 results = create_bulk_submissions(
                                     db, csv_rows, image_files_dict,
@@ -5346,15 +5165,7 @@ def show_bulk_import(embedded: bool = False):
                                 key="bulk_submission_report"
                             )
                         
-                        except Exception as e:
-                            db.rollback()
-                            st.error(f"承認待ち送信中にエラーが発生しました: {e}")
-                            if is_debug:
-                                import traceback
-                                st.code(traceback.format_exc(), language="python")
-                            logger.exception(f"Bulk submission error: {e}")
-                        finally:
-                            db.close()
+                        # 例外時はsession_scopeが自動rollback
             else:
                 # 検証エラーがある場合は警告を表示
                 st.markdown("---")
@@ -5383,8 +5194,8 @@ def show_submission_status():
         )
         
         if submission_id_input and submission_id_input.strip():
-            db = SessionLocal()
-            try:
+            from utils.db import get_session
+            with get_session() as db:
                 # IDまたはUUIDで検索
                 submission = None
                 if submission_id_input.strip().isdigit():
@@ -5459,9 +5270,7 @@ def show_submission_status():
                         st.info(submission.editor_note)
                 else:
                     st.error("❌ 投稿が見つかりませんでした。投稿IDまたはUUIDを確認してください。")
-            
-            finally:
-                db.close()
+                # get_session()が自動でcloseするため、finallyは不要
         else:
             st.info("💡 投稿IDまたはUUIDを入力してください。")
     except Exception as e:
@@ -5516,21 +5325,21 @@ def show_material_cards():
         material_ids = [m.id for m in materials]
         properties_dict = {}  # {material_id: [Property, ...]}
         if material_ids:
-            db = SessionLocal()
+            from utils.db import get_session
+            from sqlalchemy import select
             try:
-                from sqlalchemy import select
-                properties_list = db.execute(
-                    select(Property)
-                    .where(Property.material_id.in_(material_ids))
-                ).scalars().all()
-                for prop in properties_list:
-                    if prop.material_id not in properties_dict:
-                        properties_dict[prop.material_id] = []
-                    properties_dict[prop.material_id].append(prop)
+                with get_session() as db:
+                    properties_list = db.execute(
+                        select(Property)
+                        .where(Property.material_id.in_(material_ids))
+                    ).scalars().all()
+                    for prop in properties_list:
+                        if prop.material_id not in properties_dict:
+                            properties_dict[prop.material_id] = []
+                        properties_dict[prop.material_id].append(prop)
             except Exception as prop_e:
                 logger.warning(f"[CARDS] Failed to fetch properties: {prop_e}")
-            finally:
-                db.close()
+            # 例外時はget_sessionが自動close
         
         material = get_material_by_id(material_id)
         
