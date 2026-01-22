@@ -52,3 +52,8 @@ Thumbs.db
 
 # dedupe reports
 reports/duplicates_report_*.csv
+
+# local backups / temp (Cursor/手動バックアップ)
+_local_backups/
+*.bak
+app.py.bak*
