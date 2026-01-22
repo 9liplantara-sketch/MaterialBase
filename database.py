@@ -119,7 +119,7 @@ class Material(Base):
     
     # 6. 用途・市場状態
     use_categories = Column(Text)  # 主用途カテゴリ（複数選択）（JSON文字列）
-    use_environment = Column(Text)  # 使用環境（複数選択）（JSON文字列）
+    # use_environment = Column(Text)  # 使用環境（複数選択）（JSON文字列）- 一時的にコメントアウト（DBにカラムが存在しない）
     use_other = Column(String(255))  # その他（自由記述）
     procurement_status = Column(String(50), nullable=False)  # 調達性
     cost_level = Column(String(50), nullable=False)  # コスト帯
@@ -1125,6 +1125,30 @@ else:
 
 # データベースセッションの依存性注入用
 def get_db():
+    """
+    FastAPI向けのデータベースセッション取得（generator）
+    
+    ⚠️ Streamlit側では使用禁止 ⚠️
+    - この関数はgeneratorを返すため、Streamlit側で直接使用すると
+      'generator' object has no attribute 'execute' エラーが発生します
+    - Streamlit側では utils/db.py の get_session() または session_scope() を使用してください
+    
+    FastAPI用の依存注入としてのみ使用:
+        @app.get("/api/...")
+        def api_endpoint(db: Session = Depends(get_db)):
+            ...
+    
+    Streamlit用の代替:
+        from utils.db import get_session, session_scope
+        
+        # 読み取り専用
+        with get_session() as db:
+            result = db.execute(...)
+        
+        # 書き込み（自動commit/rollback）
+        with session_scope() as db:
+            db.add(...)
+    """
     db = SessionLocal()
     try:
         yield db
