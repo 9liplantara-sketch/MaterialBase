@@ -3600,6 +3600,15 @@ def show_search():
     st.markdown(render_site_header(debug=is_debug), unsafe_allow_html=True)
     st.markdown('<h2 class="section-title">材料検索</h2>', unsafe_allow_html=True)
     
+    # DEBUG=1のときだけ関数到達確認とページ状態を表示
+    if is_debug:
+        st.info("DEBUG: entered show_search()")
+        page_state = {
+            "page": st.session_state.get("page"),
+            "selected_material_id": st.session_state.get("selected_material_id"),
+        }
+        st.code(f"Page state: {page_state}")
+    
     # 自然言語検索バー（上）
     search_query = st.text_input(
         "🔍 自然言語検索", 
@@ -3708,6 +3717,17 @@ def show_search():
     # 管理者表示フラグを取得
     include_unpublished = st.session_state.get("include_unpublished", False)
     
+    # DEBUG=1のときだけ検索実行前の情報を表示
+    if is_debug:
+        search_query_short = (search_query[:50] + "...") if search_query and len(search_query) > 50 else (search_query or "")
+        filters_summary = {
+            "use_categories": filters.get("use_categories"),
+            "category_main": filters.get("category_main"),
+            "include_unpublished": include_unpublished,
+            "other_keys": [k for k in filters.keys() if k not in ["use_categories", "category_main"]]
+        }
+        st.code(f"DEBUG: Before search\n  query: {search_query_short}\n  filters: {filters_summary}")
+    
     # 検索実行（クエリまたはフィルタがある場合）
     if (search_query and search_query.strip()) or filters:
         from utils.db import get_session
@@ -3789,6 +3809,20 @@ def show_search():
                     }
         # 例外時はget_sessionが自動close（rollbackは不要、読み取り専用）
         
+        # DEBUG=1のときだけ検索実行後の情報を表示
+        if is_debug:
+            results_count = len(results) if results else 0
+            search_query_short = (search_query[:50] + "...") if search_query and len(search_query) > 50 else (search_query or "")
+            filters_summary = {
+                "use_categories": filters.get("use_categories"),
+                "category_main": filters.get("category_main"),
+                "include_unpublished": include_unpublished,
+                "other_keys": [k for k in filters.keys() if k not in ["use_categories", "category_main"]]
+            }
+            st.code(f"DEBUG: After search\n  query: {search_query_short}\n  filters: {filters_summary}\n  results_count: {results_count}")
+            if results_count == 0:
+                st.warning("DEBUG: results=0; no cards will be rendered")
+        
         # DEBUG=1のときだけ検索の詳細情報を表示
         if is_debug:
             with st.expander("🔍 検索詳細情報（DEBUG）", expanded=False):
@@ -3821,8 +3855,24 @@ def show_search():
                         if img.public_url:
                             primary_images_dict[img.material_id] = img.public_url
             
+            # DEBUG=1のときだけ1件目の要約を表示
+            if is_debug and results:
+                first_material = results[0]
+                first_summary = {
+                    "id": first_material.id,
+                    "name_official": getattr(first_material, "name_official", None),
+                    "name": getattr(first_material, "name", None),
+                    "category_main": getattr(first_material, "category_main", None),
+                    "is_published": getattr(first_material, "is_published", None),
+                    "image_url": primary_images_dict.get(first_material.id)
+                }
+                st.code(f"DEBUG: First result summary\n{first_summary}")
+            
             # 検索結果をカード形式で表示
             for idx, material in enumerate(results):
+                # DEBUG=1のときだけ各カードの開始時に情報を表示
+                if is_debug:
+                    st.caption(f"DEBUG: rendering card idx={idx} id={material.id}")
                 try:
                     with st.container():
                         # 材料カードを表示（画像URLを渡す）
@@ -3851,99 +3901,132 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
         search_query: 検索クエリ（ハイライト用）
         image_url: primary画像URL（一括取得済み、Noneの場合は個別取得を試みる）
     """
-                        # SQLで直接カウント（DetachedInstanceError回避）
-    # Phase 2: 統一APIを使用（get_db generatorは使用禁止）
-    from sqlalchemy import select, func
-    from database import Property
-    from utils.db import get_session
+    # DEBUG=1のときだけ関数冒頭でmaterial情報を表示
+    is_debug = os.getenv("DEBUG", "0") == "1"
+    if is_debug:
+        material_name = getattr(material, "name_official", None) or getattr(material, "name", None) or "名称不明"
+        st.caption(f"DEBUG: _render_material_search_card() material.id={material.id} material_name={material_name}")
     
-    prop_count = 0
+    # フォールバック用の変数を初期化
+    material_name = None
+    category_name = None
+    description_text = None
+    
     try:
-        with get_session() as db_sess:
-            prop_count = db_sess.execute(
-                select(func.count(Property.id)).where(Property.material_id == material.id)
-                            ).scalar() or 0
-    except Exception as e:
-        # prop_count取得失敗は警告のみ（カード描画は継続）
-        from utils.settings import is_debug
-        if is_debug():
-            logger.exception(f"[search_card] prop_count failed material_id={material.id}: {e}")
-        prop_count = 0
-
-    # 素材画像を取得（image_urlが渡されている場合はそれを使用）
-    image_src = None
-    if image_url:
-        # キャッシュバスターを追加
-        from utils.logo import get_git_sha
-        try:
-            from material_map_version import APP_VERSION
-        except ImportError:
-            APP_VERSION = get_git_sha()
-        separator = "&" if "?" in image_url else "?"
-        image_url_with_cache = f"{image_url}{separator}v={APP_VERSION}"
-        # safe_url()で日本語ファイル名をエンコード
-        image_src = safe_url(image_url_with_cache)
-    # カテゴリ名
-    category_name = material.category_main or material.category or '未分類'
-    
-    # 説明文を生成（1〜2行）
-    description_parts = []
-    if material.description:
-        description_parts.append(material.description)
-    elif material.development_background_short:
-        description_parts.append(material.development_background_short)
-    
-    # 加工方法や用途を追加
-    if material.processing_methods:
-        try:
-            methods = json.loads(material.processing_methods)
-            if isinstance(methods, list) and methods:
-                description_parts.append(f"加工: {', '.join(methods[:2])}")
-        except (json.JSONDecodeError, TypeError):
-            pass
-    
-    if material.use_categories:
-        try:
-            uses = json.loads(material.use_categories)
-            if isinstance(uses, list) and uses:
-                description_parts.append(f"用途: {', '.join(uses[:2])}")
-        except (json.JSONDecodeError, TypeError):
-            pass
-    
-    description_text = " | ".join(description_parts[:2]) if description_parts else "説明なし"
-    # 長すぎる場合は省略
-    if len(description_text) > 150:
-        description_text = description_text[:147] + "..."
-    
-    # 材料名（正式名を優先）
-    material_name = material.name_official or material.name or "名称不明"
-    
-    # カード表示
-    st.markdown("---")
-    
-    # 画像と情報を横並び
-    col_img, col_info = st.columns([1, 2])
-    
-    with col_img:
-        if image_src:
-            # st.imageを使用（最も堅い実装）
-            st.image(image_src, width='stretch')
-        else:
-            # 画像がない場合は小さな灰色枠を表示
-            st.markdown("<div style='width:100%;height:120px;background:#f0f0f0;'></div>", unsafe_allow_html=True)
-    
-    with col_info:
-        st.markdown(f"### {material_name}")
-        st.markdown(f"**カテゴリ**: {category_name}")
-        st.markdown(f"{description_text}")
-        if prop_count > 0:
-            st.caption(f"物性データ: {prop_count}個")
+        # SQLで直接カウント（DetachedInstanceError回避）
+        # Phase 2: 統一APIを使用（get_db generatorは使用禁止）
+        from sqlalchemy import select, func
+        from database import Property
+        from utils.db import get_session
         
-        # 詳細を見るボタン
-        if st.button(f"詳細を見る", key=f"search_detail_{material.id}_{idx}"):
-            st.session_state.selected_material_id = material.id
-            st.session_state.page = "材料一覧"
-            st.rerun()
+        prop_count = 0
+        try:
+            with get_session() as db_sess:
+                prop_count = db_sess.execute(
+                    select(func.count(Property.id)).where(Property.material_id == material.id)
+                ).scalar() or 0
+        except Exception as e:
+            # prop_count取得失敗は警告のみ（カード描画は継続）
+            from utils.settings import is_debug
+            if is_debug():
+                logger.exception(f"[search_card] prop_count failed material_id={material.id}: {e}")
+            prop_count = 0
+
+        # 素材画像を取得（image_urlが渡されている場合はそれを使用）
+        image_src = None
+        if image_url:
+            # キャッシュバスターを追加
+            from utils.logo import get_git_sha
+            try:
+                from material_map_version import APP_VERSION
+            except ImportError:
+                APP_VERSION = get_git_sha()
+            separator = "&" if "?" in image_url else "?"
+            image_url_with_cache = f"{image_url}{separator}v={APP_VERSION}"
+            # safe_url()で日本語ファイル名をエンコード
+            image_src = safe_url(image_url_with_cache)
+        # カテゴリ名
+        category_name = material.category_main or material.category or '未分類'
+        
+        # 説明文を生成（1〜2行）
+        description_parts = []
+        if material.description:
+            description_parts.append(material.description)
+        elif material.development_background_short:
+            description_parts.append(material.development_background_short)
+        
+        # 加工方法や用途を追加
+        if material.processing_methods:
+            try:
+                methods = json.loads(material.processing_methods)
+                if isinstance(methods, list) and methods:
+                    description_parts.append(f"加工: {', '.join(methods[:2])}")
+            except (json.JSONDecodeError, TypeError):
+                pass
+        
+        if material.use_categories:
+            try:
+                uses = json.loads(material.use_categories)
+                if isinstance(uses, list) and uses:
+                    description_parts.append(f"用途: {', '.join(uses[:2])}")
+            except (json.JSONDecodeError, TypeError):
+                pass
+        
+        description_text = " | ".join(description_parts[:2]) if description_parts else "説明なし"
+        # 長すぎる場合は省略
+        if len(description_text) > 150:
+            description_text = description_text[:147] + "..."
+        
+        # 材料名（正式名を優先）
+        material_name = material.name_official or material.name or "名称不明"
+        
+        # カード表示
+        st.markdown("---")
+        
+        # 画像と情報を横並び
+        col_img, col_info = st.columns([1, 2])
+        
+        with col_img:
+            if image_src:
+                # st.imageを使用（最も堅い実装）
+                st.image(image_src, width='stretch')
+            else:
+                # 画像がない場合は小さな灰色枠を表示
+                st.markdown("<div style='width:100%;height:120px;background:#f0f0f0;'></div>", unsafe_allow_html=True)
+        
+        with col_info:
+            st.markdown(f"### {material_name}")
+            st.markdown(f"**カテゴリ**: {category_name}")
+            st.markdown(f"{description_text}")
+            if prop_count > 0:
+                st.caption(f"物性データ: {prop_count}個")
+            
+            # 詳細を見るボタン
+            if st.button(f"詳細を見る", key=f"search_detail_{material.id}_{idx}"):
+                st.session_state.selected_material_id = material.id
+                st.session_state.page = "材料一覧"
+                st.rerun()
+    except Exception as e:
+        # 例外時はDEBUG=1のときだけエラーを表示
+        if is_debug:
+            st.error(f"DEBUG: Exception in _render_material_search_card() for material.id={material.id}")
+            st.code(traceback.format_exc())
+        
+        # フォールバック: テキストだけの簡易カードを表示（常に表示）
+        try:
+            material_name = getattr(material, "name_official", None) or getattr(material, "name", None) or "名称不明"
+            category_name = getattr(material, "category_main", None) or getattr(material, "category", None) or "未分類"
+            description_text = getattr(material, "description", None) or getattr(material, "development_background_short", None) or "説明なし"
+            
+            st.markdown("---")
+            st.write(f"**{material_name}**")
+            st.write(f"カテゴリ: {category_name}")
+            st.write(description_text)
+        except Exception as e2:
+            # フォールバックも失敗した場合は最小限の情報のみ
+            st.write(f"材料ID: {material.id if material else 'unknown'}")
+            if is_debug:
+                st.write(f"エラー: {str(e2)}")
 
 
 def show_approval_queue():
