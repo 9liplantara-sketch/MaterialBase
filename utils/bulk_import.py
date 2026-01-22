@@ -20,6 +20,13 @@ from sqlalchemy.orm import Session
 from database import Material, Image
 from utils.search import generate_search_text, update_material_search_text
 from utils.image_repo import upsert_image
+from utils.normalize import (
+    normalize_text,
+    normalize_filename,
+    generate_image_basename_candidates,
+    should_exclude_zip_entry,
+    is_image_extension,
+)
 
 # ロガーを設定
 logger = logging.getLogger(__name__)
@@ -39,19 +46,11 @@ def normalize_material_name(name: str) -> str:
     
     Returns:
         正規化された材料名
+    
+    Note:
+        Phase 7: utils.normalize.normalize_text() を使用
     """
-    if not name:
-        return ""
-    # Unicode正規化（NFKC: 互換文字を正規化）
-    name = unicodedata.normalize('NFKC', name)
-    # 全角スペースを半角スペースに変換
-    name = name.replace("　", " ")
-    # 連続するスペースを1つに
-    while "  " in name:
-        name = name.replace("  ", " ")
-    # 末尾の空白を除去
-    name = name.strip()
-    return name
+    return normalize_text(name)
 
 
 def generate_material_name_candidates(material_name: str) -> List[str]:
@@ -130,9 +129,9 @@ def find_image_files(
     material_name: str,
     image_files_dict: Dict[str, Tuple[str, bytes]],
     kind: str
-) -> Optional[Tuple[str, bytes]]:
+) -> Tuple[Optional[Tuple[str, bytes]], Dict[str, Any]]:
     """
-    材料名から画像ファイルを検索（CSV側・ZIP側両方にNFKC正規化を適用）
+    材料名から画像ファイルを検索（Phase 7強化版：照合レポート付き）
     
     Args:
         material_name: 材料名（CSV側）
@@ -140,24 +139,49 @@ def find_image_files(
         kind: 画像種別（primary/space/product）
     
     Returns:
-        (完全なファイル名, ファイルデータ) のタプル、見つからない場合はNone
+        ((完全なファイル名, ファイルデータ) のタプル or None, 照合レポート辞書)
+        照合レポート: {
+            'material_name': str,  # 元の材料名
+            'material_name_normalized': str,  # 正規化後の材料名
+            'kind': str,  # primary/space/product
+            'candidates': List[str],  # 照合候補リスト（正規化済み）
+            'matched_candidate': Optional[str],  # 一致した候補
+            'matched_filename': Optional[str],  # 一致したファイル名
+            'available_files': List[str],  # ZIP内の利用可能なファイル名（正規化済みbasename）
+        }
     """
-    # CSV側の材料名を正規化（NFKC）
-    material_name_normalized = unicodedata.normalize('NFKC', material_name.strip())
+    # Phase 7: utils.normalize.normalize_text() を使用
+    material_name_normalized = normalize_text(material_name)
     
-    # 候補名を生成（正規化済み）
-    candidates_raw = generate_material_name_candidates(material_name)
-    candidates = [unicodedata.normalize('NFKC', c.strip()) for c in candidates_raw]
+    # Phase 7: utils.normalize.generate_image_basename_candidates() を使用
+    candidates = generate_image_basename_candidates(material_name)
     
     # kindに応じたbasenameパターンを生成（拡張子なし）
     if kind == 'primary':
-        patterns = candidates
+        # primary: 材料名.jpg
+        patterns = [candidates[0]] if len(candidates) > 0 else []
     elif kind == 'space':
-        patterns = [f"{name}1" for name in candidates]
+        # space: 材料名1.jpg
+        patterns = [candidates[1]] if len(candidates) > 1 else []
     elif kind == 'product':
-        patterns = [f"{name}2" for name in candidates]
+        # product: 材料名2.jpg
+        patterns = [candidates[2]] if len(candidates) > 2 else []
     else:
-        return None
+        patterns = []
+    
+    # 照合レポート用の情報を収集
+    report = {
+        'material_name': material_name,
+        'material_name_normalized': material_name_normalized,
+        'kind': kind,
+        'candidates': patterns,
+        'matched_candidate': None,
+        'matched_filename': None,
+        'available_files': list(image_files_dict.keys()),  # ZIP内の利用可能なファイル名
+    }
+    
+    if not patterns:
+        return None, report
     
     # ZIP側のキーも正規化済みなので、そのまま比較
     # 大文字小文字を区別しない検索
@@ -165,19 +189,21 @@ def find_image_files(
     image_files_lower = {k.lower(): v for k, v in image_files_dict.items()}
     
     for pattern in patterns:
-        pattern_normalized = unicodedata.normalize('NFKC', pattern.strip())
+        pattern_normalized = normalize_text(pattern)
         pattern_lower = pattern_normalized.lower()
         if pattern_lower in image_files_lower:
             # 見つかった場合は、値のタプル(完全なファイル名, ファイルデータ)を返す
             full_filename, file_data = image_files_lower[pattern_lower]
-            return (full_filename, file_data)
+            report['matched_candidate'] = pattern_normalized
+            report['matched_filename'] = full_filename
+            return (full_filename, file_data), report
     
-    return None
+    return None, report
 
 
 def extract_zip_images(zip_file) -> Tuple[Dict[str, Tuple[str, bytes]], Dict[str, int]]:
     """
-    ZIPファイルから画像ファイルを展開（macOSメタファイルを除外）
+    ZIPファイルから画像ファイルを展開（macOSメタファイルを除外、Phase 7強化版）
     
     Args:
         zip_file: ZIPファイル（Streamlit UploadedFileまたはファイルパス）
@@ -185,9 +211,13 @@ def extract_zip_images(zip_file) -> Tuple[Dict[str, Tuple[str, bytes]], Dict[str
     Returns:
         ({正規化basename（拡張子除外）: (完全なファイル名, ファイルデータ)} の辞書, {統計情報})
         統計情報: {'zip_total': int, 'excluded': int, 'images_used': int}
+    
+    Phase 7 改善点:
+        - utils.normalize.should_exclude_zip_entry() を使用して除外判定
+        - utils.normalize.normalize_filename() を使用して正規化
+        - 0バイトファイルも除外
     """
     image_files = {}
-    allowed_extensions = {'.jpg', '.jpeg', '.png', '.webp'}
     
     zip_total = 0
     excluded = 0
@@ -212,28 +242,21 @@ def extract_zip_images(zip_file) -> Tuple[Dict[str, Tuple[str, bytes]], Dict[str
                     excluded += 1
                     continue
                 
-                # macOSメタファイルを除外
-                file_path = Path(file_info)
-                basename = file_path.name
+                # ZIPエントリ情報を取得
+                try:
+                    zip_entry_info = zf.getinfo(file_info)
+                    file_size = zip_entry_info.file_size
+                except KeyError:
+                    file_size = 0
                 
-                # __MACOSX/ を含むパスは除外
-                if '__MACOSX/' in file_info or '__MACOSX\\' in file_info:
+                # Phase 7: utils.normalize.should_exclude_zip_entry() で除外判定
+                # 0バイトファイルも除外（should_exclude_zip_entry内で処理）
+                if should_exclude_zip_entry(file_info, file_size):
                     excluded += 1
                     continue
                 
-                # ._ で始まるbasenameは除外
-                if basename.startswith('._'):
-                    excluded += 1
-                    continue
-                
-                # .DS_Store は除外
-                if basename == '.DS_Store':
-                    excluded += 1
-                    continue
-                
-                # 拡張子チェック（小文字化して判定）
-                suffix_lower = file_path.suffix.lower()
-                if suffix_lower not in allowed_extensions:
+                # Phase 7: utils.normalize.is_image_extension() で画像拡張子チェック
+                if not is_image_extension(file_info):
                     excluded += 1
                     continue
                 
@@ -242,18 +265,19 @@ def extract_zip_images(zip_file) -> Tuple[Dict[str, Tuple[str, bytes]], Dict[str
                     file_data = zf.read(file_info)
                     
                     # ZIP内の日本語ファイル名を復元（CP437→UTF-8変換を試す）
+                    file_path = Path(file_info)
                     file_name_raw = file_path.name
                     file_name_fixed = fix_zip_filename(file_name_raw)
                     
-                    # ファイル名を正規化（NFKC、前後空白除去）
-                    file_name_normalized = unicodedata.normalize('NFKC', file_name_fixed).strip()
-                    
-                    # 拡張子を除去してbasenameを取得（照合用キー）
-                    basename_without_ext = Path(file_name_normalized).stem
-                    extension = file_path.suffix.lower()
+                    # Phase 7: utils.normalize.normalize_filename() を使用して正規化
+                    basename_without_ext = normalize_filename(file_name_fixed)
                     
                     # 正規化済みのbasename（拡張子除外）をキーとして使用
                     # 値は(完全なファイル名, ファイルデータ)のタプル
+                    # 完全なファイル名は正規化済みのbasename + 拡張子
+                    extension = file_path.suffix.lower()
+                    file_name_normalized = f"{basename_without_ext}{extension}"
+                    
                     image_files[basename_without_ext] = (file_name_normalized, file_data)
                     images_used += 1
                 except Exception as e:
@@ -274,46 +298,8 @@ def extract_zip_images(zip_file) -> Tuple[Dict[str, Tuple[str, bytes]], Dict[str
     return image_files, stats
 
 
-def _apply_not_null_defaults(material: Material) -> None:
-    """
-    NOT NULL列にデフォルト値を設定（値が無い場合のみ）
-    
-    Args:
-        material: Materialオブジェクト
-    """
-    # NOT NULL列のデフォルト値マップ
-    defaults = {
-        'origin_type': '不明',
-        'origin_detail': '不明',
-        'transparency': '不明',
-        'hardness_qualitative': '不明',
-        'weight_qualitative': '不明',
-        'water_resistance': '不明',
-        'heat_resistance_range': '不明',
-        'weather_resistance': '不明',
-        'procurement_status': '不明',
-        'cost_level': '不明',
-        'visibility': '非公開（管理者のみ）',
-        'is_deleted': 0,
-    }
-    
-    # 各フィールドに対して、値が無い場合のみデフォルトを設定
-    for field, default_value in defaults.items():
-        if hasattr(material, field):
-            current_value = getattr(material, field)
-            # None、空文字列、または未設定の場合のみデフォルトを設定
-            if current_value is None or (isinstance(current_value, str) and not current_value.strip()):
-                setattr(material, field, default_value)
-    
-    # is_publishedはvisibilityから決定（既存ロジック）
-    visibility = getattr(material, 'visibility', '')
-    if visibility in ["公開", "公開（誰でも閲覧可）"]:
-        material.is_published = 1
-    elif visibility in ["非公開", "非公開（管理者のみ）"]:
-        material.is_published = 0
-    else:
-        # デフォルトは非公開（安全側に倒す）
-        material.is_published = 0
+# Phase 4: 旧関数は削除済み（utils/material_defaults.py に集約）
+# 補完ロジックは utils.material_defaults.apply_material_defaults() のみを使用
 
 
 def validate_csv_row(row: Dict[str, str], row_num: int) -> Tuple[bool, List[str]]:
@@ -460,7 +446,8 @@ def create_or_update_material(
     # フィールドを設定（JSON配列フィールドはJSON文字列に変換）
     json_fields = [
         'name_aliases', 'material_forms', 'color_tags', 'processing_methods',
-        'use_environment', 'use_categories', 'safety_tags', 'question_templates', 'main_elements'
+        # 'use_environment',  # 一時的にコメントアウト（DBにカラムが存在しない）
+        'use_categories', 'safety_tags', 'question_templates', 'main_elements'
     ]
     
     # フィールドを設定（存在するキーのみ、値が空でない場合のみ）
@@ -508,8 +495,19 @@ def create_or_update_material(
         # 文字列フィールド
         setattr(material, key, value_str)
     
-    # NOT NULL列のデフォルト値補完（値が無い場合のみ設定）
-    _apply_not_null_defaults(material)
+    # Phase 4: NOT NULL列のデフォルト値補完（flush前）
+    # rowを補完してからMaterialオブジェクトに設定
+    from utils.material_defaults import apply_material_defaults
+    row = apply_material_defaults(row)
+    
+    # 補完済みのrowをMaterialオブジェクトに設定（まだ設定されていないフィールドのみ）
+    for field, value in row.items():
+        if hasattr(material, field):
+            current_value = getattr(material, field)
+            # 値が無い場合のみ補完済みの値を設定
+            if current_value is None or (isinstance(current_value, str) and not current_value.strip()):
+                if value is not None:
+                    setattr(material, field, value)
     
     # search_textを生成
     try:
@@ -629,8 +627,10 @@ def process_bulk_import(
             
             # 画像を検索してアップロード
             material_name = material.name_official
+            match_reports = []  # Phase 7: 照合レポートを収集
             for kind in ['primary', 'space', 'product']:
-                image_match = find_image_files(material_name, image_files_dict, kind)
+                image_match, match_report = find_image_files(material_name, image_files_dict, kind)
+                match_reports.append(match_report)  # Phase 7: 照合レポートを保存
                 if image_match:
                     file_name, image_data = image_match
                     
@@ -654,8 +654,12 @@ def process_bulk_import(
                         result['images'].append({
                             'kind': kind,
                             'file_name': file_name,
-                            'public_url': r2_result['public_url']
+                            'public_url': r2_result['public_url'],
+                            'match_report': match_report  # Phase 7: 照合レポートを含める
                         })
+            
+            # Phase 7: 照合レポートを結果に含める
+            result['match_reports'] = match_reports
             
             result['status'] = 'success'
         
@@ -716,7 +720,7 @@ def create_bulk_submissions(
             material_name = row.get('name_official', '').strip()
             images_info = []
             for kind in ['primary', 'space', 'product']:
-                image_match = find_image_files(material_name, image_files_dict, kind)
+                image_match, match_report = find_image_files(material_name, image_files_dict, kind)
                 if image_match:
                     file_name, image_data = image_match
                     # 画像データをbase64エンコードして保存（承認時にデコードしてアップロード）
@@ -725,7 +729,8 @@ def create_bulk_submissions(
                     images_info.append({
                         'kind': kind,
                         'file_name': file_name,
-                        'data_base64': image_base64  # base64エンコードされた画像データ
+                        'data_base64': image_base64,  # base64エンコードされた画像データ
+                        'match_report': match_report  # Phase 7: 照合レポートを保存
                     })
             
             # MaterialSubmissionを作成

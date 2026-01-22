@@ -149,6 +149,13 @@ def generate_search_text(material: Material) -> str:
         if uses:
             parts.extend([str(u) for u in uses if u])
     
+    # 使用環境 - 一時的にコメントアウト（DBにカラムが存在しない）
+    # use_environment = safe_get("use_environment")
+    # if use_environment:
+    #     environments = safe_json_parse(use_environment)
+    #     if environments:
+    #         parts.extend([str(e) for e in environments if e])
+    
     use_other = safe_get("use_other")
     if use_other:
         parts.append(str(use_other))
@@ -210,6 +217,15 @@ def normalize_filters(filters: Optional[dict]) -> dict:
             if valid_uses:
                 normalized['use_categories'] = valid_uses
     
+    # use_environment（リスト）- 一時的にコメントアウト（DBにカラムが存在しない）
+    # if 'use_environment' in filters:
+    #     use_environment = filters['use_environment']
+    #     if use_environment and isinstance(use_environment, list):
+    #         # 空でない、有効な値のみをフィルタ
+    #         valid_envs = [e for e in use_environment if e and str(e).strip() and str(e) not in placeholder_values]
+    #         if valid_envs:
+    #             normalized['use_environment'] = valid_envs
+    
     # 単一値フィルタ（transparency, weather_resistance, water_resistance, equipment_level, cost_level）
     single_value_keys = ['transparency', 'weather_resistance', 'water_resistance', 'equipment_level', 'cost_level']
     for key in single_value_keys:
@@ -236,7 +252,8 @@ def search_materials_fulltext(
         db: データベースセッション
         query: 検索クエリ（自然言語、空文字列の場合はフィルタのみ）
         filters: フィルタ辞書 {
-            'use_categories': List[str],  # 用途
+            # 'use_environment': List[str],  # 使用環境 - 一時的にコメントアウト（DBにカラムが存在しない）
+            'use_categories': List[str],  # 用途カテゴリ
             'transparency': str,  # 透明性
             'weather_resistance': str,  # 耐候性
             'water_resistance': str,  # 耐水性
@@ -267,6 +284,18 @@ def search_materials_fulltext(
         where_conditions.append(Material.is_published == 1)
     
     # フィルタ条件を追加
+    # use_environment - 一時的にコメントアウト（DBにカラムが存在しない）
+    # if filters.get('use_environment'):
+    #     # JSON配列に含まれるかチェック
+    #     env_conditions = []
+    #     for env in filters['use_environment']:
+    #         env_conditions.append(
+    #             Material.use_environment.contains(f'"{env}"')
+    #         )
+    #     if env_conditions:
+    #         from sqlalchemy import or_
+    #         where_conditions.append(or_(*env_conditions))
+    
     if filters.get('use_categories'):
         # JSON配列に含まれるかチェック
         use_conditions = []
@@ -589,7 +618,7 @@ def update_material_embedding(db: Session, material: Material) -> bool:
                 text("""
                     UPDATE material_embeddings
                     SET content_hash = :content_hash,
-                        embedding = :embedding::vector,
+                        embedding = CAST(:embedding AS vector),
                         updated_at = CURRENT_TIMESTAMP
                     WHERE material_id = :material_id
                 """),
@@ -603,7 +632,11 @@ def update_material_embedding(db: Session, material: Material) -> bool:
             db.execute(
                 text("""
                     INSERT INTO material_embeddings (material_id, content_hash, embedding, updated_at)
-                    VALUES (:material_id, :content_hash, :embedding::vector, CURRENT_TIMESTAMP)
+                    VALUES (:material_id, :content_hash, CAST(:embedding AS vector), CURRENT_TIMESTAMP)
+                    ON CONFLICT (material_id) DO UPDATE
+                    SET content_hash = EXCLUDED.content_hash,
+                        embedding = CAST(EXCLUDED.embedding AS vector),
+                        updated_at = CURRENT_TIMESTAMP
                 """),
                 {
                     "material_id": material.id,
@@ -705,7 +738,8 @@ def search_materials_hybrid(
         db: データベースセッション
         query: 検索クエリ（自然言語、空文字列の場合はフィルタのみ）
         filters: フィルタ辞書 {
-            'use_categories': List[str],  # 用途
+            # 'use_environment': List[str],  # 使用環境 - 一時的にコメントアウト（DBにカラムが存在しない）
+            'use_categories': List[str],  # 用途カテゴリ
             'transparency': str,  # 透明性
             'weather_resistance': str,  # 耐候性
             'water_resistance': str,  # 耐水性
@@ -750,6 +784,17 @@ def search_materials_hybrid(
         where_conditions.append(Material.is_published == 1)
     
     # フィルタ条件を追加
+    # use_environment - 一時的にコメントアウト（DBにカラムが存在しない）
+    # if filters.get('use_environment'):
+    #     from sqlalchemy import or_
+    #     env_conditions = []
+    #     for env in filters['use_environment']:
+    #         env_conditions.append(
+    #             Material.use_environment.contains(f'"{env}"')
+    #         )
+    #     if env_conditions:
+    #         where_conditions.append(or_(*env_conditions))
+    
     if filters.get('use_categories'):
         from sqlalchemy import or_
         use_conditions = []
@@ -804,6 +849,15 @@ def search_materials_hybrid(
             where_parts.append("m.is_published = 1")
         
         # フィルタ条件を追加（パラメータ化、:name形式）
+        # use_environment - 一時的にコメントアウト（DBにカラムが存在しない）
+        # if filters.get('use_environment'):
+        #     env_conditions = []
+        #     for i, env in enumerate(filters['use_environment']):
+        #         param_name = f"use_env_{i}"
+        #         env_conditions.append(f"m.use_environment LIKE :{param_name}")
+        #         params[param_name] = f'%"{env}"%'
+        #     where_parts.append(f"({' OR '.join(env_conditions)})")
+        
         if filters.get('use_categories'):
             use_conditions = []
             for i, uc in enumerate(filters['use_categories']):
@@ -945,6 +999,15 @@ def search_materials_hybrid(
                         ilike_where_parts.append("m.is_published = 1")
                     
                     # フィルタ条件を追加
+                    # use_environment - 一時的にコメントアウト（DBにカラムが存在しない）
+                    # if filters.get('use_environment'):
+                    #     env_conditions = []
+                    #     for i, env in enumerate(filters['use_environment']):
+                    #         param_name = f"use_env_{i}"
+                    #         env_conditions.append(f"m.use_environment LIKE :{param_name}")
+                    #         ilike_params[param_name] = f'%"{env}"%'
+                    #     ilike_where_parts.append(f"({' OR '.join(env_conditions)})")
+                    
                     if filters.get('use_categories'):
                         use_conditions = []
                         for i, uc in enumerate(filters['use_categories']):
