@@ -1846,10 +1846,13 @@ def render_debug_sidebar_early():
 
 def _handle_material_registration():
     """
-    材料登録ページのハンドラー
+    材料登録ページのハンドラー（後方互換性のため残す）
     
     編集対象IDは st.session_state.get("edit_material_id") から取得し、
     show_detailed_material_form(material_id=その値) を呼ぶ。Noneなら新規登録。
+    
+    注意: この関数は後方互換性のため残していますが、
+    新しいコードでは pages.registration_page.render() を使用してください。
     """
     # 関数内importで循環を避ける（import は関数内に維持）
     import streamlit as st
@@ -1862,6 +1865,17 @@ def _handle_material_registration():
     show_detailed_material_form(material_id=edit_material_id)
 
 
+def _handle_approval_queue(is_admin: bool = False):
+    """
+    承認待ち一覧ページのハンドラー（後方互換性のため残す）
+    
+    注意: この関数は後方互換性のため残していますが、
+    新しいコードでは pages.approval_page.render() を使用してください。
+    """
+    from features.approval import show_approval_queue
+    return show_approval_queue()
+
+
 def main():
     # 実行順序の安全策: is_debug_flag が存在することを確認
     if "is_debug_flag" not in globals() or not callable(globals().get("is_debug_flag")):
@@ -1869,6 +1883,15 @@ def main():
         st.warning("⚠️ is_debug_flag is not available. Using fallback.")
         # fallback を定義
         globals()["is_debug_flag"] = is_debug
+    
+    # セッション状態のデフォルト値を設定（最初に実行）
+    try:
+        from core.state import ensure_state_defaults
+        ensure_state_defaults()
+    except Exception as e:
+        # 初期化失敗時も続行（後でエラーが表示される）
+        if is_debug_flag():
+            st.warning(f"ensure_state_defaults() failed: {e}")
     
     # パフォーマンス計測（DEBUG=1のみ）
     import time
@@ -2390,6 +2413,30 @@ def main():
     include_deleted = st.session_state.get("include_deleted", False) if is_admin else False
     
     # ページルーティング
+    # まず、routesから取得を試みる（pages配下のページ）
+    try:
+        from core.router import get_routes
+        routes = get_routes()
+        
+        # routesに存在する場合は、そのhandlerを実行
+        if page in routes:
+            try:
+                routes[page]()
+                return
+            except Exception as e:
+                # ページレンダリング時の例外を捕捉
+                st.error(f"❌ ページ '{page}' のレンダリング中にエラーが発生しました")
+                st.exception(e)
+                import traceback
+                with st.expander("🔍 エラー詳細", expanded=False):
+                    st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
+                return
+    except Exception as e:
+        # routes取得失敗時は従来のルーティングにフォールバック
+        if is_debug_flag():
+            st.warning(f"get_routes() failed, using fallback routing: {e}")
+    
+    # 従来のルーティング（後方互換性のため残す）
     if page == "ホーム":
         show_home()
     elif page == "材料一覧":
@@ -4049,268 +4096,8 @@ def _render_material_search_card(material, idx: int, search_query: str, image_ur
 
 def show_approval_queue():
     """承認待ち一覧ページ（管理者のみ）"""
-    # パフォーマンス計測（DEBUG=1のみ）
-    import time
-    # is_debug 関数を呼ぶ前に、ローカル変数名を debug_enabled に変更（シャドーイング回避）
-    debug_enabled = is_debug_flag()
-    t0 = time.perf_counter() if debug_enabled else None
-    
-    debug_enabled = os.getenv("DEBUG", "0") == "1"
-    st.markdown(render_site_header(debug=debug_enabled), unsafe_allow_html=True)
-    st.markdown('<h2 class="section-title">📋 承認待ち一覧</h2>', unsafe_allow_html=True)
-    
-    from utils.db import get_session
-    with get_session() as db:
-        # フィルタ：rejectedも表示するか
-        # 初期化はwidget作成前にのみ行う
-        if "approval_show_rejected" not in st.session_state:
-            st.session_state["approval_show_rejected"] = False
-        
-        show_rejected = st.checkbox(
-            "却下済みも表示",
-            key="approval_show_rejected"
-        )
-        
-        # 検索：name_official部分一致
-        # 初期化はwidget作成前にのみ行う
-        if "approval_search" not in st.session_state:
-            st.session_state["approval_search"] = ""
-        
-        search_query = st.text_input(
-            "材料名で検索（部分一致）",
-            key="approval_search"
-        )
-        
-        # ステータスフィルタ
-        if show_rejected:
-            status_filter = ["pending", "rejected"]
-        else:
-            status_filter = ["pending"]
-        
-        # submissionsを取得（新しい順）
-        query = db.query(MaterialSubmission).filter(
-            MaterialSubmission.status.in_(status_filter)
-        )
-        
-        # 検索フィルタ
-        if search_query and search_query.strip():
-            # payload_jsonにname_officialが含まれるものを検索
-            # SQLiteではJSON検索が難しいので、全件取得してフィルタ
-            all_submissions = query.order_by(MaterialSubmission.created_at.desc()).all()
-            filtered_submissions = []
-            for sub in all_submissions:
-                try:
-                    payload = json.loads(sub.payload_json)
-                    name_official = payload.get('name_official', '')
-                    if search_query.lower() in name_official.lower():
-                        filtered_submissions.append(sub)
-                except:
-                    pass
-            submissions = filtered_submissions
-        else:
-            submissions = query.order_by(MaterialSubmission.created_at.desc()).all()
-        
-        # ステータス別の件数表示
-        pending_count = len([s for s in submissions if s.status == "pending"])
-        rejected_count = len([s for s in submissions if s.status == "rejected"])
-        approved_count = len([s for s in submissions if s.status == "approved"])
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("承認待ち", pending_count)
-        with col2:
-            st.metric("却下済み", rejected_count)
-        with col3:
-            st.metric("承認済み", approved_count)
-        
-        if not submissions:
-            st.info("✅ 該当する投稿はありません。")
-            return
-        
-        for submission in submissions:
-            # ステータスに応じたアイコンと色
-            status_icon = {
-                "pending": "⏳",
-                "approved": "✅",
-                "rejected": "❌"
-            }.get(submission.status, "📄")
-            
-            status_color = {
-                "pending": "#FFA500",
-                "approved": "#28A745",
-                "rejected": "#DC3545"
-            }.get(submission.status, "#666")
-            
-            with st.expander(
-                f"{status_icon} {submission.created_at.strftime('%Y-%m-%d %H:%M')} - {submission.submitted_by or '匿名'} - {submission.status}",
-                expanded=False
-            ):
-                # payload_jsonをパースして表示
-                try:
-                    payload = json.loads(submission.payload_json)
-                    st.markdown("### 投稿内容")
-                    
-                    # 主要フィールドを表示
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.write(f"**材料名（正式）**: {payload.get('name_official', 'N/A')}")
-                        st.write(f"**カテゴリ**: {payload.get('category_main', 'N/A')}")
-                        st.write(f"**供給元**: {payload.get('supplier_org', 'N/A')}")
-                    with col2:
-                        st.write(f"**投稿者**: {submission.submitted_by or '匿名'}")
-                        st.write(f"**投稿日時**: {submission.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
-                        st.markdown(f"**ステータス**: <span style='color: {status_color}'>{submission.status}</span>", unsafe_allow_html=True)
-                        if submission.approved_material_id:
-                            st.write(f"**承認済み材料ID**: {submission.approved_material_id}")
-                    
-                    # editor_noteを表示・編集
-                    st.markdown("---")
-                    st.markdown("### 編集者メモ")
-                    editor_note_key = f"editor_note_edit_{submission.id}"
-                    editor_note_value = st.text_area(
-                        "編集者メモ（いつでも編集可能）",
-                        value=submission.editor_note or "",
-                        key=editor_note_key,
-                        placeholder="編集者メモを入力・編集できます"
-                    )
-                    if st.button("💾 メモを保存", key=f"save_note_{submission.id}"):
-                        from utils.db import session_scope
-                        with session_scope() as db_note:
-                            db_submission = db_note.query(MaterialSubmission).filter(MaterialSubmission.id == submission.id).first()
-                            if db_submission:
-                                db_submission.editor_note = editor_note_value.strip() if editor_note_value.strip() else None
-                                # commitはsession_scopeが自動実行
-                        st.success("✅ メモを保存しました")
-                        st.rerun()
-                        # 例外時はsession_scopeが自動rollback
-                    
-                    # 却下理由を表示（rejectedの場合）
-                    if submission.status == "rejected" and submission.reject_reason:
-                        st.markdown("---")
-                        st.markdown("### 却下理由")
-                        st.warning(submission.reject_reason)
-                    
-                    # 差分表示（既存materialsとの比較）
-                    st.markdown("---")
-                    st.markdown("### 差分表示（既存材料との比較）")
-                    from utils.db import get_session
-                    with get_session() as db_diff:
-                        existing_material = db_diff.query(Material).filter(
-                        Material.name_official == payload.get('name_official')
-                    ).first()
-                    
-                    if existing_material:
-                        diff = calculate_submission_diff(existing_material, payload)
-                        if diff:
-                            with st.expander("📊 変更された項目", expanded=True):
-                                for key, (old_val, new_val) in diff.items():
-                                    st.markdown(f"**{key}**:")
-                                    st.markdown(f"- 既存: `{old_val}`")
-                                    st.markdown(f"- 新規: `{new_val}`")
-                                    st.markdown("---")
-                        else:
-                            st.info("既存材料と差分はありません（新規登録または同一内容）")
-                    else:
-                        st.info("既存材料が見つかりません（新規登録）")
-                    
-                    # アップロードされた画像のプレビュー
-                    uploaded_images = payload.get('uploaded_images', [])
-                    if uploaded_images:
-                        st.markdown("---")
-                        st.markdown("### 📷 アップロードされた画像")
-                        for img_info in uploaded_images:
-                            kind = img_info.get('kind', 'primary')
-                            public_url = img_info.get('public_url')
-                            if public_url:
-                                st.markdown(f"**{kind}画像:**")
-                                st.image(public_url, caption=f"{kind}画像", use_container_width=True)
-                                st.caption(f"URL: {public_url}")
-                    
-                    # プレビュー（簡易表示）
-                    st.markdown("---")
-                    st.markdown("### プレビュー（全データ）")
-                    with st.expander("JSONデータ", expanded=False):
-                        st.json(payload)
-                    
-                    # アクション（ステータスに応じて表示）
-                    st.markdown("---")
-                    st.markdown("### アクション")
-                    
-                    if submission.status == "pending":
-                        # 承認モード選択（新規作成 or 既存更新）
-                        approval_mode_key = f"approval_mode_{submission.id}"
-                        approval_mode = st.radio(
-                            "承認モード",
-                            ["既存へ反映（同名素材がある場合）", "新規作成"],
-                            index=0,  # デフォルトは「既存へ反映」
-                            key=approval_mode_key,
-                            help="同名の材料が既に存在する場合の動作を選択します"
-                        )
-                        update_existing = (approval_mode == "既存へ反映（同名素材がある場合）")
-                        
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            if st.button("✅ 承認", key=f"approve_{submission.id}", type="primary"):
-                                result = approve_submission(submission.id, editor_note=submission.editor_note, update_existing=update_existing, db=None)
-                                if result.get("ok"):
-                                    st.success("✅ 承認しました！（非公開状態で保存されました）")
-                                    st.info("💡 承認後、材料一覧で公開トグルをONにしてください。")
-                                    if result.get("image_warning"):
-                                        st.warning(f"⚠️ {result['image_warning']}")
-                                    st.cache_data.clear()  # キャッシュをクリア
-                                    st.rerun()
-                                else:
-                                    error_msg = result.get('error', '不明なエラー')
-                                    st.error(f"❌ エラー: {error_msg}")
-                                    # name_official が空の場合は特別なメッセージを表示
-                                    if result.get("error_code") == "name_official_empty":
-                                        st.info("💡 投稿内容を編集して材料名（正式）を埋めてから再度承認してください。")
-                                    if result.get("traceback"):
-                                        with st.expander("🔍 エラー詳細", expanded=False):
-                                            st.code(result["traceback"], language="python")
-                        
-                        with col2:
-                            reject_reason_key = f"reject_reason_{submission.id}"
-                            reject_reason = st.text_input(
-                                "却下理由（任意）",
-                                key=reject_reason_key,
-                                placeholder="却下理由を入力してください"
-                            )
-                            if st.button("❌ 却下", key=f"reject_{submission.id}"):
-                                result = reject_submission(submission.id, reject_reason, db=None)
-                                if result.get("ok"):
-                                    st.success("❌ 却下しました。")
-                                    st.cache_data.clear()  # キャッシュをクリア
-                                    st.rerun()
-                                else:
-                                    st.error(f"❌ エラー: {result.get('error', '不明なエラー')}")
-                    
-                    elif submission.status == "rejected":
-                        if st.button("🔄 再審査（pendingに戻す）", key=f"reopen_{submission.id}", type="primary"):
-                            result = reopen_submission(submission.id, db=None)
-                            if result.get("ok"):
-                                st.success("🔄 再審査に戻しました。")
-                                st.cache_data.clear()
-                                st.rerun()
-                            else:
-                                st.error(f"❌ エラー: {result.get('error', '不明なエラー')}")
-                    
-                    elif submission.status == "approved":
-                        if submission.approved_material_id:
-                            from utils.db import get_session
-                            with get_session() as db_approved:
-                                material = db_approved.query(Material).filter(Material.id == submission.approved_material_id).first()
-                            if material:
-                                st.info(f"✅ 承認済み材料: {material.name_official} (ID: {material.id})")
-                                st.info(f"📢 公開状態: {'公開' if material.is_published == 1 else '非公開'}")
-                                if st.button("📝 材料詳細を見る", key=f"view_material_{submission.id}"):
-                                    st.session_state.selected_material_id = material.id
-                                    st.session_state.page = "材料一覧"
-                                    st.rerun()
-                except json.JSONDecodeError as e:
-                    st.error(f"❌ payload_jsonのパースに失敗しました: {e}")
-                    st.code(submission.payload_json)
+    from features.approval import show_approval_queue as _impl
+    return _impl()
     
 
 # ===== Phase 3: 承認フローのTx分離固定 =====
@@ -4712,201 +4499,17 @@ def approve_submission(submission_id: int, editor_note: str = None, update_exist
         - Tx2: images upsert（失敗しても rollback、全体は落とさない）
         - Tx3: submissions更新（commit）
     """
-    import traceback as tb
-    
-    # Phase 3: セッション管理を統一APIに移行（Tx1は関数化済み、Tx2以降は後で関数化）
-    material_id = None
-    image_upsert_error = None
-    
-    try:
-        # ===== Tx1前処理: submission取得とpayloadパース =====
-        from utils.db import get_session
-        with get_session() as db_pre:
-            submission = db_pre.query(MaterialSubmission).filter(
-                MaterialSubmission.id == submission_id
-            ).first()
-            
-            if not submission:
-                return {"ok": False, "error": "Submission not found"}
-            
-            if submission.status != "pending":
-                return {"ok": False, "error": f"Submission is not pending (status: {submission.status})"}
-            
-            # payload_jsonを必ずdictにする（失敗時は uploaded_images=[] として警告、承認は継続）
-            payload_dict = None
-            uploaded_images_fallback = []
-            
-            if isinstance(submission.payload_json, dict):
-                payload_dict = submission.payload_json
-            elif isinstance(submission.payload_json, str):
-                try:
-                    payload_dict = json.loads(submission.payload_json)
-                except json.JSONDecodeError as e:
-                    logger.warning(f"[APPROVE] Failed to parse payload_json (str): {e}, using empty dict and uploaded_images=[]")
-                    logger.exception(f"[APPROVE] payload_json parse error details")
-                    payload_dict = {}  # 空dictとして継続
-                    uploaded_images_fallback = []  # uploaded_images は空として扱う
-            else:
-                logger.warning(f"[APPROVE] payload_json is neither dict nor str: type={type(submission.payload_json)}, using empty dict")
-                payload_dict = {}  # 空dictとして継続
-                uploaded_images_fallback = []  # uploaded_images は空として扱う
-            
-            if not payload_dict:
-                logger.warning(f"[APPROVE] payload_dict is None or empty, using empty dict")
-                payload_dict = {}
-            
-            form_data = payload_dict
-        
-        # 必須フィールドの補完
-        form_data = _normalize_required(form_data, existing=None)
-        
-        # name_official の必須チェック（UNIQUE制約衝突防止）
-        name_official = form_data.get("name_official")
-        if name_official is None or str(name_official).strip() == "":
-            error_msg = "材料名（正式）が空です。承認できません。投稿内容を編集して埋めてください。"
-            logger.warning(f"[APPROVE] name_official is empty for submission_id={submission_id}")
-            return {
-                "ok": False,
-                "error": error_msg,
-                "error_code": "name_official_empty",
-            }
-        
-        # ===== Tx1: materialsテーブルに新規作成 or 既存更新（commit） =====
-        # Phase 3: Tx1を関数化して副作用を排除
-        material_id = None
-        action = None
-        
+    from features.approval_actions import approve_submission as _impl
+    # editor_note が None の場合は空文字列に変換（approval_actions のシグネチャに合わせる）
+    editor_note_str = editor_note if editor_note is not None else ""
+    result = _impl(submission_id, editor_note=editor_note_str, update_existing=update_existing, db=db)
+    # キャッシュクリアは呼び出し元で行う（UI依存のため）
+    if result.get("ok"):
         try:
-            material_id, action = _tx1_upsert_material_core(submission, form_data, update_existing)
-            
-        except ValueError as ve:
-            # バリデーションエラー（name_official空、重複など）
-            logger.warning(f"[APPROVE] Tx1 validation error: {ve}")
-            return {
-                "ok": False,
-                "error": str(ve),
-                "error_code": "tx1_validation_error",
-            }
-        except Exception as e:
-            # Tx1失敗時は即return（Tx2以降へ進まない）
-            logger.exception(f"[APPROVE] Tx1 failed (materials upsert): {e}")
-            error_msg = f"Tx1 failed: {e}"
-            if is_debug():
-                error_msg += f"\n\nTraceback:\n{tb.format_exc()}"
-            return {
-                "ok": False,
-                "error": error_msg,
-                "traceback": tb.format_exc() if is_debug() else None,
-            }
-        
-        # Tx1成功後、material_idの存在確認（別セッションで、commit成功後）
-        # Phase 3: 統一APIを使用
-        if not material_id:
-            logger.error(f"[APPROVE] material_id is None after Tx1, cannot proceed")
-            return {
-                "ok": False,
-                "error": "material_id is None after Tx1. Material creation may have failed.",
-                "error_code": "material_id_none_after_tx1",
-            }
-        
-        from utils.db import get_session
-        from sqlalchemy import select
-        try:
-            with get_session() as db_check:
-                check_stmt = select(Material.id).where(Material.id == material_id).limit(1)
-                material_exists = db_check.execute(check_stmt).scalar_one_or_none()
-                if not material_exists:
-                    logger.error(f"[APPROVE] Material {material_id} does not exist after Tx1 commit (unexpected)")
-                    return {
-                        "ok": False,
-                        "error": f"Material {material_id} does not exist after commit. This is unexpected - please check database state.",
-                        "error_code": "material_not_found_after_commit",
-                    }
-                logger.info(f"[APPROVE] Verified material_id={material_id} exists after Tx1 commit")
-        except Exception as check_error:
-            # 存在確認の失敗は警告のみ（commit成功しているので、通常は問題ない）
-            logger.warning(f"[APPROVE] Failed to verify material_id={material_id} existence after commit: {check_error}")
-            # 確認失敗でも続行（commit成功しているので）
-        
-        # ===== TxSub: submissionを更新（必須Tx、失敗時は承認全体を失敗扱い） =====
-        # Phase 3: TxSubを独立関数化、Tx1成功後・material存在確認後に実行
-        try:
-            _txsub_mark_submission_approved(submission_id, material_id, editor_note)
-        except Exception as e:
-            logger.exception(f"[APPROVE] TxSub failed (submission update): {e}")
-            # TxSub失敗時は承認全体を失敗扱い（status更新ができないのは整合性のため致命）
-            return {
-                "ok": False,
-                "error": f"Failed to update submission status: {e}",
-                "traceback": tb.format_exc() if is_debug() else None,
-            }
-        
-        # ===== Tx2/TxProps/TxEmb: 副作用Tx（失敗しても承認は継続） =====
-        # Phase 3: これらは任意Tx（失敗しても承認は成功）
-        
-        # Tx2: images upsert
-        uploaded_images = payload_dict.get("uploaded_images", uploaded_images_fallback)
-        if not isinstance(uploaded_images, list):
-            logger.warning(f"[APPROVE][Tx2] uploaded_images is not a list: type={type(uploaded_images)}, using empty list")
-            uploaded_images = []
-        
-        image_upsert_error = None
-        if material_id:
-            try:
-                _tx2_upsert_images(material_id, uploaded_images, payload_dict, submission_id=submission_id)
-            except Exception as e:
-                image_upsert_error = str(e)
-                logger.exception(f"[APPROVE] Tx2 failed (images upsert): {e}")
-                # 画像保存失敗は警告のみ（承認は成功させる）
-        
-        # TxProps: properties upsert
-        properties_list = form_data.get('properties', [])
-        if properties_list and material_id:
-            try:
-                _txprops_upsert_properties(material_id, properties_list, submission_id=submission_id)
-            except Exception as props_error:
-                logger.warning(f"[APPROVE] TxProps failed (properties upsert): {props_error}, continuing approval")
-        
-        # TxEmb: embedding upsert
-        if material_id:
-            try:
-                _txemb_update_embeddings(material_id)
-            except Exception as emb_error:
-                logger.warning(f"[APPROVE] TxEmb failed (embedding upsert): {emb_error}, continuing approval")
-                # embedding の upsert 失敗は警告のみ（承認は継続）
-        
-        # 成功（画像保存失敗があっても承認は成功）
-        # material_id は Tx1 で確定した値を使用（関数ローカル変数）
-        if not material_id:
-            logger.error(f"[APPROVE] material_id is None after Tx1")
-            return {
-                "ok": False,
-                "error": "material_id is None after material creation",
-                "traceback": tb.format_exc(),
-            }
-        
-        # 承認成功時にキャッシュをクリア（材料数カウント/材料一覧に即時反映）
-        clear_material_cache()
-        
-        result = {
-            "ok": True,
-            "material_id": material_id,  # Tx1 で確定した material.id
-            "action": action,
-            "uuid": material_uuid if 'material_uuid' in locals() else None,
-        }
-        
-        if image_upsert_error:
-            result["image_warning"] = f"画像保存に失敗しましたが、承認は完了しました: {image_upsert_error}"
-        
-        return result
-        
-    except Exception as e:
-        logger.exception(f"[APPROVE] Unexpected error: {e}")
-        return {
-            "ok": False,
-            "error": str(e),
-            "traceback": tb.format_exc(),
-        }
+            clear_material_cache()
+        except Exception:
+            pass  # キャッシュクリア失敗は無視
+    return result
 
 
 def calculate_submission_diff(existing_material: Material, payload: dict) -> dict:
@@ -4920,36 +4523,10 @@ def calculate_submission_diff(existing_material: Material, payload: dict) -> dic
     Returns:
         dict: {key: (old_value, new_value)} の形式で差分のみを返す
     """
-    diff = {}
-    
-    # 比較対象のフィールド（主要なもの）
-    compare_fields = [
-        'name_official', 'category_main', 'supplier_org', 'supplier_type',
-        'origin_type', 'origin_detail', 'transparency', 'hardness_qualitative',
-        'weight_qualitative', 'water_resistance', 'heat_resistance_range',
-        'weather_resistance', 'equipment_level', 'prototyping_difficulty',
-        'procurement_status', 'cost_level', 'visibility', 'is_published'
-    ]
-    
-    for field in compare_fields:
-        old_val = getattr(existing_material, field, None)
-        new_val = payload.get(field)
-        
-        # Noneや空文字列を正規化
-        if old_val is None:
-            old_val = ""
-        if new_val is None:
-            new_val = ""
-        if isinstance(old_val, str):
-            old_val = old_val.strip()
-        if isinstance(new_val, str):
-            new_val = new_val.strip()
-        
-        # 差分がある場合のみ追加
-        if old_val != new_val and new_val not in (None, ""):
-            diff[field] = (str(old_val), str(new_val))
-    
-    return diff
+    from features.approval_actions import calculate_submission_diff as _impl
+    # approval_actions のシグネチャは (submission, material=None) なので、引数を変換
+    # payload を submission として、existing_material を material として渡す
+    return _impl(payload, material=existing_material)
 
 
 def reopen_submission(submission_id: int, db=None):
@@ -4963,48 +4540,8 @@ def reopen_submission(submission_id: int, db=None):
     Returns:
         dict: {"ok": True/False, "error": str, "traceback": str}
     """
-    from utils.db import session_scope
-    
-    if db is None:
-        # 書き込み操作なのでsession_scopeを使用
-        with session_scope() as db:
-            # submissionを取得
-            submission = db.query(MaterialSubmission).filter(
-                MaterialSubmission.id == submission_id
-            ).first()
-            
-            if not submission:
-                return {"ok": False, "error": "Submission not found"}
-            
-            if submission.status != "rejected":
-                return {"ok": False, "error": f"Submission is not rejected (status: {submission.status})"}
-            
-            # pendingに戻す
-            submission.status = "pending"
-            submission.reject_reason = None  # 却下理由をクリア
-            
-            # commitはsession_scopeが自動実行
-            return {"ok": True}
-        # 例外時はsession_scopeが自動rollback
-    else:
-        # dbが渡された場合はそのまま使用（既存のトランザクション内で実行）
-        # submissionを取得
-        submission = db.query(MaterialSubmission).filter(
-            MaterialSubmission.id == submission_id
-        ).first()
-        
-        if not submission:
-            return {"ok": False, "error": "Submission not found"}
-        
-        if submission.status != "rejected":
-            return {"ok": False, "error": f"Submission is not rejected (status: {submission.status})"}
-        
-        # pendingに戻す
-        submission.status = "pending"
-        submission.reject_reason = None  # 却下理由をクリア
-        
-        # commitは呼び出し元の責務
-        return {"ok": True}
+    from features.approval_actions import reopen_submission as _impl
+    return _impl(submission_id, db=db)
 
 
 def reject_submission(submission_id: int, reject_reason: str = None, db=None):
@@ -5019,48 +4556,9 @@ def reject_submission(submission_id: int, reject_reason: str = None, db=None):
     Returns:
         dict: {"ok": True/False, "error": str, "traceback": str}
     """
-    from utils.db import session_scope
-    
-    if db is None:
-        # 書き込み操作なのでsession_scopeを使用
-        with session_scope() as db:
-            # submissionを取得
-            submission = db.query(MaterialSubmission).filter(
-                MaterialSubmission.id == submission_id
-            ).first()
-            
-            if not submission:
-                return {"ok": False, "error": "Submission not found"}
-            
-            if submission.status != "pending":
-                return {"ok": False, "error": f"Submission is not pending (status: {submission.status})"}
-            
-            # 却下処理
-            submission.status = "rejected"
-            submission.reject_reason = reject_reason if reject_reason and reject_reason.strip() else None
-            
-            # commitはsession_scopeが自動実行
-            return {"ok": True}
-        # 例外時はsession_scopeが自動rollback
-    else:
-        # dbが渡された場合はそのまま使用（既存のトランザクション内で実行）
-        # submissionを取得
-        submission = db.query(MaterialSubmission).filter(
-            MaterialSubmission.id == submission_id
-        ).first()
-        
-        if not submission:
-            return {"ok": False, "error": "Submission not found"}
-        
-        if submission.status != "pending":
-            return {"ok": False, "error": f"Submission is not pending (status: {submission.status})"}
-        
-        # 却下処理
-        submission.status = "rejected"
-        submission.reject_reason = reject_reason if reject_reason and reject_reason.strip() else None
-        
-        # commitは呼び出し元の責務
-        return {"ok": True}
+    from features.approval_actions import reject_submission as _impl
+    # approval_actions のシグネチャは (submission_id: int, reason: str = '', db=None) なので、引数名を変換
+    return _impl(submission_id, reject_reason=reject_reason, db=db)
 
 
 def show_bulk_import(embedded: bool = False):
