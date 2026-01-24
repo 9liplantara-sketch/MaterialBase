@@ -9,7 +9,7 @@ def approve_submission(submission_id: int, editor_note=None, update_existing: bo
     import traceback
     try:
         from utils.db import session_scope
-        from models import MaterialSubmission
+        from database import MaterialSubmission
         from core.approval_impl import (
             _tx1_upsert_material_core,
             _tx2_upsert_images,
