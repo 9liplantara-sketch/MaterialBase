@@ -208,11 +208,15 @@ def show_approval_queue():
                 with col1:
                     if st.button("✅ 承認", key=f"approve_{submission_id}", type="primary"):
                         import inspect
-                        st.caption(f"approve_submission module={getattr(approve_submission, '__module__', None)} file={getattr(approve_submission, '__code__', None).co_filename if getattr(approve_submission, '__code__', None) else None}")
-                        try:
-                            st.caption("approve_submission head=" + inspect.getsource(approve_submission).splitlines()[0])
-                        except Exception as e:
-                            st.caption(f"approve_submission source unavailable: {e}")
+                        with st.expander("DEBUG: approve_submission full source", expanded=False):
+                            st.write("module:", getattr(approve_submission, "__module__", None))
+                            st.write("file:", getattr(getattr(approve_submission, "__code__", None), "co_filename", None))
+                            st.write("firstlineno:", getattr(getattr(approve_submission, "__code__", None), "co_firstlineno", None))
+                            try:
+                                st.code(inspect.getsource(approve_submission), language="python")
+                            except Exception as e:
+                                st.write("source unavailable:", e)
+                        st.caption(f"DEBUG UI submission_id={submission_id} type={type(submission_id)}")
                         result = approve_submission(
                             submission_id,
                             editor_note=editor_note_value,
