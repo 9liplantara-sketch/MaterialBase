@@ -1900,7 +1900,8 @@ def main():
     # 起動順序を固定：Debug表示 → init_db() → その後に通常処理
     
     # 常時表示: 実行中のコミットSHA（反映確認用）
-    st.caption(f"RUNNING_SHA: {get_running_sha()}")
+    from features.approval_actions import APPROVAL_ACTIONS_VERSION
+    st.caption(f"RUNNING_SHA: {get_running_sha()} | APPROVAL_ACTIONS_VERSION: {APPROVAL_ACTIONS_VERSION}")
     
     # DEBUG判定とデバッグ情報表示
     if is_debug_flag():
