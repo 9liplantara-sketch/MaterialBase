@@ -112,7 +112,7 @@ def show_approval_queue():
         }.get(getattr(submission, "status", "pending"), "#666")
         
         # モックデータ用の表示
-        submission_id = getattr(submission, "id", 0)
+        submission_id = submission.id
         created_at_obj = getattr(submission, "created_at", None)
         if created_at_obj:
             if hasattr(created_at_obj, "strftime"):
