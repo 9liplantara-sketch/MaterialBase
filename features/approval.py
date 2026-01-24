@@ -207,21 +207,37 @@ def show_approval_queue():
                 
                 with col1:
                     if st.button("✅ 承認", key=f"approve_{submission_id}", type="primary"):
-                        result = approve_submission(submission_id, editor_note=editor_note_value, update_existing=update_existing, db=None)
+                        import inspect
+                        st.caption(f"approve_submission module={getattr(approve_submission, '__module__', None)} file={getattr(approve_submission, '__code__', None).co_filename if getattr(approve_submission, '__code__', None) else None}")
+                        try:
+                            st.caption("approve_submission head=" + inspect.getsource(approve_submission).splitlines()[0])
+                        except Exception as e:
+                            st.caption(f"approve_submission source unavailable: {e}")
+                        result = approve_submission(
+                            submission_id,
+                            editor_note=editor_note_value,
+                            update_existing=update_existing,
+                            db=None,
+                        )
+
+                        if result is None:
+                            st.error("❌ approve_submission() が None を返しました（想定外）")
+                            st.stop()
+
+                        if not isinstance(result, dict):
+                            st.error(f"❌ approve_submission() returned non-dict: {repr(result)}")
+                            st.stop()
+
                         if result.get("ok"):
                             st.success("✅ 承認しました！（非公開状態で保存されました）")
                             st.info("💡 承認後、材料一覧で公開トグルをONにしてください。")
                             if result.get("image_warning"):
                                 st.warning(f"⚠️ {result['image_warning']}")
-                            st.cache_data.clear()  # キャッシュをクリア
+                            st.cache_data.clear()
                             st.rerun()
                         else:
-                            error_msg = result.get('error', '不明なエラー')
+                            error_msg = result.get("error", "不明なエラー")
                             st.error(f"❌ エラー: {error_msg}")
-                            # name_official が空の場合は特別なメッセージを表示
-                            if result.get("error_code") == "name_official_empty":
-                                st.info("💡 投稿内容を編集して材料名（正式）を埋めてから再度承認してください。")
-                            # DEBUG時は traceback を表示
                             if result.get("traceback"):
                                 with st.expander("🔍 エラー詳細", expanded=False):
                                     st.code(result["traceback"], language="python")
@@ -234,30 +250,48 @@ def show_approval_queue():
                         placeholder="却下理由を入力してください"
                     )
                     if st.button("❌ 却下", key=f"reject_{submission_id}"):
+                        st.caption(f"reject_submission module={getattr(reject_submission, '__module__', None)} file={getattr(reject_submission, '__code__', None).co_filename if getattr(reject_submission, '__code__', None) else None}")
                         result = reject_submission(submission_id, reject_reason=reject_reason, db=None)
+
+                        if result is None:
+                            st.error("❌ reject_submission() が None を返しました（想定外）")
+                            st.stop()
+
+                        if not isinstance(result, dict):
+                            st.error(f"❌ reject_submission() returned non-dict: {repr(result)}")
+                            st.stop()
+
                         if result.get("ok"):
                             st.success("❌ 却下しました。")
-                            st.cache_data.clear()  # キャッシュをクリア
+                            st.cache_data.clear()
                             st.rerun()
                         else:
-                            error_msg = result.get('error', '不明なエラー')
+                            error_msg = result.get("error", "不明なエラー")
                             st.error(f"❌ エラー: {error_msg}")
-                            # DEBUG時は traceback を表示
                             if result.get("traceback"):
                                 with st.expander("🔍 エラー詳細", expanded=False):
                                     st.code(result["traceback"], language="python")
             
             elif submission_status == "rejected":
                 if st.button("🔄 再審査（pendingに戻す）", key=f"reopen_{submission_id}", type="primary"):
+                    st.caption(f"reopen_submission module={getattr(reopen_submission, '__module__', None)} file={getattr(reopen_submission, '__code__', None).co_filename if getattr(reopen_submission, '__code__', None) else None}")
                     result = reopen_submission(submission_id, db=None)
+
+                    if result is None:
+                        st.error("❌ reopen_submission() が None を返しました（想定外）")
+                        st.stop()
+
+                    if not isinstance(result, dict):
+                        st.error(f"❌ reopen_submission() returned non-dict: {repr(result)}")
+                        st.stop()
+
                     if result.get("ok"):
                         st.success("🔄 再審査に戻しました。")
                         st.cache_data.clear()
                         st.rerun()
                     else:
-                        error_msg = result.get('error', '不明なエラー')
+                        error_msg = result.get("error", "不明なエラー")
                         st.error(f"❌ エラー: {error_msg}")
-                        # DEBUG時は traceback を表示
                         if result.get("traceback"):
                             with st.expander("🔍 エラー詳細", expanded=False):
                                 st.code(result["traceback"], language="python")
