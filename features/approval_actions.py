@@ -20,25 +20,6 @@ def approve_submission(submission_id: int, editor_note=None, update_existing: bo
 
         # 1) submission を読む
         with session_scope() as s:
-            from sqlalchemy import text
-
-            try:
-                # 1) DB接続先の雰囲気（database名とかは方言あるので最低限）
-                s.execute(text("select 1")).all()
-
-                # 2) submissions件数
-                cnt = s.execute(text(f"select count(*) from material_submissions")).scalar()
-                # 3) 直近のID確認
-                rows = s.execute(text(f"select id, status from material_submissions order by id desc limit 5")).all()
-
-                return {
-                    "ok": False,
-                    "error": f"DEBUG: submission_id={submission_id} submissions_count={cnt} recent={rows}",
-                    "traceback": ""
-                }
-            except Exception as e:
-                import traceback
-                return {"ok": False, "error": f"DEBUG SQL failed: {e}", "traceback": traceback.format_exc()}
             sub = s.query(MaterialSubmission).filter(MaterialSubmission.id == submission_id).first()
             if not sub:
                 return {"ok": False, "error": f"submission {submission_id} not found", "traceback": ""}
