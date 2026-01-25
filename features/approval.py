@@ -66,6 +66,26 @@ def show_approval_queue():
     with session_scope() as s:
         submissions = s.query(MaterialSubmission).order_by(MaterialSubmission.id.desc()).limit(200).all()
     
+    # DB上でのstatus別件数とpending最新5件を確認
+    with session_scope() as s:
+        from sqlalchemy import text
+        rows = s.execute(text("""
+            select status, count(*) 
+            from material_submissions 
+            group by status 
+            order by status
+        """)).all()
+        pend = s.execute(text("""
+            select id, status, created_at 
+            from material_submissions 
+            where status='pending'
+            order by id desc
+            limit 5
+        """)).all()
+    
+    st.caption(f"DB status counts: {rows}")
+    st.caption(f"DB pending latest: {pend}")
+    
     # ステータス別の件数表示
     pending_count = len([sub for sub in submissions if sub.status == "pending"])
     rejected_count = len([sub for sub in submissions if sub.status == "rejected"])
