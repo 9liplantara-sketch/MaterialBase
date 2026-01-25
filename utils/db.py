@@ -160,8 +160,8 @@ def get_session() -> Generator[Session, None, None]:
         - 読み取り専用のクエリに使用
         - 例外時も自動rollbackしない（明示的に制御するため）
     """
-    from database import SessionLocal
-    session = SessionLocal()
+    session_maker = get_sessionmaker()
+    session = session_maker()
     try:
         yield session
     finally:
@@ -183,8 +183,8 @@ def session_scope() -> Generator[Session, None, None]:
         - 例外時は自動rollback
         - 明示的なcommit/rollbackは不要
     """
-    from database import SessionLocal
-    session = SessionLocal()
+    session_maker = get_sessionmaker()
+    session = session_maker()
     try:
         yield session
         session.commit()

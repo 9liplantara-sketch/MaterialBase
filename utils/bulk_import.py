@@ -740,6 +740,9 @@ def create_bulk_submissions(
             payload = dict(row)
             payload['images_info'] = images_info
             
+            # session 内で必要な値を取得し、session 外では submission を参照しない
+            submission_id = None
+            
             submission = MaterialSubmission(
                 uuid=submission_uuid,
                 status='pending',
@@ -749,7 +752,10 @@ def create_bulk_submissions(
             )
             
             db.add(submission)
-            db.flush()
+            db.flush()  # ← id を確実に取るため
+            # session 内で必要な値を取得（session 外では submission を参照しない）
+            submission_id = submission.id
+            # session 内でのみ submission を使用（ここで終了）
             
             # 画像情報を結果に追加（承認時にアップロードされる）
             for img_info in images_info:
@@ -759,7 +765,8 @@ def create_bulk_submissions(
                     'public_url': None  # 承認時にアップロードされる
                 })
             
-            result['submission_id'] = submission.id
+            # session 外で使う値は session 内で取得した primitive のみ
+            result['submission_id'] = submission_id
             result['submission_uuid'] = submission_uuid
             result['status'] = 'success'
         
