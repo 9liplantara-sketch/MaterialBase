@@ -23,6 +23,13 @@ def show_approval_queue():
     debug_enabled = is_debug_flag()
     t0 = time.perf_counter() if debug_enabled else None
     
+    # デバッグ表示用フラグ
+    try:
+        from utils.settings import get_flag
+        is_debug = get_flag("DEBUG_ENV", False)
+    except Exception:
+        is_debug = False
+    
     # ヘッダー表示
     try:
         from utils.logo import render_site_header
@@ -52,33 +59,17 @@ def show_approval_queue():
         key="approval_search"
     )
     
-    # TODO: DBアクセスは後で実装
-    # 現時点ではモックデータでUI骨格を確認
-    # モックSubmissionオブジェクト（UI骨格確認用）
-    class MockSubmission:
-        def __init__(self, id, status="pending", submitted_by="テストユーザー", created_at=None, editor_note=None, reject_reason=None, approved_material_id=None):
-            self.id = id
-            self.status = status
-            self.submitted_by = submitted_by
-            self.created_at = created_at or time.time()
-            self.editor_note = editor_note
-            self.reject_reason = reject_reason
-            self.approved_material_id = approved_material_id
+    # DBからsubmissionsを取得
+    from utils.db import session_scope
+    from database import MaterialSubmission
     
-    # モックデータ（UI骨格確認用）
-    mock_submissions = [
-        MockSubmission(
-            id=1,
-            status="pending",
-            submitted_by="テストユーザー",
-            created_at=datetime.now()
-        )
-    ]
+    with session_scope() as s:
+        submissions = s.query(MaterialSubmission).order_by(MaterialSubmission.id.desc()).limit(200).all()
     
-    # ステータス別の件数表示（モック）
-    pending_count = len([s for s in mock_submissions if s.status == "pending"])
-    rejected_count = len([s for s in mock_submissions if s.status == "rejected"])
-    approved_count = len([s for s in mock_submissions if s.status == "approved"])
+    # ステータス別の件数表示
+    pending_count = len([sub for sub in submissions if sub.status == "pending"])
+    rejected_count = len([sub for sub in submissions if sub.status == "rejected"])
+    approved_count = len([sub for sub in submissions if sub.status == "approved"])
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -87,10 +78,6 @@ def show_approval_queue():
         st.metric("却下済み", rejected_count)
     with col3:
         st.metric("承認済み", approved_count)
-    
-    # TODO: DBからsubmissionsを取得する処理は後で実装
-    # 現時点ではモックデータでUI骨格を確認
-    submissions = mock_submissions
     
     if not submissions:
         st.info("✅ 該当する投稿はありません。")
@@ -112,7 +99,7 @@ def show_approval_queue():
         }.get(getattr(submission, "status", "pending"), "#666")
         
         # モックデータ用の表示
-        submission_id = submission.id
+        submission_key = getattr(submission, "uuid", None) or submission.id
         created_at_obj = getattr(submission, "created_at", None)
         if created_at_obj:
             if hasattr(created_at_obj, "strftime"):
@@ -120,9 +107,12 @@ def show_approval_queue():
                 created_at_display = created_at_obj.strftime('%Y-%m-%d %H:%M')
             elif isinstance(created_at_obj, (int, float)):
                 # タイムスタンプの場合
-                created_at_display = datetime.fromtimestamp(created_at_obj).strftime('%Y-%m-%d %H:%M')
+                try:
+                    created_at_display = datetime.fromtimestamp(created_at_obj).strftime('%Y-%m-%d %H:%M')
+                except (ValueError, OSError):
+                    created_at_display = "unknown"
             else:
-                created_at_display = str(created_at_obj)
+                created_at_display = "unknown"
         else:
             created_at_display = "N/A"
         
@@ -152,14 +142,14 @@ def show_approval_queue():
             # editor_noteを表示・編集
             st.markdown("---")
             st.markdown("### 編集者メモ")
-            editor_note_key = f"editor_note_edit_{submission_id}"
+            editor_note_key = f"editor_note_edit_{submission_key}"
             editor_note_value = st.text_area(
                 "編集者メモ（いつでも編集可能）",
                 value=getattr(submission, "editor_note", "") or "",
                 key=editor_note_key,
                 placeholder="編集者メモを入力・編集できます"
             )
-            if st.button("💾 メモを保存", key=f"save_note_{submission_id}"):
+            if st.button("💾 メモを保存", key=f"save_note_{submission_key}"):
                 st.info("TODO: メモ保存機能を実装")
                 # TODO: DB保存処理を実装
                 # st.success("✅ メモを保存しました")
@@ -193,7 +183,7 @@ def show_approval_queue():
             
             if submission_status == "pending":
                 # 承認モード選択（新規作成 or 既存更新）
-                approval_mode_key = f"approval_mode_{submission_id}"
+                approval_mode_key = f"approval_mode_{submission_key}"
                 approval_mode = st.radio(
                     "承認モード",
                     ["既存へ反映（同名素材がある場合）", "新規作成"],
@@ -206,19 +196,20 @@ def show_approval_queue():
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    if st.button("✅ 承認", key=f"approve_{submission_id}", type="primary"):
-                        import inspect
-                        with st.expander("DEBUG: approve_submission full source", expanded=False):
-                            st.write("module:", getattr(approve_submission, "__module__", None))
-                            st.write("file:", getattr(getattr(approve_submission, "__code__", None), "co_filename", None))
-                            st.write("firstlineno:", getattr(getattr(approve_submission, "__code__", None), "co_firstlineno", None))
-                            try:
-                                st.code(inspect.getsource(approve_submission), language="python")
-                            except Exception as e:
-                                st.write("source unavailable:", e)
-                        st.caption(f"DEBUG UI submission_id={submission_id} type={type(submission_id)}")
+                    if st.button("✅ 承認", key=f"approve_{submission_key}", type="primary"):
+                        if is_debug:
+                            import inspect
+                            with st.expander("DEBUG: approve_submission full source", expanded=False):
+                                st.write("module:", getattr(approve_submission, "__module__", None))
+                                st.write("file:", getattr(getattr(approve_submission, "__code__", None), "co_filename", None))
+                                st.write("firstlineno:", getattr(getattr(approve_submission, "__code__", None), "co_firstlineno", None))
+                                try:
+                                    st.code(inspect.getsource(approve_submission), language="python")
+                                except Exception as e:
+                                    st.write("source unavailable:", e)
+                            st.caption(f"DEBUG UI submission_key={submission_key} type={type(submission_key)}")
                         result = approve_submission(
-                            submission_id,
+                            submission_key,
                             editor_note=editor_note_value,
                             update_existing=update_existing,
                             db=None,
@@ -247,15 +238,16 @@ def show_approval_queue():
                                     st.code(result["traceback"], language="python")
                 
                 with col2:
-                    reject_reason_key = f"reject_reason_{submission_id}"
+                    reject_reason_key = f"reject_reason_{submission_key}"
                     reject_reason = st.text_input(
                         "却下理由（任意）",
                         key=reject_reason_key,
                         placeholder="却下理由を入力してください"
                     )
-                    if st.button("❌ 却下", key=f"reject_{submission_id}"):
-                        st.caption(f"reject_submission module={getattr(reject_submission, '__module__', None)} file={getattr(reject_submission, '__code__', None).co_filename if getattr(reject_submission, '__code__', None) else None}")
-                        result = reject_submission(submission_id, reject_reason=reject_reason, db=None)
+                    if st.button("❌ 却下", key=f"reject_{submission_key}"):
+                        if is_debug:
+                            st.caption(f"reject_submission module={getattr(reject_submission, '__module__', None)} file={getattr(reject_submission, '__code__', None).co_filename if getattr(reject_submission, '__code__', None) else None}")
+                        result = reject_submission(submission_key, reject_reason=reject_reason, db=None)
 
                         if result is None:
                             st.error("❌ reject_submission() が None を返しました（想定外）")
@@ -277,9 +269,10 @@ def show_approval_queue():
                                     st.code(result["traceback"], language="python")
             
             elif submission_status == "rejected":
-                if st.button("🔄 再審査（pendingに戻す）", key=f"reopen_{submission_id}", type="primary"):
-                    st.caption(f"reopen_submission module={getattr(reopen_submission, '__module__', None)} file={getattr(reopen_submission, '__code__', None).co_filename if getattr(reopen_submission, '__code__', None) else None}")
-                    result = reopen_submission(submission_id, db=None)
+                if st.button("🔄 再審査（pendingに戻す）", key=f"reopen_{submission_key}", type="primary"):
+                    if is_debug:
+                        st.caption(f"reopen_submission module={getattr(reopen_submission, '__module__', None)} file={getattr(reopen_submission, '__code__', None).co_filename if getattr(reopen_submission, '__code__', None) else None}")
+                    result = reopen_submission(submission_key, db=None)
 
                     if result is None:
                         st.error("❌ reopen_submission() が None を返しました（想定外）")
@@ -303,7 +296,7 @@ def show_approval_queue():
             elif submission_status == "approved":
                 if hasattr(submission, "approved_material_id") and submission.approved_material_id:
                     st.info(f"✅ 承認済み材料ID: {submission.approved_material_id}")
-                    if st.button("📝 材料詳細を見る", key=f"view_material_{submission_id}"):
+                    if st.button("📝 材料詳細を見る", key=f"view_material_{submission_key}"):
                         st.info("TODO: 材料詳細ページへの遷移を実装")
                         # TODO: 材料詳細ページへの遷移
                         # st.session_state.selected_material_id = submission.approved_material_id
