@@ -4453,13 +4453,20 @@ def _txsub_mark_submission_approved(submission_id: int, material_id: int, editor
         - status='approved', approved_material_id=material_id を設定
         - このTxは必須（失敗時は承認全体を失敗扱い）
     """
-    from utils.db import session_scope
+    from utils.db import session_scope, normalize_submission_key
     from datetime import datetime
     
     with session_scope() as db:
-        submission = db.query(MaterialSubmission).filter(
-                MaterialSubmission.id == submission_id
-            ).first()
+        kind, normalized_key = normalize_submission_key(submission_id)
+        if kind is None or normalized_key is None:
+            raise ValueError(f"Submission {submission_id} not found in TxSub")
+        
+        if kind == "id":
+            submission = db.query(MaterialSubmission).filter(MaterialSubmission.id == normalized_key).first()
+        elif kind == "uuid":
+            submission = db.query(MaterialSubmission).filter(MaterialSubmission.uuid == normalized_key).first()
+        else:
+            submission = None
             
         if not submission:
             raise ValueError(f"Submission {submission_id} not found in TxSub")
@@ -4789,18 +4796,17 @@ def show_submission_status():
         )
         
         if submission_id_input and submission_id_input.strip():
-            from utils.db import get_session
+            from utils.db import get_session, normalize_submission_key
             with get_session() as db:
-                # IDまたはUUIDで検索
-                submission = None
-                if submission_id_input.strip().isdigit():
-                    submission = db.query(MaterialSubmission).filter(
-                        MaterialSubmission.id == int(submission_id_input.strip())
-                    ).first()
+                kind, normalized_key = normalize_submission_key(submission_id_input)
+                if kind is None or normalized_key is None:
+                    submission = None
+                elif kind == "id":
+                    submission = db.query(MaterialSubmission).filter(MaterialSubmission.id == normalized_key).first()
+                elif kind == "uuid":
+                    submission = db.query(MaterialSubmission).filter(MaterialSubmission.uuid == normalized_key).first()
                 else:
-                    submission = db.query(MaterialSubmission).filter(
-                        MaterialSubmission.uuid == submission_id_input.strip()
-                    ).first()
+                    submission = None
                 
                 if submission:
                     st.markdown("---")

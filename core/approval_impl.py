@@ -284,10 +284,19 @@ def _txsub_mark_submission_approved(submission_id: int, material_id: int, editor
     from utils.db import session_scope
     from datetime import datetime
     
+    from utils.db import normalize_submission_key
+    
     with session_scope() as db:
-        submission = db.query(MaterialSubmission).filter(
-                MaterialSubmission.id == submission_id
-            ).first()
+        kind, normalized_key = normalize_submission_key(submission_id)
+        if kind is None or normalized_key is None:
+            raise ValueError(f"Submission {submission_id} not found in TxSub")
+        
+        if kind == "id":
+            submission = db.query(MaterialSubmission).filter(MaterialSubmission.id == normalized_key).first()
+        elif kind == "uuid":
+            submission = db.query(MaterialSubmission).filter(MaterialSubmission.uuid == normalized_key).first()
+        else:
+            submission = None
             
         if not submission:
             raise ValueError(f"Submission {submission_id} not found in TxSub")
