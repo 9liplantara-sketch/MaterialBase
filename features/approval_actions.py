@@ -41,18 +41,27 @@ def approve_submission(submission_id: int, editor_note=None, update_existing: bo
             # 後続処理で id が必要な場合に備えて、sub.id を取得
             submission_id_for_tx = sub.id
 
-            # payload_json は既に dict の想定。str の場合だけフォールバックで json.loads
-            payload = sub.payload_json
-            if isinstance(payload, str):
-                import json
-                payload = json.loads(payload)
+        # payload_json を安全に dict に復元
+        from utils.db import load_payload_json
+        import logging
+        import os
+        
+        logger = logging.getLogger(__name__)
+        payload = load_payload_json(sub.payload_json)
+        
+        # DEBUG時のみログ出力
+        if os.getenv("DEBUG", "0") == "1":
+            logger.info(f"[APPROVE] payload_json type={type(sub.payload_json).__name__}, payload keys={list(payload.keys()) if payload else []}, images count={len(payload.get('images', []))}")
 
         # 2) Tx1: materials upsert（必須）
         material_id, action = _tx1_upsert_material_core(sub, payload, update_existing=update_existing)
 
         # 3) Tx2: images upsert（失敗しても続行）
         try:
-            uploaded_images = []
+            # payload から images を取得（images または uploaded_images キーから）
+            uploaded_images = payload.get("images", []) or payload.get("uploaded_images", [])
+            if not isinstance(uploaded_images, list):
+                uploaded_images = []
             _tx2_upsert_images(material_id, uploaded_images, payload, submission_id=submission_id_for_tx)
             image_warning = None
         except Exception:
