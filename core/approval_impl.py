@@ -29,9 +29,12 @@ def _tx1_upsert_material_core(submission: MaterialSubmission, form_data: dict, u
         - commit成功後、material_idを返す
         - 副作用（images/properties/embeddings/submission更新）は絶対に含めない
     """
-    from utils.db import session_scope
+    from utils.db import session_scope, load_payload_json
     from sqlalchemy import select
     import uuid
+    
+    # 防御的に form_data を dict に復元（str で来ても dict に変換）
+    form_data = load_payload_json(form_data) if not isinstance(form_data, dict) else form_data
     
     with session_scope() as db:
         # name_official の必須チェック

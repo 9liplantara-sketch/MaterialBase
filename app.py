@@ -4843,12 +4843,14 @@ def show_submission_status():
                     
                     # payload_jsonをパースして表示
                     try:
-                        payload = json.loads(submission.payload_json)
-                        st.markdown("---")
-                        st.markdown("### 📝 投稿内容")
-                        st.write(f"**材料名（正式）**: {payload.get('name_official', 'N/A')}")
-                        st.write(f"**カテゴリ**: {payload.get('category_main', 'N/A')}")
-                        st.write(f"**供給元**: {payload.get('supplier_org', 'N/A')}")
+                        from utils.db import load_payload_json
+                        payload = load_payload_json(submission.payload_json)
+                        if payload:
+                            st.markdown("---")
+                            st.markdown("### 📝 投稿内容")
+                            st.write(f"**材料名（正式）**: {payload.get('name_official', 'N/A')}")
+                            st.write(f"**カテゴリ**: {payload.get('category_main', 'N/A')}")
+                            st.write(f"**供給元**: {payload.get('supplier_org', 'N/A')}")
                     except:
                         pass
                     

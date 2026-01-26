@@ -258,3 +258,43 @@ def normalize_submission_key(submission_key):
     if os.getenv("DEBUG", "0") == "1":
         logger.info(f"[normalize_submission_key] input=other({type(submission_key)}), converting to str, returning kind='uuid', value=str")
     return ("uuid", str(submission_key))
+
+
+def load_payload_json(payload_json):
+    """
+    MaterialSubmission.payload_json を安全に dict に復元する。
+    
+    Args:
+        payload_json: dict, str(JSON文字列), None, またはその他の型
+    
+    Returns:
+        dict: 復元された辞書。復元できない場合は空の辞書 {} を返す。
+    
+    Note:
+        - None → {}
+        - dict → そのまま返す
+        - str → json.loads を試す。成功して dict なら返す。失敗 or dict以外は {}
+        - その他型 → {}
+    """
+    import json
+    
+    if payload_json is None:
+        return {}
+    
+    if isinstance(payload_json, dict):
+        return payload_json
+    
+    if isinstance(payload_json, str):
+        try:
+            parsed = json.loads(payload_json)
+            if isinstance(parsed, dict):
+                return parsed
+            else:
+                # JSON文字列だが dict でない場合（list など）
+                return {}
+        except (json.JSONDecodeError, TypeError, ValueError):
+            # JSONパース失敗
+            return {}
+    
+    # その他の型
+    return {}
