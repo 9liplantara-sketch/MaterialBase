@@ -26,12 +26,14 @@ def approve_submission(submission_id: int, editor_note=None, update_existing: bo
             if kind is None or normalized_key is None:
                 return {"ok": False, "error": f"submission {submission_id} not found", "traceback": ""}
             
-            if kind == "id":
+            # 型ガード：kind=="id" でも normalized_key が int でなければ uuid検索にフォールバック
+            if kind == "id" and isinstance(normalized_key, int):
                 sub = s.query(MaterialSubmission).filter(MaterialSubmission.id == normalized_key).first()
-            elif kind == "uuid":
-                sub = s.query(MaterialSubmission).filter(MaterialSubmission.uuid == normalized_key).first()
             else:
-                sub = None
+                # kind=="uuid" または kind=="id" だが normalized_key が int でない場合
+                if not isinstance(normalized_key, str):
+                    normalized_key = str(normalized_key)
+                sub = s.query(MaterialSubmission).filter(MaterialSubmission.uuid == normalized_key).first()
             
             if not sub:
                 return {"ok": False, "error": f"submission {submission_id} not found", "traceback": ""}

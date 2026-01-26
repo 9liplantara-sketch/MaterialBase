@@ -291,12 +291,14 @@ def _txsub_mark_submission_approved(submission_id: int, material_id: int, editor
         if kind is None or normalized_key is None:
             raise ValueError(f"Submission {submission_id} not found in TxSub")
         
-        if kind == "id":
+        # 型ガード：kind=="id" でも normalized_key が int でなければ uuid検索にフォールバック
+        if kind == "id" and isinstance(normalized_key, int):
             submission = db.query(MaterialSubmission).filter(MaterialSubmission.id == normalized_key).first()
-        elif kind == "uuid":
-            submission = db.query(MaterialSubmission).filter(MaterialSubmission.uuid == normalized_key).first()
         else:
-            submission = None
+            # kind=="uuid" または kind=="id" だが normalized_key が int でない場合
+            if not isinstance(normalized_key, str):
+                normalized_key = str(normalized_key)
+            submission = db.query(MaterialSubmission).filter(MaterialSubmission.uuid == normalized_key).first()
             
         if not submission:
             raise ValueError(f"Submission {submission_id} not found in TxSub")
