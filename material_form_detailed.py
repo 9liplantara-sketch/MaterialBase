@@ -196,7 +196,11 @@ def show_detailed_material_form(material_id: int = None):
     # material_id が変更されたらフォーム関連stateを掃除
     prev = st.session_state.get("active_edit_material_id")
     prev_suffix = prev if prev else "new"
-    if is_edit_mode and material_id and prev and prev != material_id:
+    prev_is_edit = prev is not None
+    current_is_edit = is_edit_mode
+    
+    # 編集→新規、新規→編集、編集→編集（別ID）のいずれかの場合にクリーンアップ
+    if (prev_is_edit != current_is_edit) or (is_edit_mode and material_id and prev and prev != material_id):
         # このフォームで実際に使うキーだけを削除（雑に全部消さない）
         # 実際に使っている key prefix のみに合わせる
         for k in list(st.session_state.keys()):
@@ -214,9 +218,28 @@ def show_detailed_material_form(material_id: int = None):
                 k.startswith("ref_desc_") or k.startswith("del_ref_") or k.startswith("ex_name_") or
                 k.startswith("ex_url_") or k.startswith("ex_desc_") or k.startswith("del_ex_") or
                 k.startswith("alias_") or k.startswith("del_alias_") or k.startswith("new_alias") or
-                k.startswith("new_ref_") or k.startswith("new_ex_")
+                k.startswith("new_ref_") or k.startswith("new_ex_") or k.startswith("_seeded_") or
+                k.startswith("delete_image_") or k.startswith("deleted_images_")
             ):
                 del st.session_state[k]
+        
+        # suffix付きでないキーも削除（編集→新規の場合）
+        if prev_is_edit and not current_is_edit:
+            for name_key in ["name_official_input", "name_official_cached", "aliases", "ref_urls", "use_examples"]:
+                if name_key in st.session_state:
+                    del st.session_state[name_key]
+        
+        # 画像関連のキーも削除（suffix付きでないものも含む）
+        for img_key in ["primary_image", "primary_image_cached"]:
+            if img_key in st.session_state:
+                del st.session_state[img_key]
+        # suffix付きの画像キーも削除
+        for k in list(st.session_state.keys()):
+            if (k.startswith("primary_image_") or k.startswith("images_upload_") or 
+                k.startswith("primary_image_cached_") or k.startswith("existing_images_")):
+                if k.endswith(f"_{prev_suffix}") or (prev_suffix == "new" and not k.endswith("_" + str(material_id) if material_id else "_new")):
+                    del st.session_state[k]
+    
     st.session_state["active_edit_material_id"] = material_id
     
     if is_edit_mode:
@@ -265,76 +288,80 @@ def show_detailed_material_form(material_id: int = None):
             # get_session()が自動でcloseするため、finallyは不要
             # existing_material は detached になるが、必要なデータは既に dict に変換済み
             
-            # st.session_state に既存値を設定（既に値がある場合は上書きしない）
-            def seed(key, value):
-                if key not in st.session_state:
+            # st.session_state に既存値を設定（suffixごとに初回のみseed）
+            seeded_flag = f"_seeded_{suffix}"
+            if seeded_flag not in st.session_state:
+                def seed(key, value):
                     st.session_state[key] = value
-            
-            # 主要フィールドを session_state に設定（実際の widget key と完全一致）
-            name_official_value = getattr(existing_material, 'name_official', '') or ""
-            seed(f"name_official_cached", name_official_value)
-            seed("name_official_input", name_official_value)  # widget key に対応
-            seed(f"supplier_org_{suffix}", getattr(existing_material, 'supplier_org', '') or "")
-            seed(f"supplier_type_{suffix}", getattr(existing_material, 'supplier_type', '') or "")
-            seed(f"supplier_other_{suffix}", getattr(existing_material, 'supplier_other', '') or "")
-            seed(f"category_main_{suffix}", getattr(existing_material, 'category_main', '') or "")
-            seed(f"category_other_{suffix}", getattr(existing_material, 'category_other', '') or "")
-            seed(f"material_forms_other_{suffix}", getattr(existing_material, 'material_forms_other', '') or "")
-            seed(f"origin_type_{suffix}", getattr(existing_material, 'origin_type', '') or "")
-            seed(f"origin_other_{suffix}", getattr(existing_material, 'origin_other', '') or "")
-            seed(f"origin_detail_{suffix}", getattr(existing_material, 'origin_detail', '') or "")
-            seed(f"recycle_bio_rate_{suffix}", getattr(existing_material, 'recycle_bio_rate', None))
-            seed(f"recycle_bio_basis_{suffix}", getattr(existing_material, 'recycle_bio_basis', '') or "")
-            seed(f"transparency_{suffix}", getattr(existing_material, 'transparency', '') or "")
-            seed(f"hardness_qualitative_{suffix}", getattr(existing_material, 'hardness_qualitative', '') or "")
-            seed(f"hardness_value_{suffix}", getattr(existing_material, 'hardness_value', None))
-            seed(f"weight_qualitative_{suffix}", getattr(existing_material, 'weight_qualitative', '') or "")
-            seed(f"specific_gravity_{suffix}", getattr(existing_material, 'specific_gravity', None))
-            seed(f"water_resistance_{suffix}", getattr(existing_material, 'water_resistance', '') or "")
-            seed(f"heat_resistance_temp_{suffix}", getattr(existing_material, 'heat_resistance_temp', None))
-            seed(f"heat_resistance_range_{suffix}", getattr(existing_material, 'heat_resistance_range', '') or "")
-            seed(f"weather_resistance_{suffix}", getattr(existing_material, 'weather_resistance', '') or "")
-            seed(f"processing_other_{suffix}", getattr(existing_material, 'processing_other', '') or "")
-            seed(f"equipment_level_{suffix}", getattr(existing_material, 'equipment_level', '') or "")
-            seed(f"prototyping_difficulty_{suffix}", getattr(existing_material, 'prototyping_difficulty', '') or "")
-            seed(f"use_other_{suffix}", getattr(existing_material, 'use_other', '') or "")
-            seed(f"procurement_status_{suffix}", getattr(existing_material, 'procurement_status', '') or "")
-            seed(f"cost_level_{suffix}", getattr(existing_material, 'cost_level', '') or "")
-            seed(f"cost_value_{suffix}", getattr(existing_material, 'cost_value', None))
-            seed(f"cost_unit_{suffix}", getattr(existing_material, 'cost_unit', '') or "")
-            seed(f"safety_other_{suffix}", getattr(existing_material, 'safety_other', '') or "")
-            seed(f"restrictions_{suffix}", getattr(existing_material, 'restrictions', '') or "")
-            seed(f"visibility_{suffix}", getattr(existing_material, 'visibility', '') or "")
-            seed(f"is_published_{suffix}", getattr(existing_material, 'is_published', 1))
-            
-            # JSON配列フィールド
-            name_aliases = json.loads(getattr(existing_material, 'name_aliases', '[]')) if getattr(existing_material, 'name_aliases', None) else []
-            seed("aliases", name_aliases)
-            
-            material_forms = json.loads(getattr(existing_material, 'material_forms', '[]')) if getattr(existing_material, 'material_forms', None) else []
-            seed(f"material_forms_{suffix}", material_forms)
-            
-            color_tags = json.loads(getattr(existing_material, 'color_tags', '[]')) if getattr(existing_material, 'color_tags', None) else []
-            seed(f"color_tags_{suffix}", color_tags)
-            
-            processing_methods = json.loads(getattr(existing_material, 'processing_methods', '[]')) if getattr(existing_material, 'processing_methods', None) else []
-            seed(f"processing_methods_{suffix}", processing_methods)
-            
-            use_categories = json.loads(getattr(existing_material, 'use_categories', '[]')) if getattr(existing_material, 'use_categories', None) else []
-            seed(f"use_categories_{suffix}", use_categories)
-            
-            safety_tags = json.loads(getattr(existing_material, 'safety_tags', '[]')) if getattr(existing_material, 'safety_tags', None) else []
-            seed(f"safety_tags_{suffix}", safety_tags)
-            
-            # リレーション
-            seed("ref_urls", existing_data.get('reference_urls', []))
-            seed("use_examples", existing_data.get('use_examples', []))
-            
-            # 画像（既存画像一覧を表示用に保存）
-            seed(f"existing_images_{suffix}", [
-                {'kind': img.kind, 'public_url': img.public_url, 'r2_key': img.r2_key}
-                for img in images_list
-            ])
+                
+                # 主要フィールドを session_state に設定（実際の widget key と完全一致）
+                name_official_value = getattr(existing_material, 'name_official', '') or ""
+                seed(f"name_official_cached", name_official_value)
+                seed("name_official_input", name_official_value)  # widget key に対応
+                seed(f"supplier_org_{suffix}", getattr(existing_material, 'supplier_org', '') or "")
+                seed(f"supplier_type_{suffix}", getattr(existing_material, 'supplier_type', '') or "")
+                seed(f"supplier_other_{suffix}", getattr(existing_material, 'supplier_other', '') or "")
+                seed(f"category_main_{suffix}", getattr(existing_material, 'category_main', '') or "")
+                seed(f"category_other_{suffix}", getattr(existing_material, 'category_other', '') or "")
+                seed(f"material_forms_other_{suffix}", getattr(existing_material, 'material_forms_other', '') or "")
+                seed(f"origin_type_{suffix}", getattr(existing_material, 'origin_type', '') or "")
+                seed(f"origin_other_{suffix}", getattr(existing_material, 'origin_other', '') or "")
+                seed(f"origin_detail_{suffix}", getattr(existing_material, 'origin_detail', '') or "")
+                seed(f"recycle_bio_rate_{suffix}", getattr(existing_material, 'recycle_bio_rate', None))
+                seed(f"recycle_bio_basis_{suffix}", getattr(existing_material, 'recycle_bio_basis', '') or "")
+                seed(f"transparency_{suffix}", getattr(existing_material, 'transparency', '') or "")
+                seed(f"hardness_qualitative_{suffix}", getattr(existing_material, 'hardness_qualitative', '') or "")
+                seed(f"hardness_value_{suffix}", getattr(existing_material, 'hardness_value', None))
+                seed(f"weight_qualitative_{suffix}", getattr(existing_material, 'weight_qualitative', '') or "")
+                seed(f"specific_gravity_{suffix}", getattr(existing_material, 'specific_gravity', None))
+                seed(f"water_resistance_{suffix}", getattr(existing_material, 'water_resistance', '') or "")
+                seed(f"heat_resistance_temp_{suffix}", getattr(existing_material, 'heat_resistance_temp', None))
+                seed(f"heat_resistance_range_{suffix}", getattr(existing_material, 'heat_resistance_range', '') or "")
+                seed(f"weather_resistance_{suffix}", getattr(existing_material, 'weather_resistance', '') or "")
+                seed(f"processing_other_{suffix}", getattr(existing_material, 'processing_other', '') or "")
+                seed(f"equipment_level_{suffix}", getattr(existing_material, 'equipment_level', '') or "")
+                seed(f"prototyping_difficulty_{suffix}", getattr(existing_material, 'prototyping_difficulty', '') or "")
+                seed(f"use_other_{suffix}", getattr(existing_material, 'use_other', '') or "")
+                seed(f"procurement_status_{suffix}", getattr(existing_material, 'procurement_status', '') or "")
+                seed(f"cost_level_{suffix}", getattr(existing_material, 'cost_level', '') or "")
+                seed(f"cost_value_{suffix}", getattr(existing_material, 'cost_value', None))
+                seed(f"cost_unit_{suffix}", getattr(existing_material, 'cost_unit', '') or "")
+                seed(f"safety_other_{suffix}", getattr(existing_material, 'safety_other', '') or "")
+                seed(f"restrictions_{suffix}", getattr(existing_material, 'restrictions', '') or "")
+                seed(f"visibility_{suffix}", getattr(existing_material, 'visibility', '') or "")
+                seed(f"is_published_{suffix}", getattr(existing_material, 'is_published', 1))
+                
+                # JSON配列フィールド
+                name_aliases = json.loads(getattr(existing_material, 'name_aliases', '[]')) if getattr(existing_material, 'name_aliases', None) else []
+                seed("aliases", name_aliases)
+                
+                material_forms = json.loads(getattr(existing_material, 'material_forms', '[]')) if getattr(existing_material, 'material_forms', None) else []
+                seed(f"material_forms_{suffix}", material_forms)
+                
+                color_tags = json.loads(getattr(existing_material, 'color_tags', '[]')) if getattr(existing_material, 'color_tags', None) else []
+                seed(f"color_tags_{suffix}", color_tags)
+                
+                processing_methods = json.loads(getattr(existing_material, 'processing_methods', '[]')) if getattr(existing_material, 'processing_methods', None) else []
+                seed(f"processing_methods_{suffix}", processing_methods)
+                
+                use_categories = json.loads(getattr(existing_material, 'use_categories', '[]')) if getattr(existing_material, 'use_categories', None) else []
+                seed(f"use_categories_{suffix}", use_categories)
+                
+                safety_tags = json.loads(getattr(existing_material, 'safety_tags', '[]')) if getattr(existing_material, 'safety_tags', None) else []
+                seed(f"safety_tags_{suffix}", safety_tags)
+                
+                # リレーション
+                seed("ref_urls", existing_data.get('reference_urls', []))
+                seed("use_examples", existing_data.get('use_examples', []))
+                
+                # 画像（既存画像一覧を表示用に保存）
+                seed(f"existing_images_{suffix}", [
+                    {'kind': img.kind, 'public_url': img.public_url, 'r2_key': img.r2_key}
+                    for img in images_list
+                ])
+                
+                # seed完了フラグを設定
+                st.session_state[seeded_flag] = True
     else:
         st.markdown('<h2 class="gradient-text">➕ 材料登録（詳細版）</h2>', unsafe_allow_html=True)
         st.info("📝 **レイヤー①（必須）**: 約10分で入力可能な基本情報\n\n**レイヤー②（任意）**: 後から追記できる詳細情報")
@@ -440,8 +467,8 @@ def show_detailed_material_form(material_id: int = None):
         st.caption("材料IDは自動採番されます")
     
     # 画像アップロード（st.form の外に配置して、submit時に値が消えないようにする）
-    PRIMARY_KEY = "primary_image"
-    CACHE_KEY = "primary_image_cached"
+    PRIMARY_KEY = f"primary_image_{suffix}"
+    CACHE_KEY = f"primary_image_cached_{suffix}"
     
     st.markdown("**1-5 画像（材料/サンプル/用途例）**")
     
@@ -483,7 +510,7 @@ def show_detailed_material_form(material_id: int = None):
             "新しい画像をアップロード（任意・複数可）",
             type=['png', 'jpg', 'jpeg'],
             accept_multiple_files=True,
-            key=f"images_upload_{suffix}",
+            key=PRIMARY_KEY,
             help="既存画像に追加する新しい画像をアップロードできます（空でも既存画像が維持されます）"
         )
     else:
@@ -791,7 +818,7 @@ def show_detailed_material_form(material_id: int = None):
         form_data['name_official'] = name_official
         
         # 画像を session_state のキャッシュから取得（submit時に確実に保持される）
-        CACHE_KEY = "primary_image_cached"
+        CACHE_KEY = f"primary_image_cached_{suffix}"
         cached_files = st.session_state.get(CACHE_KEY, [])
         uploaded_files = normalize_uploaded_files(cached_files)
         
@@ -907,7 +934,7 @@ def show_detailed_material_form(material_id: int = None):
             logger.info(f"[SUBMIT] final name_official='{form_data['name_official']}' raw='{st.session_state.get(NAME_INPUT_KEY, '')}' cached='{st.session_state.get(NAME_CACHE, '')}'")
             
             # submitted 時は session_state のキャッシュから確実に取得
-            CACHE_KEY = "primary_image_cached"
+            CACHE_KEY = f"primary_image_cached_{suffix}"
             cached_files = st.session_state.get(CACHE_KEY, [])
             uploaded_files = normalize_uploaded_files(cached_files)
             
@@ -1870,14 +1897,8 @@ def save_material(form_data):
         # commitはsession_scopeが自動で行う
         
         # R2 アップロード処理（material.id 確定後）
-        # submitted 時は session_state のキャッシュから確実に取得
-        CACHE_KEY = "primary_image_cached"
-        cached_files = st.session_state.get(CACHE_KEY, [])
-        uploaded_files = normalize_uploaded_files(cached_files)
-        
-        # form_data からも取得を試みる（フォールバック）
-        if not uploaded_files:
-            uploaded_files = normalize_uploaded_files(form_data.get('images', []))
+        # form_data から画像を取得（submit時にform_data['images']に設定済み）
+        uploaded_files = normalize_uploaded_files(form_data.get('images', []))
         
         # 画像枚数をログ出力
         cached_image_count = len(uploaded_files)

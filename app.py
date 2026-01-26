@@ -4453,13 +4453,22 @@ def _txsub_mark_submission_approved(submission_id: int, material_id: int, editor
         - status='approved', approved_material_id=material_id を設定
         - このTxは必須（失敗時は承認全体を失敗扱い）
     """
-    from utils.db import session_scope
+    from utils.db import session_scope, normalize_submission_key
     from datetime import datetime
     
     with session_scope() as db:
-        submission = db.query(MaterialSubmission).filter(
-                MaterialSubmission.id == submission_id
-            ).first()
+        kind, normalized_key = normalize_submission_key(submission_id)
+        if kind is None or normalized_key is None:
+            raise ValueError(f"Submission {submission_id} not found in TxSub")
+        
+        # 型ガード：kind=="id" でも normalized_key が int でなければ uuid検索にフォールバック
+        if kind == "id" and isinstance(normalized_key, int):
+            submission = db.query(MaterialSubmission).filter(MaterialSubmission.id == normalized_key).first()
+        else:
+            # kind=="uuid" または kind=="id" だが normalized_key が int でない場合
+            if not isinstance(normalized_key, str):
+                normalized_key = str(normalized_key)
+            submission = db.query(MaterialSubmission).filter(MaterialSubmission.uuid == normalized_key).first()
             
         if not submission:
             raise ValueError(f"Submission {submission_id} not found in TxSub")
@@ -4789,18 +4798,19 @@ def show_submission_status():
         )
         
         if submission_id_input and submission_id_input.strip():
-            from utils.db import get_session
+            from utils.db import get_session, normalize_submission_key
             with get_session() as db:
-                # IDまたはUUIDで検索
-                submission = None
-                if submission_id_input.strip().isdigit():
-                    submission = db.query(MaterialSubmission).filter(
-                        MaterialSubmission.id == int(submission_id_input.strip())
-                    ).first()
+                kind, normalized_key = normalize_submission_key(submission_id_input)
+                if kind is None or normalized_key is None:
+                    submission = None
+                # 型ガード：kind=="id" でも normalized_key が int でなければ uuid検索にフォールバック
+                elif kind == "id" and isinstance(normalized_key, int):
+                    submission = db.query(MaterialSubmission).filter(MaterialSubmission.id == normalized_key).first()
                 else:
-                    submission = db.query(MaterialSubmission).filter(
-                        MaterialSubmission.uuid == submission_id_input.strip()
-                    ).first()
+                    # kind=="uuid" または kind=="id" だが normalized_key が int でない場合
+                    if not isinstance(normalized_key, str):
+                        normalized_key = str(normalized_key)
+                    submission = db.query(MaterialSubmission).filter(MaterialSubmission.uuid == normalized_key).first()
                 
                 if submission:
                     st.markdown("---")
