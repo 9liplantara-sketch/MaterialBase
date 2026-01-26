@@ -4,6 +4,7 @@ app.py から分離した実装関数群
 """
 import json
 import logging
+import os
 from database import Material, MaterialSubmission, ReferenceURL, UseExample
 
 logger = logging.getLogger(__name__)
@@ -42,38 +43,116 @@ def _tx1_upsert_material_core(submission: MaterialSubmission, form_data: dict, u
         if not name_official:
             raise ValueError("材料名（正式）が空です。承認できません。")
         
-        # Phase 4: NOT NULL補完を最初に実行（flush前）
-        from utils.material_defaults import apply_material_defaults
-        form_data = apply_material_defaults(form_data)
-        
-        # payload をサニタイズ：Material カラムだけに絞る（補完済みform_dataから）
-        allowed_columns = {c.name for c in Material.__table__.columns}
-        relationship_keys = {"images", "uploaded_images", "reference_urls", "use_examples", "properties", "metadata_items", "process_example_images"}
-        system_keys = {"id", "created_at", "updated_at", "deleted_at", "uuid"}
-        payload_for_material = {
-            k: v for k, v in form_data.items()
-            if k in allowed_columns 
-            and k not in relationship_keys 
-            and k not in system_keys
-            and v is not None
-        }
-        
         # 既存Materialを検索（update_existing=True の場合のみ、is_deleted=0 のみ対象）
-        material = None
-        action = None
-        
+        existing_material_for_merge = None
         if update_existing and name_official:
             existing_stmt = (
                 select(Material)
                 .where(Material.name_official == name_official)
                 .where(Material.is_deleted == 0)
             )
-            existing = db.execute(existing_stmt).scalar_one_or_none()
+            existing_material_for_merge = db.execute(existing_stmt).scalar_one_or_none()
+        
+        # update_existing=True かつ既存materialがある場合、payloadに存在しないキーは既存値を保持
+        original_payload_keys = set(form_data.keys())  # payloadに元々存在していたキーを記録
+        
+        if existing_material_for_merge:
+            # 既存materialの値を form_data にマージ（payloadに存在しないキーのみ）
+            for field in Material.__table__.columns:
+                field_name = field.name
+                # システム列やリレーションは除外
+                if field_name in {"id", "created_at", "updated_at", "deleted_at", "uuid"}:
+                    continue
+                # payload にキーが無い場合のみ、既存値を保持
+                if field_name not in original_payload_keys:
+                    existing_value = getattr(existing_material_for_merge, field_name, None)
+                    # JSON配列フィールドの場合はパース
+                    if field_name in ['name_aliases', 'material_forms', 'color_tags', 'processing_methods', 'use_categories', 'safety_tags']:
+                        if isinstance(existing_value, str):
+                            try:
+                                form_data[field_name] = json.loads(existing_value)
+                            except:
+                                form_data[field_name] = existing_value
+                        else:
+                            form_data[field_name] = existing_value
+                    else:
+                        # 既存値をそのまま使用（None でも空文字列でも既存値として扱う）
+                        form_data[field_name] = existing_value
+        
+        # Phase 4: NOT NULL補完を実行（新規作成時のみデフォルト値で埋める）
+        from utils.material_defaults import apply_material_defaults
+        # 既存materialがある場合は apply_material_defaults をスキップ（既存値を保持するため）
+        if not existing_material_for_merge:
+            form_data = apply_material_defaults(form_data)
+            if os.getenv("DEBUG", "0") == "1":
+                logger.info(f"[APPROVE][Tx1] apply_material_defaults applied (new material)")
+        else:
+            if os.getenv("DEBUG", "0") == "1":
+                logger.info(f"[APPROVE][Tx1] apply_material_defaults skipped (existing material, preserving existing values)")
+        
+        # payload をサニタイズ：Material カラムだけに絞る（補完済みform_dataから）
+        allowed_columns = {c.name for c in Material.__table__.columns}
+        relationship_keys = {"images", "uploaded_images", "reference_urls", "use_examples", "properties", "metadata_items", "process_example_images"}
+        system_keys = {"id", "created_at", "updated_at", "deleted_at", "uuid"}
+        
+        # 既存materialがある場合、payloadに存在しないキーも既存値から取得
+        if existing_material_for_merge:
+            for field_name in allowed_columns:
+                if field_name in relationship_keys or field_name in system_keys:
+                    continue
+                # form_data にキーが無い場合（=payloadに存在しなかったキー）、既存値を使用
+                if field_name not in original_payload_keys:
+                    existing_value = getattr(existing_material_for_merge, field_name, None)
+                    # None でない場合は既存値を使用（空文字列も既存値として扱う）
+                    if existing_value is not None:
+                        # JSON配列フィールドの場合はパース
+                        if field_name in ['name_aliases', 'material_forms', 'color_tags', 'processing_methods', 'use_categories', 'safety_tags']:
+                            if isinstance(existing_value, str):
+                                try:
+                                    form_data[field_name] = json.loads(existing_value)
+                                except:
+                                    form_data[field_name] = existing_value
+                            else:
+                                form_data[field_name] = existing_value
+                        else:
+                            form_data[field_name] = existing_value
+        
+        # payload_for_material を作成（既存materialがある場合、payloadに存在しないキーも含める）
+        # ただし、既存materialがある場合は「payloadに存在するキーだけ更新」する方針
+        if existing_material_for_merge:
+            # 既存materialがある場合：payloadに存在するキーだけを更新対象にする
+            payload_for_material = {
+                k: v for k, v in form_data.items()
+                if k in allowed_columns 
+                and k not in relationship_keys 
+                and k not in system_keys
+                and k in original_payload_keys  # payloadに存在していたキーのみ
+            }
             
-            if existing is not None:
-                material = existing
-                action = "updated"
-                logger.info(f"[APPROVE][Tx1] Updating existing material (id={material.id}, name_official='{name_official}')")
+            # DEBUG時のみログ出力
+            if os.getenv("DEBUG", "0") == "1":
+                updated_fields = [k for k in payload_for_material.keys() if k not in system_keys and k not in relationship_keys]
+                preserved_fields = [k for k in allowed_columns if k not in original_payload_keys and k not in system_keys and k not in relationship_keys]
+                logger.info(f"[APPROVE][Tx1] update_existing=True: payload_keys_count={len(original_payload_keys)}, updated_fields_count={len(updated_fields)}, preserved_fields_count={len(preserved_fields)}")
+        else:
+            # 新規作成の場合：form_dataのすべてのキーを対象にする（Noneは除外）
+            payload_for_material = {
+                k: v for k, v in form_data.items()
+                if k in allowed_columns 
+                and k not in relationship_keys 
+                and k not in system_keys
+                and v is not None
+            }
+        
+        # 既存Materialを検索（update_existing=True の場合のみ、is_deleted=0 のみ対象）
+        material = None
+        action = None
+        
+        # existing_material_for_merge が既に取得済みの場合はそれを使用
+        if existing_material_for_merge is not None:
+            material = existing_material_for_merge
+            action = "updated"
+            logger.info(f"[APPROVE][Tx1] Updating existing material (id={material.id}, name_official='{name_official}')")
         
         if material is None:
             # 新規作成前に、同名の active があるかチェック
@@ -99,10 +178,11 @@ def _tx1_upsert_material_core(submission: MaterialSubmission, form_data: dict, u
             logger.info(f"[APPROVE][Tx1] Creating new material (name_official='{name_official}')")
         
         # 補完済みのpayload_for_materialをMaterialオブジェクトに設定（システム列は除外）
+        # 既存materialがある場合、payloadに存在するキーだけを更新
         for field, value in payload_for_material.items():
             if hasattr(material, field) and field not in system_keys:
-                if value is not None:
-                    setattr(material, field, value)
+                # 既存materialがある場合でも、payloadに存在するキーは更新する（None/空文字列/空配列も「ユーザーが意図的に空にした」とみなす）
+                setattr(material, field, value)
         
         # JSON配列フィールドの処理（補完後に上書き、リストの場合はJSON文字列に変換）
         json_fields = ['name_aliases', 'material_forms', 'color_tags', 'processing_methods',

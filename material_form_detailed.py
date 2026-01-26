@@ -37,6 +37,77 @@ def normalize_uploaded_files(v) -> list:
     return [x for x in items if x is not None and getattr(x, "name", None) is not None]
 
 
+def material_to_form_data(material: Material) -> dict:
+    """
+    Materialオブジェクトをフォームデータ（dict）に変換する
+    
+    Args:
+        material: Materialオブジェクト（リレーションがロード済み）
+    
+    Returns:
+        dict: フォームデータ（JSON配列フィールドはlistに正規化、NoneはNoneのまま）
+    """
+    import json
+    
+    form_data = {}
+    
+    # スカラー属性を取得
+    for column in Material.__table__.columns:
+        field_name = column.name
+        if field_name in {"id", "created_at", "updated_at", "deleted_at", "uuid", "search_text"}:
+            continue
+        
+        value = getattr(material, field_name, None)
+        
+        # JSON配列フィールドの場合はパース
+        json_array_fields = [
+            'name_aliases', 'material_forms', 'color_tags', 'processing_methods',
+            'use_categories', 'safety_tags', 'question_templates', 'main_elements',
+            'development_motives', 'tactile_tags', 'visual_tags', 'certifications'
+        ]
+        
+        if field_name in json_array_fields:
+            if isinstance(value, str):
+                try:
+                    form_data[field_name] = json.loads(value) if value else []
+                except (json.JSONDecodeError, TypeError):
+                    form_data[field_name] = []
+            elif isinstance(value, list):
+                form_data[field_name] = value
+            else:
+                form_data[field_name] = []
+        else:
+            # 通常フィールドはそのまま（Noneも保持）
+            form_data[field_name] = value
+    
+    # リレーションをdictに変換
+    if hasattr(material, 'reference_urls') and material.reference_urls:
+        form_data['reference_urls'] = [
+            {'url': ref.url, 'type': ref.url_type, 'desc': ref.description}
+            for ref in material.reference_urls
+        ]
+    else:
+        form_data['reference_urls'] = []
+    
+    if hasattr(material, 'use_examples') and material.use_examples:
+        form_data['use_examples'] = [
+            {'name': ex.example_name, 'url': ex.example_url, 'desc': ex.description}
+            for ex in material.use_examples
+        ]
+    else:
+        form_data['use_examples'] = []
+    
+    if hasattr(material, 'images') and material.images:
+        form_data['existing_images'] = [
+            {'kind': img.kind, 'public_url': img.public_url, 'r2_key': img.r2_key}
+            for img in material.images
+        ]
+    else:
+        form_data['existing_images'] = []
+    
+    return form_data
+
+
 # 選択肢の定義
 SUPPLIER_TYPES = [
     "企業", "大学/研究機関", "スタートアップ", "個人/アーティスト",
@@ -274,16 +345,13 @@ def show_detailed_material_form(material_id: int = None):
             use_examples_list = list(existing_material.use_examples or [])
             images_list = list(existing_material.images or [])
             
+            # material_to_form_data を使って既存値をフォームデータに変換
+            existing_form_data = material_to_form_data(existing_material)
+            
             # session 内で dict に変換して保存（session を閉じた後でもアクセス可能にする）
             existing_data = {
-                'reference_urls': [
-                    {'url': ref.url, 'type': ref.url_type, 'desc': ref.description}
-                    for ref in reference_urls_list
-                ],
-                'use_examples': [
-                    {'name': ex.example_name, 'url': ex.example_url, 'desc': ex.description}
-                    for ex in use_examples_list
-                ],
+                'reference_urls': existing_form_data.get('reference_urls', []),
+                'use_examples': existing_form_data.get('use_examples', []),
             }
             # get_session()が自動でcloseするため、finallyは不要
             # existing_material は detached になるが、必要なデータは既に dict に変換済み
@@ -362,6 +430,14 @@ def show_detailed_material_form(material_id: int = None):
                 
                 # seed完了フラグを設定
                 st.session_state[seeded_flag] = True
+                
+                # 既存フォームデータをsession_stateに保存（送信時にマージ用）
+                st.session_state[f"existing_form_data_{suffix}"] = existing_form_data
+                
+                # DEBUG時のみログ出力（seedしたキー一覧）
+                if os.getenv("DEBUG", "0") == "1":
+                    seeded_keys = [k for k in st.session_state.keys() if k.endswith(f"_{suffix}") or k in ["name_official_input", "name_official_cached", "aliases", "ref_urls", "use_examples"]]
+                    logger.info(f"[SEED] material_id={material_id}, seeded_keys_count={len(seeded_keys)}, images_count={len(existing_form_data.get('existing_images', []))}")
     else:
         st.markdown('<h2 class="gradient-text">➕ 材料登録（詳細版）</h2>', unsafe_allow_html=True)
         st.info("📝 **レイヤー①（必須）**: 約10分で入力可能な基本情報\n\n**レイヤー②（任意）**: 後から追記できる詳細情報")
@@ -382,55 +458,15 @@ def show_detailed_material_form(material_id: int = None):
                 st.session_state.bulk_import_mode = True
                 st.rerun()
     
-    # 編集モードの場合は既存値をform_dataに初期化
+    # 編集モードの場合は既存値をform_dataに初期化（seed済みの場合はsession_stateから取得）
     if existing_material:
-        # 既存値からform_dataを初期化（主要フィールドのみ）
-        # existing_material は detached になる可能性があるため、スカラー属性のみを使用
-        form_data = {
-            'name_official': getattr(existing_material, 'name_official', ''),
-            'name_aliases': json.loads(getattr(existing_material, 'name_aliases', '[]')) if getattr(existing_material, 'name_aliases', None) else [],
-            'supplier_org': getattr(existing_material, 'supplier_org', ''),
-            'supplier_type': getattr(existing_material, 'supplier_type', ''),
-            'supplier_other': getattr(existing_material, 'supplier_other', ''),
-            'category_main': getattr(existing_material, 'category_main', ''),
-            'category_other': getattr(existing_material, 'category_other', ''),
-            'material_forms': json.loads(getattr(existing_material, 'material_forms', '[]')) if getattr(existing_material, 'material_forms', None) else [],
-            'material_forms_other': getattr(existing_material, 'material_forms_other', ''),
-            'origin_type': getattr(existing_material, 'origin_type', ''),
-            'origin_other': getattr(existing_material, 'origin_other', ''),
-            'origin_detail': getattr(existing_material, 'origin_detail', ''),
-            'recycle_bio_rate': getattr(existing_material, 'recycle_bio_rate', None),
-            'recycle_bio_basis': getattr(existing_material, 'recycle_bio_basis', ''),
-            'color_tags': json.loads(getattr(existing_material, 'color_tags', '[]')) if getattr(existing_material, 'color_tags', None) else [],
-            'transparency': getattr(existing_material, 'transparency', ''),
-            'hardness_qualitative': getattr(existing_material, 'hardness_qualitative', ''),
-            'hardness_value': getattr(existing_material, 'hardness_value', ''),
-            'weight_qualitative': getattr(existing_material, 'weight_qualitative', ''),
-            'specific_gravity': getattr(existing_material, 'specific_gravity', None),
-            'water_resistance': getattr(existing_material, 'water_resistance', ''),
-            'heat_resistance_temp': getattr(existing_material, 'heat_resistance_temp', None),
-            'heat_resistance_range': getattr(existing_material, 'heat_resistance_range', ''),
-            'weather_resistance': getattr(existing_material, 'weather_resistance', ''),
-            'processing_methods': json.loads(getattr(existing_material, 'processing_methods', '[]')) if getattr(existing_material, 'processing_methods', None) else [],
-            'processing_other': getattr(existing_material, 'processing_other', ''),
-            'equipment_level': getattr(existing_material, 'equipment_level', ''),
-            'prototyping_difficulty': getattr(existing_material, 'prototyping_difficulty', ''),
-            # 'use_environment': json.loads(getattr(existing_material, 'use_environment', '[]')) if getattr(existing_material, 'use_environment', None) else [],  # 一時的にコメントアウト（DBにカラムが存在しない）
-            'use_categories': json.loads(getattr(existing_material, 'use_categories', '[]')) if getattr(existing_material, 'use_categories', None) else [],
-            'use_other': getattr(existing_material, 'use_other', ''),
-            'procurement_status': getattr(existing_material, 'procurement_status', ''),
-            'cost_level': getattr(existing_material, 'cost_level', ''),
-            'cost_value': getattr(existing_material, 'cost_value', None),
-            'cost_unit': getattr(existing_material, 'cost_unit', ''),
-            'safety_tags': json.loads(getattr(existing_material, 'safety_tags', '[]')) if getattr(existing_material, 'safety_tags', None) else [],
-            'safety_other': getattr(existing_material, 'safety_other', ''),
-            'restrictions': getattr(existing_material, 'restrictions', ''),
-            'visibility': getattr(existing_material, 'visibility', ''),
-            'is_published': getattr(existing_material, 'is_published', 1),
-        }
-        # 参照URLと使用例は session 内で dict に変換済み（DetachedInstanceError 防止）
-        form_data['reference_urls'] = existing_data.get('reference_urls', [])
-        form_data['use_examples'] = existing_data.get('use_examples', [])
+        # session_stateに既存フォームデータが保存されている場合はそれを使用
+        existing_form_data_key = f"existing_form_data_{suffix}"
+        if existing_form_data_key in st.session_state:
+            form_data = dict(st.session_state[existing_form_data_key])
+        else:
+            # フォールバック：既存値からform_dataを初期化
+            form_data = material_to_form_data(existing_material)
     else:
         form_data = {}
     
@@ -824,13 +860,12 @@ def show_detailed_material_form(material_id: int = None):
         
         # 編集モード時の既存画像処理
         if is_edit_mode and material_id:
-            # 既存画像を維持するフラグを設定
-            form_data['keep_existing_images'] = True
-            
             # 削除フラグを取得
             deleted_indices = st.session_state.get(f"deleted_images_{suffix}", [])
             if deleted_indices:
                 form_data['deleted_image_indices'] = deleted_indices
+            else:
+                form_data['deleted_image_indices'] = []
         
         # 画像枚数をログ出力
         cached_image_count = len(uploaded_files)
@@ -874,6 +909,30 @@ def show_detailed_material_form(material_id: int = None):
         form_data["name_official"] = name_official_final
         form_data["name"] = name_official_final  # 画面表示の安定化
         
+        # 編集モードの場合、既存値とマージ（フォームで触ってないキーは既存値を保持）
+        if is_edit_mode and material_id:
+            existing_form_data_key = f"existing_form_data_{suffix}"
+            if existing_form_data_key in st.session_state:
+                existing_form_data = st.session_state[existing_form_data_key]
+                
+                # フォームで触ったキーを記録（form_dataに存在するキー）
+                form_touched_keys = set(form_data.keys())
+                
+                # 既存値でマージ（フォームで触ってないキーは既存値を保持）
+                for key, existing_value in existing_form_data.items():
+                    # システムキーやリレーションは除外
+                    if key in {"id", "created_at", "updated_at", "deleted_at", "uuid", "search_text", "existing_images"}:
+                        continue
+                    
+                    # フォームで触ってないキーは既存値を保持
+                    if key not in form_touched_keys:
+                        form_data[key] = existing_value
+                
+                # DEBUG時のみログ出力
+                if os.getenv("DEBUG", "0") == "1":
+                    preserved_keys = [k for k in existing_form_data.keys() if k not in form_touched_keys and k not in {"id", "created_at", "updated_at", "deleted_at", "uuid", "search_text", "existing_images"}]
+                    logger.info(f"[SUBMIT] is_edit_mode=True, material_id={material_id}, payload_keys_count={len(form_touched_keys)}, preserved_keys_count={len(preserved_keys)}")
+        
         # save_material_submission() の直前に "最終値" をログに出す（DEBUG=0でも1行出す）
         logger.info(f"[SUBMIT] final name_official='{form_data.get('name_official')}' raw='{name_official_raw}' cached='{st.session_state.get(NAME_CACHE, '')}'")
         
@@ -881,8 +940,9 @@ def show_detailed_material_form(material_id: int = None):
         if is_edit_mode or is_admin:
             # 管理者モードまたは編集モード：直接materialsに保存
             try:
-                result = save_material(form_data)
-                st.success(f"DEBUG: save_material returned: {result}")
+                result = save_material(form_data, material_id=material_id if is_edit_mode else None)
+                if os.getenv("DEBUG", "0") == "1":
+                    st.success(f"DEBUG: save_material returned: {result}")
             except Exception as e:
                 import traceback
                 st.error(f"DEBUG: save_material exception: {e}")
@@ -1187,10 +1247,21 @@ def show_layer1_form(existing_material=None, suffix="new"):
             key=f"recycle_bio_rate_{suffix}"
         )
     with col2:
+        # selectbox の index を計算（session_state があればそれ優先）
+        recycle_basis_key = f"recycle_bio_basis_{suffix}"
+        recycle_basis_options = ["自己申告", "第三者認証", "文献", "不明"]
+        if recycle_basis_key in st.session_state:
+            recycle_basis_value = st.session_state[recycle_basis_key]
+            recycle_basis_index = recycle_basis_options.index(recycle_basis_value) if recycle_basis_value in recycle_basis_options else 0
+        else:
+            default_recycle_basis = getattr(existing_material, 'recycle_bio_basis', recycle_basis_options[0]) if existing_material else recycle_basis_options[0]
+            recycle_basis_index = recycle_basis_options.index(default_recycle_basis) if default_recycle_basis in recycle_basis_options else 0
+            st.session_state[recycle_basis_key] = recycle_basis_options[recycle_basis_index]
         form_data['recycle_bio_basis'] = st.selectbox(
             "根拠",
-            ["自己申告", "第三者認証", "文献", "不明"],
-            key=f"recycle_bio_basis_{suffix}"
+            recycle_basis_options,
+            index=recycle_basis_index,
+            key=recycle_basis_key
         )
     
     st.markdown("---")
@@ -1201,18 +1272,39 @@ def show_layer1_form(existing_material=None, suffix="new"):
         COLOR_OPTIONS,
         key=f"color_tags_{suffix}"
     )
+    
+    # selectbox の index を計算（session_state があればそれ優先）
+    transparency_key = f"transparency_{suffix}"
+    if transparency_key in st.session_state:
+        transparency_value = st.session_state[transparency_key]
+        transparency_index = TRANSPARENCY_OPTIONS.index(transparency_value) if transparency_value in TRANSPARENCY_OPTIONS else 0
+    else:
+        default_transparency = getattr(existing_material, 'transparency', TRANSPARENCY_OPTIONS[0]) if existing_material else TRANSPARENCY_OPTIONS[0]
+        transparency_index = TRANSPARENCY_OPTIONS.index(default_transparency) if default_transparency in TRANSPARENCY_OPTIONS else 0
+        st.session_state[transparency_key] = TRANSPARENCY_OPTIONS[transparency_index]
     form_data['transparency'] = st.selectbox(
         "透明性*",
         TRANSPARENCY_OPTIONS,
-        key=f"transparency_{suffix}"
+        index=transparency_index,
+        key=transparency_key
     )
     
     col1, col2 = st.columns(2)
     with col1:
+        # selectbox の index を計算（session_state があればそれ優先）
+        hardness_key = f"hardness_qualitative_{suffix}"
+        if hardness_key in st.session_state:
+            hardness_value = st.session_state[hardness_key]
+            hardness_index = HARDNESS_OPTIONS.index(hardness_value) if hardness_value in HARDNESS_OPTIONS else 0
+        else:
+            default_hardness = getattr(existing_material, 'hardness_qualitative', HARDNESS_OPTIONS[0]) if existing_material else HARDNESS_OPTIONS[0]
+            hardness_index = HARDNESS_OPTIONS.index(default_hardness) if default_hardness in HARDNESS_OPTIONS else 0
+            st.session_state[hardness_key] = HARDNESS_OPTIONS[hardness_index]
         form_data['hardness_qualitative'] = st.selectbox(
             "4-2 硬さ（定性）*",
             HARDNESS_OPTIONS,
-            key=f"hardness_qualitative_{suffix}"
+            index=hardness_index,
+            key=hardness_key
         )
     with col2:
         form_data['hardness_value'] = st.text_input(
@@ -1223,10 +1315,20 @@ def show_layer1_form(existing_material=None, suffix="new"):
     
     col1, col2 = st.columns(2)
     with col1:
+        # selectbox の index を計算（session_state があればそれ優先）
+        weight_key = f"weight_qualitative_{suffix}"
+        if weight_key in st.session_state:
+            weight_value = st.session_state[weight_key]
+            weight_index = WEIGHT_OPTIONS.index(weight_value) if weight_value in WEIGHT_OPTIONS else 0
+        else:
+            default_weight = getattr(existing_material, 'weight_qualitative', WEIGHT_OPTIONS[0]) if existing_material else WEIGHT_OPTIONS[0]
+            weight_index = WEIGHT_OPTIONS.index(default_weight) if default_weight in WEIGHT_OPTIONS else 0
+            st.session_state[weight_key] = WEIGHT_OPTIONS[weight_index]
         form_data['weight_qualitative'] = st.selectbox(
             "4-3 重さ感（定性）*",
             WEIGHT_OPTIONS,
-            key=f"weight_qualitative_{suffix}"
+            index=weight_index,
+            key=weight_key
         )
     with col2:
         form_data['specific_gravity'] = st.number_input(
@@ -1236,10 +1338,20 @@ def show_layer1_form(existing_material=None, suffix="new"):
             key=f"specific_gravity_{suffix}"
         )
     
+    # selectbox の index を計算（session_state があればそれ優先）
+    water_resistance_key = f"water_resistance_{suffix}"
+    if water_resistance_key in st.session_state:
+        water_resistance_value = st.session_state[water_resistance_key]
+        water_resistance_index = WATER_RESISTANCE_OPTIONS.index(water_resistance_value) if water_resistance_value in WATER_RESISTANCE_OPTIONS else 0
+    else:
+        default_water_resistance = getattr(existing_material, 'water_resistance', WATER_RESISTANCE_OPTIONS[0]) if existing_material else WATER_RESISTANCE_OPTIONS[0]
+        water_resistance_index = WATER_RESISTANCE_OPTIONS.index(default_water_resistance) if default_water_resistance in WATER_RESISTANCE_OPTIONS else 0
+        st.session_state[water_resistance_key] = WATER_RESISTANCE_OPTIONS[water_resistance_index]
     form_data['water_resistance'] = st.selectbox(
         "4-4 耐水性・耐湿性*",
         WATER_RESISTANCE_OPTIONS,
-        key=f"water_resistance_{suffix}"
+        index=water_resistance_index,
+        key=water_resistance_key
     )
     
     col1, col2 = st.columns(2)
@@ -1251,16 +1363,36 @@ def show_layer1_form(existing_material=None, suffix="new"):
             key=f"heat_resistance_temp_{suffix}"
         )
     with col2:
+        # selectbox の index を計算（session_state があればそれ優先）
+        heat_range_key = f"heat_resistance_range_{suffix}"
+        if heat_range_key in st.session_state:
+            heat_range_value = st.session_state[heat_range_key]
+            heat_range_index = HEAT_RANGE_OPTIONS.index(heat_range_value) if heat_range_value in HEAT_RANGE_OPTIONS else 0
+        else:
+            default_heat_range = getattr(existing_material, 'heat_resistance_range', HEAT_RANGE_OPTIONS[0]) if existing_material else HEAT_RANGE_OPTIONS[0]
+            heat_range_index = HEAT_RANGE_OPTIONS.index(default_heat_range) if default_heat_range in HEAT_RANGE_OPTIONS else 0
+            st.session_state[heat_range_key] = HEAT_RANGE_OPTIONS[heat_range_index]
         form_data['heat_resistance_range'] = st.selectbox(
             "耐熱性（範囲）*",
             HEAT_RANGE_OPTIONS,
-            key=f"heat_resistance_range_{suffix}"
+            index=heat_range_index,
+            key=heat_range_key
         )
     
+    # selectbox の index を計算（session_state があればそれ優先）
+    weather_resistance_key = f"weather_resistance_{suffix}"
+    if weather_resistance_key in st.session_state:
+        weather_resistance_value = st.session_state[weather_resistance_key]
+        weather_resistance_index = WEATHER_RESISTANCE_OPTIONS.index(weather_resistance_value) if weather_resistance_value in WEATHER_RESISTANCE_OPTIONS else 0
+    else:
+        default_weather_resistance = getattr(existing_material, 'weather_resistance', WEATHER_RESISTANCE_OPTIONS[0]) if existing_material else WEATHER_RESISTANCE_OPTIONS[0]
+        weather_resistance_index = WEATHER_RESISTANCE_OPTIONS.index(default_weather_resistance) if default_weather_resistance in WEATHER_RESISTANCE_OPTIONS else 0
+        st.session_state[weather_resistance_key] = WEATHER_RESISTANCE_OPTIONS[weather_resistance_index]
     form_data['weather_resistance'] = st.selectbox(
         "4-6 耐候性（屋外耐久）*",
         WEATHER_RESISTANCE_OPTIONS,
-        key=f"weather_resistance_{suffix}"
+        index=weather_resistance_index,
+        key=weather_resistance_key
     )
     
     st.markdown("---")
@@ -1370,18 +1502,38 @@ def show_layer1_form(existing_material=None, suffix="new"):
     form_data['_new_ex_url'] = new_ex_url.strip() if new_ex_url else ""
     form_data['_new_ex_desc'] = new_ex_desc.strip() if new_ex_desc else ""
     
+    # selectbox の index を計算（session_state があればそれ優先）
+    procurement_key = f"procurement_status_{suffix}"
+    if procurement_key in st.session_state:
+        procurement_value = st.session_state[procurement_key]
+        procurement_index = PROCUREMENT_OPTIONS.index(procurement_value) if procurement_value in PROCUREMENT_OPTIONS else 0
+    else:
+        default_procurement = getattr(existing_material, 'procurement_status', PROCUREMENT_OPTIONS[0]) if existing_material else PROCUREMENT_OPTIONS[0]
+        procurement_index = PROCUREMENT_OPTIONS.index(default_procurement) if default_procurement in PROCUREMENT_OPTIONS else 0
+        st.session_state[procurement_key] = PROCUREMENT_OPTIONS[procurement_index]
     form_data['procurement_status'] = st.selectbox(
         "6-3 調達性（入手しやすさ）*",
         PROCUREMENT_OPTIONS,
-        key=f"procurement_status_{suffix}"
+        index=procurement_index,
+        key=procurement_key
     )
     
     col1, col2, col3 = st.columns(3)
     with col1:
+        # selectbox の index を計算（session_state があればそれ優先）
+        cost_level_key = f"cost_level_{suffix}"
+        if cost_level_key in st.session_state:
+            cost_level_value = st.session_state[cost_level_key]
+            cost_level_index = COST_LEVELS.index(cost_level_value) if cost_level_value in COST_LEVELS else 0
+        else:
+            default_cost_level = getattr(existing_material, 'cost_level', COST_LEVELS[0]) if existing_material else COST_LEVELS[0]
+            cost_level_index = COST_LEVELS.index(default_cost_level) if default_cost_level in COST_LEVELS else 0
+            st.session_state[cost_level_key] = COST_LEVELS[cost_level_index]
         form_data['cost_level'] = st.selectbox(
             "6-4 コスト帯（目安）*",
             COST_LEVELS,
-            key=f"cost_level_{suffix}"
+            index=cost_level_index,
+            key=cost_level_key
         )
     with col2:
         form_data['cost_value'] = st.number_input(
@@ -1417,11 +1569,20 @@ def show_layer1_form(existing_material=None, suffix="new"):
     st.markdown("---")
     st.markdown("### 8. 公開範囲")
     
+    # selectbox の index を計算（session_state があればそれ優先）
+    visibility_key = f"visibility_{suffix}"
+    if visibility_key in st.session_state:
+        visibility_value = st.session_state[visibility_key]
+        visibility_index = VISIBILITY_OPTIONS.index(visibility_value) if visibility_value in VISIBILITY_OPTIONS else 0
+    else:
+        default_visibility = getattr(existing_material, 'visibility', VISIBILITY_OPTIONS[0]) if existing_material else VISIBILITY_OPTIONS[0]
+        visibility_index = VISIBILITY_OPTIONS.index(default_visibility) if default_visibility in VISIBILITY_OPTIONS else 0
+        st.session_state[visibility_key] = VISIBILITY_OPTIONS[visibility_index]
     form_data['visibility'] = st.selectbox(
         "8-1 公開設定*",
         VISIBILITY_OPTIONS,
-        index=0,  # デフォルトを "公開（誰でも閲覧可）"
-        key=f"visibility_{suffix}"
+        index=visibility_index,
+        key=visibility_key
     )
     
     st.markdown("---")
@@ -1698,15 +1859,27 @@ def handle_primary_image(material_id: int, uploaded_files: list) -> None:
         st.warning(f"⚠️ R2アップロードに失敗しました: {str(r2_error)[:100]}")
 
 
-def save_material(form_data):
-    """材料データを保存（upsert対応）"""
+def save_material(form_data, material_id: int = None):
+    """
+    材料データを保存（upsert対応）
+    
+    Args:
+        form_data: フォームデータの辞書
+        material_id: 編集モードの場合、既存材料のID（指定されていればIDで検索、なければname_officialで検索）
+    """
     from utils.db import session_scope
     try:
         with session_scope() as db:
-            # name_officialで既存レコードを検索（upsert）
-            existing_material = db.query(Material).filter(
-            Material.name_official == form_data['name_official']
-        ).first()
+            # 編集モードの場合、material_idで既存レコードを検索
+            existing_material = None
+            if material_id:
+                existing_material = db.query(Material).filter(Material.id == material_id).first()
+            
+            # material_idが指定されていない場合、name_officialで既存レコードを検索（upsert）
+            if not existing_material and 'name_official' in form_data:
+                existing_material = db.query(Material).filter(
+                    Material.name_official == form_data['name_official']
+                ).first()
         
         # 必須フィールドの補完（None/空文字列をデフォルト値で埋める）
         form_data = _normalize_required(form_data, existing=existing_material)
@@ -1738,48 +1911,34 @@ def save_material(form_data):
             material = db.merge(existing_material)
             material_uuid = material.uuid  # UUIDは保持
             
-            # 差分更新：変更されたキーだけを updates に入れる
-            updates = {}
+            # 編集モードでは、form_dataに存在するキーだけを更新（存在しないキーは既存値を保持）
+            # ただし、None/空文字列/空配列は「ユーザーが意図的に空にした」とみなして更新する
             json_array_fields = ['name_aliases', 'material_forms', 'color_tags', 'processing_methods',
                                 'use_categories', 'safety_tags', 'question_templates', 'main_elements',
                                 'development_motives', 'tactile_tags', 'visual_tags', 'certifications']
             
+            # システムキーやリレーションを除外
+            system_keys = {"id", "created_at", "updated_at", "deleted_at", "uuid", "search_text"}
+            relationship_keys = {"images", "uploaded_images", "reference_urls", "use_examples", "properties", "metadata_items", "process_example_images", "existing_images"}
+            
+            # form_dataに存在するキーだけを更新
             for k, v in form_data.items():
-                # None や空文字列は既存値を維持（スキップ）
-                if v is None:
-                    continue
-                if isinstance(v, str) and v.strip() == "":
+                if k in system_keys or k in relationship_keys:
                     continue
                 
-                # 既存値と比較して変更があった場合のみ updates に入れる
-                existing_value = getattr(material, k, None)
-                
-                # JSON配列フィールドの場合は、既存値（JSON文字列）をパースして比較
+                # JSON配列フィールドの処理
                 if k in json_array_fields:
                     if isinstance(v, list):
-                        # form_data の値がリストの場合、JSON文字列に変換して比較
-                        v_json = json.dumps(v, ensure_ascii=False, sort_keys=True)
-                        if isinstance(existing_value, str):
-                            try:
-                                existing_list = json.loads(existing_value)
-                                existing_json = json.dumps(existing_list, ensure_ascii=False, sort_keys=True)
-                                if existing_json != v_json:
-                                    updates[k] = json.dumps(v, ensure_ascii=False)
-                            except (json.JSONDecodeError, TypeError):
-                                # パース失敗時は更新する
-                                updates[k] = json.dumps(v, ensure_ascii=False)
-                        elif existing_value != v_json:
-                            updates[k] = json.dumps(v, ensure_ascii=False)
-                    elif existing_value != v:
-                        updates[k] = v
+                        # リストの場合はJSON文字列に変換
+                        setattr(material, k, json.dumps(v, ensure_ascii=False))
+                    elif v is not None:
+                        # Noneでない場合はそのまま設定（既にJSON文字列の可能性）
+                        setattr(material, k, v)
+                    # vがNoneの場合は既存値を維持（更新しない）
                 else:
-                    # 通常フィールドは直接比較
-                    if existing_value != v:
-                        updates[k] = v
-            
-            # 変更されたキーだけを setattr で更新
-            for k, v in updates.items():
-                setattr(material, k, v)
+                    # 通常フィールドはそのまま設定（None/空文字列も「ユーザーが意図的に空にした」とみなす）
+                    if k in Material.__table__.columns:
+                        setattr(material, k, v)
         else:
             # INSERT（新規レコード）
             material_uuid = str(uuid.uuid4())
@@ -1902,25 +2061,40 @@ def save_material(form_data):
         
         # 画像枚数をログ出力
         cached_image_count = len(uploaded_files)
-        logger.info(f"[SAVE MATERIAL] cached_image_count={cached_image_count}, material_id={material.id if material else None}")
-        
-        if cached_image_count > 0:
-            st.info(f"📸 保存する画像: {cached_image_count} 枚")
-            for idx, img in enumerate(uploaded_files):
-                if hasattr(img, 'name'):
-                    logger.info(f"[SAVE MATERIAL] Image {idx+1}: {img.name}")
-        else:
-            logger.info(f"[SAVE MATERIAL] No images to upload (cached_image_count=0)")
-            st.info("ℹ️ 画像が選択されていないため、R2アップロードをスキップします")
+        logger.info(f"[SAVE MATERIAL] cached_image_count={cached_image_count}, material_id={material.id if material else None}, is_edit_mode={existing_material is not None}")
         
         # material.id と material.uuid をセッション内で取得（セッション外に持ち出さない）
         material_id = material.id
         material_uuid = material.uuid
         
-        # 共通関数でR2アップロード処理（material.id が確定している場合のみ）
-        # 画像アップロードが空なら既存画像を維持する（再アップロード不要）
+        # 編集モードの場合、削除フラグが立っている画像を削除
+        if existing_material and material_id:
+            deleted_image_indices = form_data.get('deleted_image_indices', [])
+            if deleted_image_indices:
+                from database import Image
+                # 既存画像を取得
+                existing_images_list = db.query(Image).filter(Image.material_id == material_id).order_by(Image.id).all()
+                for idx in deleted_image_indices:
+                    if 0 <= idx < len(existing_images_list):
+                        image_to_delete = existing_images_list[idx]
+                        logger.info(f"[SAVE MATERIAL] Deleting image: material_id={material_id}, image_id={image_to_delete.id}, kind={image_to_delete.kind}")
+                        db.delete(image_to_delete)
+                db.flush()
+        
+        # 新規画像をアップロード（編集モードでも新規アップロードがあれば処理）
         if material_id and uploaded_files:
+            if cached_image_count > 0:
+                st.info(f"📸 保存する画像: {cached_image_count} 枚")
+                for idx, img in enumerate(uploaded_files):
+                    if hasattr(img, 'name'):
+                        logger.info(f"[SAVE MATERIAL] Image {idx+1}: {img.name}")
             handle_primary_image(material_id, uploaded_files)
+        else:
+            if existing_material:
+                logger.info(f"[SAVE MATERIAL] No new images to upload (existing images preserved)")
+            else:
+                logger.info(f"[SAVE MATERIAL] No images to upload (cached_image_count=0)")
+                st.info("ℹ️ 画像が選択されていないため、R2アップロードをスキップします")
         
         # 成功時はdictを返す（セッション内で取得した値を使用）
         return {
