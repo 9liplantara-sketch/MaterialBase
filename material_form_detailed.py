@@ -1973,9 +1973,13 @@ def show_layer1_form(existing_material=None, suffix="new"):
     st.info("💡 **思考の補助**として、この材料に含まれる主要元素の原子番号を入力してください。\n\n例: 水 (H₂O) → `1, 8`、鉄 (Fe) → `26`、プラスチック (C, H, O) → `1, 6, 8`")
     
     main_elements_key = wkey("main_elements", scope, material_id=material_id_for_wkey)
-    # ---- Streamlit text_input safety: keyに紐づくsession_stateは必ずstrにする ----
+    
+    # --- safety: MUST happen before widget instantiation ---
     if main_elements_key in st.session_state:
         st.session_state[main_elements_key] = _coerce_text_input_value(st.session_state[main_elements_key])
+    else:
+        st.session_state[main_elements_key] = ""
+    
     main_elements_input = st.text_input(
         "主要元素の原子番号（カンマ区切り）",
         placeholder="例: 1, 6, 8 または 26",
@@ -1990,20 +1994,20 @@ def show_layer1_form(existing_material=None, suffix="new"):
             # 1-118の範囲に制限
             elements_list = [e for e in elements_list if 1 <= e <= 118]
             if elements_list:
-                # session_stateにJSON文字列として保存（extract_payloadで取得される）
-                st.session_state[main_elements_key] = json.dumps(elements_list, ensure_ascii=False)
+                # widget生成後はsession_stateを触らない（form_dataのみ設定）
+                # extract_payloadはwidgetの戻り値（main_elements_input）から取得する
                 form_data['main_elements'] = json.dumps(elements_list, ensure_ascii=False)
                 st.success(f"✅ {len(elements_list)}個の元素を登録: {elements_list}")
             else:
-                st.session_state[main_elements_key] = None
+                # widget生成後はsession_stateを触らない（form_dataのみ設定）
                 form_data['main_elements'] = None
                 st.warning("⚠️ 有効な原子番号（1-118）が見つかりませんでした。")
         except Exception as e:
-            st.session_state[main_elements_key] = None
+            # widget生成後はsession_stateを触らない（form_dataのみ設定）
             form_data['main_elements'] = None
             st.warning(f"⚠️ 入力形式が正しくありません: {e}")
     else:
-        st.session_state[main_elements_key] = None
+        # widget生成後はsession_stateを触らない（form_dataのみ設定）
         form_data['main_elements'] = None
     
     return form_data
