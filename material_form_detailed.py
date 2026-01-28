@@ -90,12 +90,49 @@ def mark_touched(key: str):
     
     Args:
         key: wkeyで生成されたwidget key
+    
+    Note:
+        st.form内ではon_changeが使えないため、この関数は使用されていません。
+        代わりにset_touched_if_changedを使用してください。
     """
     touched_key = f"touched:{key}"
     # 既にtouched:trueなら何もしない（余計なrerunを避ける）
     if st.session_state.get(touched_key):
         return
     st.session_state[touched_key] = True
+
+
+def set_touched_if_changed(field: str, key: str, value, default_value=None, existing_value=None, scope="create"):
+    """
+    値の差分でtouchedフラグを立てるヘルパー関数（st.form内で使用）
+    
+    Args:
+        field: フィールド名（例: "name_official", "category_main"）
+        key: wkeyで生成されたwidget key
+        value: ウィジェットの現在の値
+        default_value: createモードでのデフォルト値（比較用）
+        existing_value: editモードでの既存値（比較用）
+        scope: スコープ（"create" or "edit"）
+    """
+    touched_key = f"touched:{key}"
+    
+    # name_official は非空なら touched 扱い（既存仕様に合わせる）
+    if field == "name_official":
+        if str(value or "").strip():
+            st.session_state[touched_key] = True
+        return
+    
+    # create: デフォルトと違うなら touched
+    if scope == "create":
+        if default_value is not None and value != default_value:
+            st.session_state[touched_key] = True
+        return
+    
+    # edit: existing と違うなら touched
+    if scope == "edit":
+        if existing_value is not None and value != existing_value:
+            st.session_state[touched_key] = True
+        return
 
 
 def extract_payload(scope: str, material_id=None, submission_id=None) -> dict:
@@ -699,9 +736,9 @@ def show_detailed_material_form(material_id: int = None):
             "1-1 材料名（正式）*",
             key=NAME_KEY,
             help="材料の正式名称を入力してください",
-            on_change=mark_touched,
-            args=(NAME_KEY,),
         )
+        # touched gate: 値の差分でtouchedを立てる（st.form内ではon_changeが使えない）
+        set_touched_if_changed("name_official", NAME_KEY, name_val, scope=scope)
     
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
@@ -928,12 +965,16 @@ def show_detailed_material_form(material_id: int = None):
                 format_func=lambda v: "公開" if int(v) == 1 else "非公開",
                 key=pub_key,
                 horizontal=True,
-                on_change=mark_touched,
-                args=(pub_key,),
             )
             
             # 6) form_data['is_published'] には必ず int を入れる
             form_data['is_published'] = int(is_published)
+            
+            # touched gate: 値の差分でtouchedを立てる（st.form内ではon_changeが使えない）
+            default_pub = 1  # createモードのデフォルト
+            existing_pub = int(getattr(existing_material, "is_published", 1) or 1) if existing_material else None
+            set_touched_if_changed("is_published", pub_key, form_data['is_published'], 
+                                 default_value=default_pub, existing_value=existing_pub, scope=scope)
             
             # 管理者モードかどうかを判定（finally ブロックでも使用するため、try ブロック内で更新）
             is_admin = os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1"
@@ -1476,9 +1517,12 @@ def show_layer1_form(existing_material=None, suffix="new"):
         MATERIAL_CATEGORIES,
         index=category_main_index,
         key=category_main_key,
-        on_change=mark_touched,
-        args=(category_main_key,),
     )
+    # touched gate: 値の差分でtouchedを立てる（st.form内ではon_changeが使えない）
+    default_category = MATERIAL_CATEGORIES[0] if scope == "create" else None
+    existing_category = getattr(existing_material, 'category_main', None) if existing_material else None
+    set_touched_if_changed("category_main", category_main_key, form_data['category_main'],
+                         default_value=default_category, existing_value=existing_category, scope=scope)
     if form_data['category_main'] == "その他（自由記述）":
         form_data['category_other'] = st.text_input("その他（詳細）", key=wkey("category_other", scope, material_id=material_id_for_wkey))
     
@@ -1512,9 +1556,12 @@ def show_layer1_form(existing_material=None, suffix="new"):
         ORIGIN_TYPES,
         index=origin_type_index,
         key=origin_type_key,
-        on_change=mark_touched,
-        args=(origin_type_key,),
     )
+    # touched gate: 値の差分でtouchedを立てる（st.form内ではon_changeが使えない）
+    default_origin = ORIGIN_TYPES[0] if scope == "create" else None
+    existing_origin = getattr(existing_material, 'origin_type', None) if existing_material else None
+    set_touched_if_changed("origin_type", origin_type_key, form_data['origin_type'],
+                         default_value=default_origin, existing_value=existing_origin, scope=scope)
     if form_data['origin_type'] == "その他（自由記述）":
         origin_other_key = wkey("origin_other", scope, material_id=material_id_for_wkey)
         if origin_other_key not in st.session_state:
@@ -1587,9 +1634,12 @@ def show_layer1_form(existing_material=None, suffix="new"):
         TRANSPARENCY_OPTIONS,
         index=transparency_index,
         key=transparency_key,
-        on_change=mark_touched,
-        args=(transparency_key,),
     )
+    # touched gate: 値の差分でtouchedを立てる（st.form内ではon_changeが使えない）
+    default_transparency = TRANSPARENCY_OPTIONS[0] if scope == "create" else None
+    existing_transparency = getattr(existing_material, 'transparency', None) if existing_material else None
+    set_touched_if_changed("transparency", transparency_key, form_data['transparency'],
+                         default_value=default_transparency, existing_value=existing_transparency, scope=scope)
     
     col1, col2 = st.columns(2)
     with col1:
@@ -1890,9 +1940,12 @@ def show_layer1_form(existing_material=None, suffix="new"):
         VISIBILITY_OPTIONS,
         index=visibility_index,
         key=visibility_key,
-        on_change=mark_touched,
-        args=(visibility_key,),
     )
+    # touched gate: 値の差分でtouchedを立てる（st.form内ではon_changeが使えない）
+    default_visibility = VISIBILITY_OPTIONS[0] if scope == "create" else None
+    existing_visibility = getattr(existing_material, 'visibility', None) if existing_material else None
+    set_touched_if_changed("visibility", visibility_key, form_data['visibility'],
+                         default_value=default_visibility, existing_value=existing_visibility, scope=scope)
     
     st.markdown("---")
     st.markdown("### 9. 主要元素リスト（STEP 6: 材料×元素マッピング）")
