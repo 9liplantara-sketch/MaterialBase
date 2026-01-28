@@ -1093,6 +1093,38 @@ def show_detailed_material_form(material_id: int = None):
         except Exception:
             debug_env_enabled = os.getenv("DEBUG_ENV", "0") == "1"
         
+        # ---- 原因確定ログ（DEBUG_ENV=1のときのみ） ----
+        if debug_env_enabled:
+            logger.warning(f"[SUBMIT_DEBUG] scope={scope!r}, material_id={material_id}, submission_id=None, suffix={suffix}")
+            logger.warning(f"[SUBMIT_DEBUG] NAME_KEY={NAME_KEY!r}")
+            
+            # NAME_KEYの生値とcoerce後
+            name_raw = st.session_state.get(NAME_KEY)
+            name_coerced = _coerce_text_input_value(name_raw)
+            logger.warning(f"[SUBMIT_DEBUG] NAME_KEY raw value: {repr(name_raw)}")
+            logger.warning(f"[SUBMIT_DEBUG] NAME_KEY coerced value: {repr(name_coerced)}")
+            
+            # session_state内で"name_official"を含むキー一覧と値
+            name_official_keys = [k for k in st.session_state.keys() if isinstance(k, str) and "name_official" in k]
+            logger.warning(f"[SUBMIT_DEBUG] session_state keys containing 'name_official': {len(name_official_keys)}")
+            for k in name_official_keys:
+                v = st.session_state.get(k)
+                v_repr = repr(v)
+                if len(v_repr) > 200:
+                    v_repr = v_repr[:197] + "..."
+                logger.warning(f"[SUBMIT_DEBUG]   {k!r} = {v_repr}")
+        
+        # ---- name_official を直接取得（方式1: 最も堅牢） ----
+        # st.text_input の返り値（name_val）から直接取得（session_state依存を排除）
+        # name_val は widget の返り値なので、key不一致の影響を受けない
+        coerced = _coerce_text_input_value(name_val)
+        name_clean = str(coerced or "").strip()
+        
+        # payloadを初期化し、name_officialを最初に設定
+        payload = {}
+        if name_clean:
+            payload["name_official"] = name_clean
+        
         if debug_env_enabled:
             # 主要5項目のkeyと値をログ出力
             core_values = {}
@@ -1105,13 +1137,24 @@ def show_detailed_material_form(material_id: int = None):
                 }
             logger.info(f"[DEBUG_ENV] CORE_FIELDS before extract_payload: {core_values}")
         
-        # extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ）
-        payload = extract_payload(scope, material_id=material_id if is_edit_mode else None, submission_id=None)
+        # extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ、name_officialはスキップ済み）
+        extracted = extract_payload(scope, material_id=material_id if is_edit_mode else None, submission_id=None)
         
-        # DEBUG_ENV=1のときだけ、extract_payloadのkeysとname_officialの最終値をログ出力
+        # extract_payloadの結果からname_officialを削除してからマージ（widget返り値を優先）
+        if "name_official" in extracted:
+            extracted.pop("name_official", None)
+        payload.update(extracted)
+        
+        # DEBUG_ENV=1のときのみ、widget返り値・session_state・final payloadをログ出力
         if debug_env_enabled:
-            logger.info(f"[DEBUG_ENV] extract_payload keys: {list(payload.keys())}")
-            logger.info(f"[DEBUG_ENV] extract_payload name_official final: {repr(payload.get('name_official'))}")
+            # 比較用にsession_stateの値も取得（ログ用途のみ）
+            name_from_session_state = st.session_state.get(NAME_KEY)
+            name_from_session_state_coerced = _coerce_text_input_value(name_from_session_state)
+            name_from_session_state_coerced = str(name_from_session_state_coerced or "").strip()
+            
+            logger.warning(f"[SUBMIT_DEBUG] name_official from widget return value: {repr(name_clean)}")
+            logger.warning(f"[SUBMIT_DEBUG] name_official from session_state[{NAME_KEY!r}]: {repr(name_from_session_state_coerced)}")
+            logger.warning(f"[SUBMIT_DEBUG] final payload['name_official']: {repr(payload.get('name_official'))}")
         
         # デバッグログ（送信直前）
         _debug_dump_form_state(prefix="mf:")
@@ -1183,13 +1226,8 @@ def show_detailed_material_form(material_id: int = None):
         form_data['reference_urls'] = ref_urls_filtered
         form_data['use_examples'] = use_examples_filtered
         
-        # name_official は extract_payload() から取得済み（キャッシュ上書きを削除）
-        # payloadに含まれていない場合は、wkeyから直接取得
-        if 'name_official' not in form_data:
-            name_key = wkey("name_official", scope, material_id=material_id if is_edit_mode else None, submission_id=None)
-            name_official_value = st.session_state.get(name_key)
-            if name_official_value:
-                form_data['name_official'] = name_official_value.strip() if isinstance(name_official_value, str) else name_official_value
+        # name_official は既にpayloadに設定済み（直接取得方式）
+        # フォールバック処理は不要（方式1で確実に取得済み）
         
         # 画像を session_state のキャッシュから取得（submit時に確実に保持される）
         CACHE_KEY = f"primary_image_cached_{suffix}"
@@ -1318,6 +1356,38 @@ def show_detailed_material_form(material_id: int = None):
             except Exception:
                 debug_env_enabled = os.getenv("DEBUG_ENV", "0") == "1"
             
+            # ---- 原因確定ログ（DEBUG_ENV=1のときのみ） ----
+            if debug_env_enabled:
+                logger.warning(f"[SUBMIT_DEBUG] scope=create, material_id=None, submission_id=None, suffix={suffix}")
+                logger.warning(f"[SUBMIT_DEBUG] NAME_KEY={NAME_KEY!r}")
+                
+                # NAME_KEYの生値とcoerce後
+                name_raw = st.session_state.get(NAME_KEY)
+                name_coerced = _coerce_text_input_value(name_raw)
+                logger.warning(f"[SUBMIT_DEBUG] NAME_KEY raw value: {repr(name_raw)}")
+                logger.warning(f"[SUBMIT_DEBUG] NAME_KEY coerced value: {repr(name_coerced)}")
+                
+                # session_state内で"name_official"を含むキー一覧と値
+                name_official_keys = [k for k in st.session_state.keys() if isinstance(k, str) and "name_official" in k]
+                logger.warning(f"[SUBMIT_DEBUG] session_state keys containing 'name_official': {len(name_official_keys)}")
+                for k in name_official_keys:
+                    v = st.session_state.get(k)
+                    v_repr = repr(v)
+                    if len(v_repr) > 200:
+                        v_repr = v_repr[:197] + "..."
+                    logger.warning(f"[SUBMIT_DEBUG]   {k!r} = {v_repr}")
+            
+            # ---- name_official を直接取得（方式1: 最も堅牢） ----
+            # st.text_input の返り値（name_val）から直接取得（session_state依存を排除）
+            # name_val は widget の返り値なので、key不一致の影響を受けない
+            coerced = _coerce_text_input_value(name_val)
+            name_clean = str(coerced or "").strip()
+            
+            # payloadを初期化し、name_officialを最初に設定
+            payload = {}
+            if name_clean:
+                payload["name_official"] = name_clean
+            
             if debug_env_enabled:
                 # 主要5項目のkeyと値をログ出力
                 core_values = {}
@@ -1331,14 +1401,25 @@ def show_detailed_material_form(material_id: int = None):
                     }
                 logger.info(f"[DEBUG_ENV] CORE_FIELDS before extract_payload (create mode): {core_values}")
             
-            # extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ）
+            # extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ、name_officialはスキップ済み）
             scope = "create"
-            payload = extract_payload(scope, material_id=None, submission_id=None)
+            extracted = extract_payload(scope, material_id=None, submission_id=None)
             
-            # DEBUG_ENV=1のときだけ、extract_payloadのkeysとname_officialの最終値をログ出力
+            # extract_payloadの結果からname_officialを削除してからマージ（widget返り値を優先）
+            if "name_official" in extracted:
+                extracted.pop("name_official", None)
+            payload.update(extracted)
+            
+            # DEBUG_ENV=1のときのみ、widget返り値・session_state・final payloadをログ出力
             if debug_env_enabled:
-                logger.info(f"[DEBUG_ENV] extract_payload keys: {list(payload.keys())}")
-                logger.info(f"[DEBUG_ENV] extract_payload name_official final: {repr(payload.get('name_official'))}")
+                # 比較用にsession_stateの値も取得（ログ用途のみ）
+                name_from_session_state = st.session_state.get(NAME_KEY)
+                name_from_session_state_coerced = _coerce_text_input_value(name_from_session_state)
+                name_from_session_state_coerced = str(name_from_session_state_coerced or "").strip()
+                
+                logger.warning(f"[SUBMIT_DEBUG] name_official from widget return value: {repr(name_clean)}")
+                logger.warning(f"[SUBMIT_DEBUG] name_official from session_state[{NAME_KEY!r}]: {repr(name_from_session_state_coerced)}")
+                logger.warning(f"[SUBMIT_DEBUG] final payload['name_official']: {repr(payload.get('name_official'))}")
             
             # デバッグログ（送信直前）
             _debug_dump_form_state(prefix="mf:")
