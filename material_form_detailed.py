@@ -102,6 +102,23 @@ def mark_touched(key: str):
     st.session_state[touched_key] = True
 
 
+def _coerce_text_input_value(v) -> str:
+    """st.text_input に渡す値/セッション値を必ず str に正規化する。"""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (list, tuple, set)):
+        return ",".join(str(x) for x in v)
+    if isinstance(v, dict):
+        try:
+            import json
+            return json.dumps(v, ensure_ascii=False)
+        except Exception:
+            return str(v)
+    return str(v)
+
+
 def set_touched_if_changed(field: str, key: str, value, default_value=None, existing_value=None, scope="create"):
     """
     値の差分でtouchedフラグを立てるヘルパー関数（st.form内で使用）
@@ -728,8 +745,11 @@ def show_detailed_material_form(material_id: int = None):
         if NAME_KEY not in st.session_state:
             if existing_material:
                 default_name = (getattr(existing_material, "name_official", "") or "").strip()
-                st.session_state[NAME_KEY] = default_name
+                st.session_state[NAME_KEY] = _coerce_text_input_value(default_name)
             # else: createモードではsession_stateに設定しない（UIのデフォルトに任せる）
+        else:
+            # session_stateに既に値がある場合も正規化（list/dict等の不正な値に対応）
+            st.session_state[NAME_KEY] = _coerce_text_input_value(st.session_state.get(NAME_KEY))
         
         # ★ text_input は必ず毎回呼ぶ（value= は削除、key だけで管理）
         name_val = st.text_input(
@@ -1953,6 +1973,9 @@ def show_layer1_form(existing_material=None, suffix="new"):
     st.info("💡 **思考の補助**として、この材料に含まれる主要元素の原子番号を入力してください。\n\n例: 水 (H₂O) → `1, 8`、鉄 (Fe) → `26`、プラスチック (C, H, O) → `1, 6, 8`")
     
     main_elements_key = wkey("main_elements", scope, material_id=material_id_for_wkey)
+    # ---- Streamlit text_input safety: keyに紐づくsession_stateは必ずstrにする ----
+    if main_elements_key in st.session_state:
+        st.session_state[main_elements_key] = _coerce_text_input_value(st.session_state[main_elements_key])
     main_elements_input = st.text_input(
         "主要元素の原子番号（カンマ区切り）",
         placeholder="例: 1, 6, 8 または 26",
