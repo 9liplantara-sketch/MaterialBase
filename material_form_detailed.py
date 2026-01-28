@@ -1125,6 +1125,61 @@ def show_detailed_material_form(material_id: int = None):
         if name_clean:
             payload["name_official"] = name_clean
         
+        # ---- CORE_FIELDS を widget返り値dict（layer1_data/form_data統合）から取得 ----
+        # A) core_source を決め打ち（layer1_data と form_data を統合）
+        core_source = {}
+        if isinstance(layer1_data, dict):
+            core_source.update(layer1_data)
+        if isinstance(form_data, dict):
+            core_source.update(form_data)
+        
+        # DEBUG_ENV=1のときだけ、core_sourceのキー状況をログ出力
+        if debug_env_enabled:
+            keys_list = list(core_source.keys())[:30]
+            keys_str = ",".join(keys_list) if keys_list else "(empty)"
+            has_category_main = 1 if "category_main" in core_source else 0
+            has_is_published = 1 if "is_published" in core_source else 0
+            logger.warning(f"[SUBMIT_CORE_SRC] scope={scope!r} keys={keys_str} has_category_main={has_category_main} has_is_published={has_is_published}")
+        
+        # B) CORE_FIELDS（name_official以外）を core_source から取得（touched gate付き）
+        for field in CORE_FIELDS:
+            # name_official は既に設定済みなのでスキップ
+            if field == "name_official":
+                continue
+            
+            # widget key を生成（ウィジェット生成時と同じ wkey を使用）
+            key = wkey(field, scope, material_id=material_id if scope == "edit" else None, submission_id=None)
+            touched = bool(st.session_state.get(f"touched:{key}", False))
+            val = core_source.get(field)
+            
+            # scope別の追加ロジック
+            # - edit: touchedがTrueのときだけ追加（上書き事故防止）
+            # - create: touchedを見ずに追加（デフォルト値も含めて保存）、ただしvalがNoneの場合は入れない
+            included = 0
+            reason = ""
+            if scope == "edit":
+                if touched:
+                    payload[field] = val
+                    included = 1
+                    reason = "edit+touched"
+                else:
+                    reason = "edit+not_touched"
+            else:  # scope == "create"
+                if val is not None:
+                    payload[field] = val
+                    included = 1
+                    reason = "create+always"
+                else:
+                    reason = "skipped_none"
+            
+            # DEBUG_ENV=1 のときのみログ出力
+            if debug_env_enabled:
+                value_repr = repr(val) if val is not None else "None"
+                if len(value_repr) > 120:
+                    value_repr = value_repr[:117] + "..."
+                logger.warning(f"[SUBMIT_CORE] field={field} key={key!r} touched={1 if touched else 0} included={included} value={value_repr}")
+                logger.warning(f"[SUBMIT_CORE_RULE] scope={scope!r} field={field} touched={1 if touched else 0} included={included} reason={reason}")
+        
         if debug_env_enabled:
             # 主要5項目のkeyと値をログ出力
             core_values = {}
@@ -1137,12 +1192,14 @@ def show_detailed_material_form(material_id: int = None):
                 }
             logger.info(f"[DEBUG_ENV] CORE_FIELDS before extract_payload: {core_values}")
         
-        # extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ、name_officialはスキップ済み）
+        # D) extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ）
         extracted = extract_payload(scope, material_id=material_id if is_edit_mode else None, submission_id=None)
         
-        # extract_payloadの結果からname_officialを削除してからマージ（widget返り値を優先）
-        if "name_official" in extracted:
-            extracted.pop("name_official", None)
+        # extract_payloadの結果からCORE_FIELDSを全て削除してからマージ（widget返り値を優先）
+        for core_field in CORE_FIELDS:
+            extracted.pop(core_field, None)
+        # name_official は上書きしない（既に設定済み）
+        extracted.pop("name_official", None)
         payload.update(extracted)
         
         # DEBUG_ENV=1のときのみ、widget返り値・session_state・final payloadをログ出力
@@ -1155,6 +1212,19 @@ def show_detailed_material_form(material_id: int = None):
             logger.warning(f"[SUBMIT_DEBUG] name_official from widget return value: {repr(name_clean)}")
             logger.warning(f"[SUBMIT_DEBUG] name_official from session_state[{NAME_KEY!r}]: {repr(name_from_session_state_coerced)}")
             logger.warning(f"[SUBMIT_DEBUG] final payload['name_official']: {repr(payload.get('name_official'))}")
+            
+            # 最終的なpayloadに含まれるCORE_FIELDSをログ出力（実害検証用）
+            core_fields_in_payload = {}
+            for field in CORE_FIELDS:
+                if field in payload:
+                    val = payload[field]
+                    val_repr = repr(val) if val is not None else "None"
+                    if len(val_repr) > 100:
+                        val_repr = val_repr[:97] + "..."
+                    core_fields_in_payload[field] = val_repr
+                else:
+                    core_fields_in_payload[field] = "(missing)"
+            logger.warning(f"[SUBMIT_PAYLOAD_CORE] scope={scope!r} core_fields_in_payload={core_fields_in_payload}")
         
         # デバッグログ（送信直前）
         _debug_dump_form_state(prefix="mf:")
@@ -1388,12 +1458,57 @@ def show_detailed_material_form(material_id: int = None):
             if name_clean:
                 payload["name_official"] = name_clean
             
+            # ---- CORE_FIELDS を widget返り値dict（layer1_data/form_data統合）から取得 ----
+            # A) core_source を決め打ち（form_data が統合dictである可能性が高い）
+            # 一般ユーザーモードは form ブロック外のため、layer1_data は直接参照できない
+            # form_data は form ブロック内で layer1_data と統合済み（894行目）
+            core_source = {}
+            if isinstance(form_data, dict):
+                core_source.update(form_data)
+            
+            # DEBUG_ENV=1のときだけ、core_sourceのキー状況をログ出力
+            if debug_env_enabled:
+                keys_list = list(core_source.keys())[:30]
+                keys_str = ",".join(keys_list) if keys_list else "(empty)"
+                has_category_main = 1 if "category_main" in core_source else 0
+                has_is_published = 1 if "is_published" in core_source else 0
+                logger.warning(f"[SUBMIT_CORE_SRC] scope=create keys={keys_str} has_category_main={has_category_main} has_is_published={has_is_published}")
+            
+            # B) CORE_FIELDS（name_official以外）を core_source から取得（一般ユーザーは常にcreate）
+            scope_submit = "create"  # E) 変数の整合性チェック: submitのscopeをそのまま使う（外側のscopeを上書きしない）
+            for field in CORE_FIELDS:
+                # name_official は既に設定済みなのでスキップ
+                if field == "name_official":
+                    continue
+                
+                # widget key を生成（ウィジェット生成時と同じ wkey を使用）
+                key = wkey(field, scope_submit, material_id=None, submission_id=None)
+                touched = bool(st.session_state.get(f"touched:{key}", False))  # ログ用に保持
+                val = core_source.get(field)
+                
+                # 一般ユーザーは常にcreateなので、touchedを見ずに常にpayloadに入れる（valがNoneの場合はスキップ）
+                included = 0
+                reason = ""
+                if val is not None:
+                    payload[field] = val
+                    included = 1
+                    reason = "create+always"
+                else:
+                    reason = "skipped_none"
+                
+                # DEBUG_ENV=1 のときのみログ出力
+                if debug_env_enabled:
+                    value_repr = repr(val) if val is not None else "None"
+                    if len(value_repr) > 120:
+                        value_repr = value_repr[:117] + "..."
+                    logger.warning(f"[SUBMIT_CORE] field={field} key={key!r} touched={1 if touched else 0} included={included} value={value_repr}")
+                    logger.warning(f"[SUBMIT_CORE_RULE] scope={scope_submit!r} field={field} touched={1 if touched else 0} included={included} reason={reason}")
+            
             if debug_env_enabled:
                 # 主要5項目のkeyと値をログ出力
                 core_values = {}
-                scope_create = "create"
                 for field in CORE_FIELDS:
-                    key = wkey(field, scope_create, material_id=None, submission_id=None)
+                    key = wkey(field, scope_submit, material_id=None)
                     value = st.session_state.get(key)
                     core_values[field] = {
                         'key': key,
@@ -1401,13 +1516,14 @@ def show_detailed_material_form(material_id: int = None):
                     }
                 logger.info(f"[DEBUG_ENV] CORE_FIELDS before extract_payload (create mode): {core_values}")
             
-            # extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ、name_officialはスキップ済み）
-            scope = "create"
-            extracted = extract_payload(scope, material_id=None, submission_id=None)
+            # D) extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ）
+            extracted = extract_payload(scope_submit, material_id=None, submission_id=None)
             
-            # extract_payloadの結果からname_officialを削除してからマージ（widget返り値を優先）
-            if "name_official" in extracted:
-                extracted.pop("name_official", None)
+            # extract_payloadの結果からCORE_FIELDSを全て削除してからマージ（widget返り値を優先）
+            for core_field in CORE_FIELDS:
+                extracted.pop(core_field, None)
+            # name_official は上書きしない（既に設定済み）
+            extracted.pop("name_official", None)
             payload.update(extracted)
             
             # DEBUG_ENV=1のときのみ、widget返り値・session_state・final payloadをログ出力
@@ -1420,6 +1536,19 @@ def show_detailed_material_form(material_id: int = None):
                 logger.warning(f"[SUBMIT_DEBUG] name_official from widget return value: {repr(name_clean)}")
                 logger.warning(f"[SUBMIT_DEBUG] name_official from session_state[{NAME_KEY!r}]: {repr(name_from_session_state_coerced)}")
                 logger.warning(f"[SUBMIT_DEBUG] final payload['name_official']: {repr(payload.get('name_official'))}")
+                
+                # 最終的なpayloadに含まれるCORE_FIELDSをログ出力（実害検証用）
+                core_fields_in_payload = {}
+                for field in CORE_FIELDS:
+                    if field in payload:
+                        val = payload[field]
+                        val_repr = repr(val) if val is not None else "None"
+                        if len(val_repr) > 100:
+                            val_repr = val_repr[:97] + "..."
+                        core_fields_in_payload[field] = val_repr
+                    else:
+                        core_fields_in_payload[field] = "(missing)"
+                logger.warning(f"[SUBMIT_PAYLOAD_CORE] scope={scope_submit!r} core_fields_in_payload={core_fields_in_payload}")
             
             # デバッグログ（送信直前）
             _debug_dump_form_state(prefix="mf:")
