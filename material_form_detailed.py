@@ -152,6 +152,47 @@ def set_touched_if_changed(field: str, key: str, value, default_value=None, exis
         return
 
 
+def _find_existing_widget_key_for_field(field: str, scope: str, material_id=None):
+    """
+    session_state上に実在するwidget keyを探索して返す。
+    suffixズレ（nosub/sub/new等）でpayloadが空になるのを防ぐ。
+    """
+    try:
+        keys = list(st.session_state.keys())
+    except Exception:
+        return None
+
+    candidates = []
+
+    # material_id がある場合：mf:{scope}:{material_id}:...:{field} を優先
+    if material_id is not None:
+        prefix = f"mf:{scope}:{material_id}:"
+        for k in keys:
+            if isinstance(k, str) and k.startswith(prefix) and k.endswith(f":{field}"):
+                candidates.append(k)
+
+    # 見つからなければ scope のみで探す（create等）
+    if not candidates:
+        prefix = f"mf:{scope}:"
+        for k in keys:
+            if isinstance(k, str) and k.startswith(prefix) and k.endswith(f":{field}"):
+                candidates.append(k)
+
+    if not candidates:
+        return None
+
+    # suffix優先度: nosub > sub > その他
+    def _score(k: str) -> int:
+        if ":nosub:" in k:
+            return 0
+        if ":sub:" in k:
+            return 1
+        return 2
+
+    candidates.sort(key=_score)
+    return candidates[0]
+
+
 def extract_payload(scope: str, material_id=None, submission_id=None) -> dict:
     """
     wkeyで生成されたwidget keyから値を収集してpayloadを構築する
@@ -174,10 +215,26 @@ def extract_payload(scope: str, material_id=None, submission_id=None) -> dict:
     payload = {}
     legacy_keys_used = []
     
+    # ---- name_official は必須: suffixズレに強い取得にする（touched gate 非依存） ----
+    name_key = _find_existing_widget_key_for_field("name_official", scope, material_id)
+    name_raw = st.session_state.get(name_key) if name_key else None
+    name_val = _coerce_text_input_value(name_raw)
+    name_val = str(name_val or "").strip()
+
+    if os.getenv("DEBUG_ENV") == "1":
+        logger.info(f"[EXTRACT_PAYLOAD] field=name_official key={name_key!r} touched=1 included={1 if name_val else 0} value={name_val[:120]!r}")
+
+    if name_val:
+        payload["name_official"] = name_val
+    
     # suffixを計算（移行ブリッジ用）
     suffix = str(material_id) if material_id else "new"
     
     for field in CANONICAL_FIELDS:
+        # name_official は既に処理済みなのでスキップ
+        if field == "name_official":
+            continue
+        
         # まずwkeyから取得を試みる
         key = wkey(field, scope, material_id, submission_id)
         value = st.session_state.get(key)
@@ -198,28 +255,14 @@ def extract_payload(scope: str, material_id=None, submission_id=None) -> dict:
             touched_key = f"touched:{key}"
             is_touched_flag = st.session_state.get(touched_key, False)
             
-            # name_officialは空文字でなければtouched扱いでもよい
-            if field == "name_official":
-                if value is None or (isinstance(value, str) and value.strip() == ""):
-                    # 空文字の場合はtouchedフラグをチェック
-                    if not is_touched_flag:
-                        if debug_env_enabled:
-                            value_repr = repr(value) if value is not None else "None"
-                            if len(value_repr) > 120:
-                                value_repr = value_repr[:117] + "..."
-                            logger.info(f"[EXTRACT_PAYLOAD] field={field} key={key} touched=0 included=0 value={value_repr}")
-                        continue
-                # 空文字でない場合はtouched扱い（ユーザーが入力したとみなす）
-                is_touched_flag = True
-            else:
-                # その他の主要項目はtouchedフラグが立っていない場合は含めない
-                if not is_touched_flag:
-                    if debug_env_enabled:
-                        value_repr = repr(value) if value is not None else "None"
-                        if len(value_repr) > 120:
-                            value_repr = value_repr[:117] + "..."
-                        logger.info(f"[EXTRACT_PAYLOAD] field={field} key={key} touched=0 included=0 value={value_repr}")
-                    continue
+            # その他の主要項目はtouchedフラグが立っていない場合は含めない
+            if not is_touched_flag:
+                if debug_env_enabled:
+                    value_repr = repr(value) if value is not None else "None"
+                    if len(value_repr) > 120:
+                        value_repr = value_repr[:117] + "..."
+                    logger.info(f"[EXTRACT_PAYLOAD] field={field} key={key} touched=0 included=0 value={value_repr}")
+                continue
             
             is_touched = 1 if is_touched_flag else 0
         
