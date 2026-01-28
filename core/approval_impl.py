@@ -177,23 +177,23 @@ def _tx1_upsert_material_core(submission: MaterialSubmission, form_data: dict, u
             action = 'created'
             logger.info(f"[APPROVE][Tx1] Creating new material (name_official='{name_official}')")
         
+        # VARCHAR列対策: list/dictをJSON文字列に変換する正規化関数
+        def _coerce_for_varchar(v):
+            """VARCHAR列に設定する前にlist/dictをJSON文字列に変換"""
+            if v is None:
+                return None
+            if isinstance(v, (dict, list)):
+                return json.dumps(v, ensure_ascii=False)
+            return v
+        
         # 補完済みのpayload_for_materialをMaterialオブジェクトに設定（システム列は除外）
         # 既存materialがある場合、payloadに存在するキーだけを更新
         for field, value in payload_for_material.items():
             if hasattr(material, field) and field not in system_keys:
+                # VARCHAR列対策: list/dictをJSON文字列に変換してから設定
+                normalized_value = _coerce_for_varchar(value)
                 # 既存materialがある場合でも、payloadに存在するキーは更新する（None/空文字列/空配列も「ユーザーが意図的に空にした」とみなす）
-                setattr(material, field, value)
-        
-        # JSON配列フィールドの処理（補完後に上書き、リストの場合はJSON文字列に変換）
-        json_fields = ['name_aliases', 'material_forms', 'color_tags', 'processing_methods',
-                      'use_categories', 'safety_tags', 'question_templates', 'main_elements']
-        for field in json_fields:
-            if field in form_data and form_data[field]:
-                if isinstance(form_data[field], list):
-                    material.__setattr__(field, json.dumps(form_data[field], ensure_ascii=False))
-                elif isinstance(form_data[field], str) and not form_data[field].startswith('['):
-                    # 文字列の場合はそのまま（既にJSON文字列の可能性）
-                    material.__setattr__(field, form_data[field])
+                setattr(material, field, normalized_value)
         
         # 後方互換フィールド
         if form_data.get('name_official'):

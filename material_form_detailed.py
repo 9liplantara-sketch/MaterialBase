@@ -21,6 +21,242 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 
+# ===== Widget Key統一管理 =====
+
+# 主要5項目（wkey完全統一対象）
+CORE_FIELDS = {
+    'name_official',
+    'category_main',
+    'origin_type',
+    'transparency',
+    'visibility',
+    'is_published',  # 可能なら追加
+}
+
+# Canonical fields: DBに保存するフィールドの一覧（補助キーは除外）
+CANONICAL_FIELDS = {
+    # 基本識別情報
+    'name_official', 'name_aliases',
+    # 供給元
+    'supplier_org', 'supplier_type', 'supplier_other',
+    # 分類
+    'category_main', 'category_other', 'material_forms', 'material_forms_other',
+    # 由来・原料
+    'origin_type', 'origin_other', 'origin_detail', 'recycle_bio_rate', 'recycle_bio_basis',
+    # 基本特性
+    'color_tags', 'transparency', 'hardness_qualitative', 'hardness_value',
+    'weight_qualitative', 'specific_gravity', 'water_resistance',
+    'heat_resistance_temp', 'heat_resistance_range', 'weather_resistance',
+    # 加工・実装条件
+    'processing_methods', 'processing_other', 'equipment_level', 'prototyping_difficulty',
+    # 用途・市場状態
+    'use_categories', 'use_other', 'procurement_status', 'cost_level', 'cost_value', 'cost_unit',
+    # 制約・安全・法規
+    'safety_tags', 'safety_other', 'restrictions',
+    # 公開範囲
+    'visibility', 'is_published',
+    # リレーション
+    'reference_urls', 'use_examples',
+    # レイヤー②
+    'development_motives', 'development_motive_other', 'development_background_short', 'development_story',
+    'tactile_tags', 'tactile_other', 'visual_tags', 'visual_other', 'sound_smell',
+    'circularity', 'certifications', 'certifications_other',
+    # STEP 6
+    'main_elements',
+}
+
+
+def wkey(field: str, scope: str, material_id=None, submission_id=None) -> str:
+    """
+    Widget keyを統一生成する関数
+    
+    Args:
+        field: フィールド名（例: "name_official", "category_main"）
+        scope: スコープ（"create", "edit", "approve"）
+        material_id: 材料ID（編集モードの場合）
+        submission_id: 投稿ID（承認画面の場合）
+    
+    Returns:
+        str: "mf:{scope}:{mid or 'new'}:{sid or 'nosub'}:{field}" 形式のキー
+    """
+    mid_str = str(material_id) if material_id else "new"
+    sid_str = str(submission_id) if submission_id else "nosub"
+    return f"mf:{scope}:{mid_str}:{sid_str}:{field}"
+
+
+def mark_touched(key: str):
+    """
+    Widgetがユーザーによって変更されたことを記録するコールバック関数
+    
+    Args:
+        key: wkeyで生成されたwidget key
+    """
+    touched_key = f"touched:{key}"
+    # 既にtouched:trueなら何もしない（余計なrerunを避ける）
+    if st.session_state.get(touched_key):
+        return
+    st.session_state[touched_key] = True
+
+
+def extract_payload(scope: str, material_id=None, submission_id=None) -> dict:
+    """
+    wkeyで生成されたwidget keyから値を収集してpayloadを構築する
+    
+    Args:
+        scope: スコープ（"create", "edit", "approve"）
+        material_id: 材料ID（編集モードの場合）
+        submission_id: 投稿ID（承認画面の場合）
+    
+    Returns:
+        dict: payload（CANONICAL_FIELDSのみ、見つからないキーは含めない）
+    """
+    # DEBUG_ENVチェック
+    try:
+        from utils.settings import get_flag
+        debug_env_enabled = get_flag("DEBUG_ENV", False)
+    except Exception:
+        debug_env_enabled = os.getenv("DEBUG_ENV", "0") == "1"
+    
+    payload = {}
+    legacy_keys_used = []
+    
+    # suffixを計算（移行ブリッジ用）
+    suffix = str(material_id) if material_id else "new"
+    
+    for field in CANONICAL_FIELDS:
+        # まずwkeyから取得を試みる
+        key = wkey(field, scope, material_id, submission_id)
+        value = st.session_state.get(key)
+        
+        # wkeyが空の場合、旧suffixベースのキーから拾う（移行ブリッジ）
+        if value is None:
+            legacy_key = f"{field}_{suffix}"
+            legacy_value = st.session_state.get(legacy_key)
+            if legacy_value is not None:
+                value = legacy_value
+                legacy_keys_used.append(field)
+                if debug_env_enabled:
+                    logger.debug(f"[LEGACY_KEY_USED] field={field}, legacy_key={legacy_key}, wkey={key}")
+        
+        # 主要6項目については、touchedフラグをチェック
+        is_touched = 0
+        if field in CORE_FIELDS:
+            touched_key = f"touched:{key}"
+            is_touched_flag = st.session_state.get(touched_key, False)
+            
+            # name_officialは空文字でなければtouched扱いでもよい
+            if field == "name_official":
+                if value is None or (isinstance(value, str) and value.strip() == ""):
+                    # 空文字の場合はtouchedフラグをチェック
+                    if not is_touched_flag:
+                        if debug_env_enabled:
+                            value_repr = repr(value) if value is not None else "None"
+                            if len(value_repr) > 120:
+                                value_repr = value_repr[:117] + "..."
+                            logger.info(f"[EXTRACT_PAYLOAD] field={field} key={key} touched=0 included=0 value={value_repr}")
+                        continue
+                # 空文字でない場合はtouched扱い（ユーザーが入力したとみなす）
+                is_touched_flag = True
+            else:
+                # その他の主要項目はtouchedフラグが立っていない場合は含めない
+                if not is_touched_flag:
+                    if debug_env_enabled:
+                        value_repr = repr(value) if value is not None else "None"
+                        if len(value_repr) > 120:
+                            value_repr = value_repr[:117] + "..."
+                        logger.info(f"[EXTRACT_PAYLOAD] field={field} key={key} touched=0 included=0 value={value_repr}")
+                    continue
+            
+            is_touched = 1 if is_touched_flag else 0
+        
+        # None/空文字列/空配列は含めない（初期値で埋めない）
+        if value is None:
+            if debug_env_enabled:
+                logger.info(f"[EXTRACT_PAYLOAD] field={field} key={key} touched={is_touched} included=0 value=None")
+            continue
+        if isinstance(value, str) and value.strip() == "":
+            if debug_env_enabled:
+                logger.info(f"[EXTRACT_PAYLOAD] field={field} key={key} touched={is_touched} included=0 value=''")
+            continue
+        if isinstance(value, list) and len(value) == 0:
+            if debug_env_enabled:
+                logger.info(f"[EXTRACT_PAYLOAD] field={field} key={key} touched={is_touched} included=0 value=[]")
+            continue
+        if isinstance(value, dict) and len(value) == 0:
+            if debug_env_enabled:
+                logger.info(f"[EXTRACT_PAYLOAD] field={field} key={key} touched={is_touched} included=0 value={{}}")
+            continue
+        
+        # 数値の正規化（可能ならfloat/intへ）
+        if isinstance(value, (int, float)):
+            payload[field] = value
+        elif isinstance(value, str):
+            # 数値文字列の場合は変換を試みる（既存の挙動を壊さない範囲）
+            try:
+                if '.' in value:
+                    payload[field] = float(value)
+                else:
+                    payload[field] = int(value)
+            except ValueError:
+                payload[field] = value
+        else:
+            payload[field] = value
+        
+        # payloadに含まれる場合のログ出力
+        if debug_env_enabled:
+            value_repr = repr(value) if value is not None else "None"
+            if len(value_repr) > 120:
+                value_repr = value_repr[:117] + "..."
+            logger.info(f"[EXTRACT_PAYLOAD] field={field} key={key} touched={is_touched} included=1 value={value_repr}")
+    
+    # 移行ブリッジ使用時はログ出力（DEBUG_ENV=1のときのみ）
+    if legacy_keys_used and debug_env_enabled:
+        logger.info(f"[LEGACY_KEY_USED] Fields using legacy keys: {legacy_keys_used}")
+    
+    return payload
+
+
+def _debug_dump_form_state(prefix: str = "mf:"):
+    """
+    フォーム状態をデバッグログに出力（DEBUG_ENV=1のときのみ）
+    
+    Args:
+        prefix: キーのプレフィックス（デフォルト: "mf:"）
+    """
+    try:
+        from utils.settings import get_flag
+        debug_enabled = get_flag("DEBUG_ENV", False)
+    except Exception:
+        debug_enabled = os.getenv("DEBUG_ENV", "0") == "1"
+    
+    if not debug_enabled:
+        return
+    
+    # mf: を含む session_state keys を収集
+    mf_keys = [k for k in st.session_state.keys() if prefix in k]
+    
+    # 代表項目の値を取得
+    representative_fields = ['name_official', 'category_main', 'origin_type', 'transparency', 'visibility']
+    rep_values = {}
+    for field in representative_fields:
+        # 複数のscopeで探す
+        for scope in ['create', 'edit', 'approve']:
+            key = wkey(field, scope)
+            if key in st.session_state:
+                value = st.session_state[key]
+                if isinstance(value, str) and len(value) > 200:
+                    value = value[:200] + "..."
+                rep_values[f"{scope}:{field}"] = value
+                break
+    
+    # ログ出力
+    logger.info(
+        f"[DEBUG_DUMP] mf: keys_count={len(mf_keys)}, "
+        f"keys_head={mf_keys[:10]}, "
+        f"rep_values={rep_values}"
+    )
+
+
 def normalize_uploaded_files(v) -> list:
     """
     UploadedFile のリストを正規化（型揺れに強い）
@@ -272,8 +508,14 @@ def show_detailed_material_form(material_id: int = None):
     
     # 編集→新規、新規→編集、編集→編集（別ID）のいずれかの場合にクリーンアップ
     if (prev_is_edit != current_is_edit) or (is_edit_mode and material_id and prev and prev != material_id):
-        # このフォームで実際に使うキーだけを削除（雑に全部消さない）
-        # 実際に使っている key prefix のみに合わせる
+        # wkey()で生成されたキーを削除（mf:プレフィックス）
+        prev_scope = "edit" if prev_is_edit else "create"
+        prev_mid_str = str(prev) if prev else "new"
+        for k in list(st.session_state.keys()):
+            if k.startswith(f"mf:{prev_scope}:{prev_mid_str}:"):
+                del st.session_state[k]
+        
+        # 従来のsuffix付きキーも削除（後方互換性のため）
         for k in list(st.session_state.keys()):
             if k.endswith(f"_{prev_suffix}") and (
                 k.startswith("name_") or k.startswith("supplier_") or k.startswith("category_") or
@@ -359,74 +601,41 @@ def show_detailed_material_form(material_id: int = None):
             # st.session_state に既存値を設定（suffixごとに初回のみseed）
             seeded_flag = f"_seeded_{suffix}"
             if seeded_flag not in st.session_state:
-                def seed(key, value):
-                    st.session_state[key] = value
+                # material_to_form_data で既存値をフォームデータに変換
+                existing_form_data = material_to_form_data(existing_material)
                 
-                # 主要フィールドを session_state に設定（実際の widget key と完全一致）
-                name_official_value = getattr(existing_material, 'name_official', '') or ""
-                seed(f"name_official_cached", name_official_value)
-                seed("name_official_input", name_official_value)  # widget key に対応
-                seed(f"supplier_org_{suffix}", getattr(existing_material, 'supplier_org', '') or "")
-                seed(f"supplier_type_{suffix}", getattr(existing_material, 'supplier_type', '') or "")
-                seed(f"supplier_other_{suffix}", getattr(existing_material, 'supplier_other', '') or "")
-                seed(f"category_main_{suffix}", getattr(existing_material, 'category_main', '') or "")
-                seed(f"category_other_{suffix}", getattr(existing_material, 'category_other', '') or "")
-                seed(f"material_forms_other_{suffix}", getattr(existing_material, 'material_forms_other', '') or "")
-                seed(f"origin_type_{suffix}", getattr(existing_material, 'origin_type', '') or "")
-                seed(f"origin_other_{suffix}", getattr(existing_material, 'origin_other', '') or "")
-                seed(f"origin_detail_{suffix}", getattr(existing_material, 'origin_detail', '') or "")
-                seed(f"recycle_bio_rate_{suffix}", getattr(existing_material, 'recycle_bio_rate', None))
-                seed(f"recycle_bio_basis_{suffix}", getattr(existing_material, 'recycle_bio_basis', '') or "")
-                seed(f"transparency_{suffix}", getattr(existing_material, 'transparency', '') or "")
-                seed(f"hardness_qualitative_{suffix}", getattr(existing_material, 'hardness_qualitative', '') or "")
-                seed(f"hardness_value_{suffix}", getattr(existing_material, 'hardness_value', None))
-                seed(f"weight_qualitative_{suffix}", getattr(existing_material, 'weight_qualitative', '') or "")
-                seed(f"specific_gravity_{suffix}", getattr(existing_material, 'specific_gravity', None))
-                seed(f"water_resistance_{suffix}", getattr(existing_material, 'water_resistance', '') or "")
-                seed(f"heat_resistance_temp_{suffix}", getattr(existing_material, 'heat_resistance_temp', None))
-                seed(f"heat_resistance_range_{suffix}", getattr(existing_material, 'heat_resistance_range', '') or "")
-                seed(f"weather_resistance_{suffix}", getattr(existing_material, 'weather_resistance', '') or "")
-                seed(f"processing_other_{suffix}", getattr(existing_material, 'processing_other', '') or "")
-                seed(f"equipment_level_{suffix}", getattr(existing_material, 'equipment_level', '') or "")
-                seed(f"prototyping_difficulty_{suffix}", getattr(existing_material, 'prototyping_difficulty', '') or "")
-                seed(f"use_other_{suffix}", getattr(existing_material, 'use_other', '') or "")
-                seed(f"procurement_status_{suffix}", getattr(existing_material, 'procurement_status', '') or "")
-                seed(f"cost_level_{suffix}", getattr(existing_material, 'cost_level', '') or "")
-                seed(f"cost_value_{suffix}", getattr(existing_material, 'cost_value', None))
-                seed(f"cost_unit_{suffix}", getattr(existing_material, 'cost_unit', '') or "")
-                seed(f"safety_other_{suffix}", getattr(existing_material, 'safety_other', '') or "")
-                seed(f"restrictions_{suffix}", getattr(existing_material, 'restrictions', '') or "")
-                seed(f"visibility_{suffix}", getattr(existing_material, 'visibility', '') or "")
-                seed(f"is_published_{suffix}", getattr(existing_material, 'is_published', 1))
+                # wkey()を使ってwidget keyに値を投入（既にユーザーが入力中なら上書きしない）
+                scope = "edit"
+                def seed_widget(field_name: str, value):
+                    """
+                    Widget keyに値を設定（wkey()で生成、既に値がある場合は上書きしない）
+                    
+                    - editモード: 既存materialからseedしてOK（該当キーが存在しない場合のみ）
+                    - createモード: CORE_FIELDSについてはseed禁止（UIのindex defaultに任せる）
+                    """
+                    widget_key = wkey(field_name, scope, material_id=material_id)
+                    # createモードでCORE_FIELDSはseed禁止（ユーザーが触った時だけtouchedが立つ設計）
+                    if scope == "create" and field_name in CORE_FIELDS:
+                        return
+                    # 既に値がある場合は上書きしない（ユーザーが入力中なら保護）
+                    if widget_key not in st.session_state:
+                        st.session_state[widget_key] = value
                 
-                # JSON配列フィールド
-                name_aliases = json.loads(getattr(existing_material, 'name_aliases', '[]')) if getattr(existing_material, 'name_aliases', None) else []
-                seed("aliases", name_aliases)
+                # 主要6項目をseed（editモードのみ、createモードではseed_widget内でスキップ）
+                for field_name in CORE_FIELDS:
+                    if field_name in existing_form_data:
+                        seed_widget(field_name, existing_form_data[field_name])
                 
-                material_forms = json.loads(getattr(existing_material, 'material_forms', '[]')) if getattr(existing_material, 'material_forms', None) else []
-                seed(f"material_forms_{suffix}", material_forms)
+                # その他のフィールドもseed（後方互換性のため）
+                for field_name in CANONICAL_FIELDS:
+                    if field_name not in CORE_FIELDS and field_name in existing_form_data:
+                        seed_widget(field_name, existing_form_data[field_name])
                 
-                color_tags = json.loads(getattr(existing_material, 'color_tags', '[]')) if getattr(existing_material, 'color_tags', None) else []
-                seed(f"color_tags_{suffix}", color_tags)
-                
-                processing_methods = json.loads(getattr(existing_material, 'processing_methods', '[]')) if getattr(existing_material, 'processing_methods', None) else []
-                seed(f"processing_methods_{suffix}", processing_methods)
-                
-                use_categories = json.loads(getattr(existing_material, 'use_categories', '[]')) if getattr(existing_material, 'use_categories', None) else []
-                seed(f"use_categories_{suffix}", use_categories)
-                
-                safety_tags = json.loads(getattr(existing_material, 'safety_tags', '[]')) if getattr(existing_material, 'safety_tags', None) else []
-                seed(f"safety_tags_{suffix}", safety_tags)
-                
-                # リレーション
-                seed("ref_urls", existing_data.get('reference_urls', []))
-                seed("use_examples", existing_data.get('use_examples', []))
-                
-                # 画像（既存画像一覧を表示用に保存）
-                seed(f"existing_images_{suffix}", [
+                # 画像（既存画像一覧を表示用に保存、従来のkeyを使用）
+                st.session_state[f"existing_images_{suffix}"] = [
                     {'kind': img.kind, 'public_url': img.public_url, 'r2_key': img.r2_key}
                     for img in images_list
-                ])
+                ]
                 
                 # seed完了フラグを設定
                 st.session_state[seeded_flag] = True
@@ -434,10 +643,10 @@ def show_detailed_material_form(material_id: int = None):
                 # 既存フォームデータをsession_stateに保存（送信時にマージ用）
                 st.session_state[f"existing_form_data_{suffix}"] = existing_form_data
                 
-                # DEBUG時のみログ出力（seedしたキー一覧）
+                # DEBUG時のみログ出力
                 if os.getenv("DEBUG", "0") == "1":
-                    seeded_keys = [k for k in st.session_state.keys() if k.endswith(f"_{suffix}") or k in ["name_official_input", "name_official_cached", "aliases", "ref_urls", "use_examples"]]
-                    logger.info(f"[SEED] material_id={material_id}, seeded_keys_count={len(seeded_keys)}, images_count={len(existing_form_data.get('existing_images', []))}")
+                    seeded_count = sum(1 for k in st.session_state.keys() if k.startswith(f"mf:{scope}:"))
+                    logger.info(f"[SEED] material_id={material_id}, scope={scope}, seeded_wkeys_count={seeded_count}, images_count={len(existing_form_data.get('existing_images', []))}")
     else:
         st.markdown('<h2 class="gradient-text">➕ 材料登録（詳細版）</h2>', unsafe_allow_html=True)
         st.info("📝 **レイヤー①（必須）**: 約10分で入力可能な基本情報\n\n**レイヤー②（任意）**: 後から追記できる詳細情報")
@@ -471,38 +680,35 @@ def show_detailed_material_form(material_id: int = None):
         form_data = {}
     
     # 材料名（正式）を st.form の外に配置して、submit時に値が消えないようにする
-    NAME_KEY = "name_official_input"
-    NAME_CACHE = "name_official_cached"
+    scope = "edit" if is_edit_mode else "create"
+    NAME_KEY = wkey("name_official", scope, material_id=material_id)
     
     st.markdown("### 1. 基本識別情報")
     col1, col2 = st.columns(2)
     with col1:
         # session_state に初期値を設定（seed で既に設定済みの場合はスキップ）
+        # createモードでは主要6項目（CORE_FIELDS）のデフォルト値をsession_stateに設定しない
         if NAME_KEY not in st.session_state:
             if existing_material:
                 default_name = (getattr(existing_material, "name_official", "") or "").strip()
-            else:
-                default_name = (st.session_state.get(NAME_CACHE, "") or "").strip()
-            st.session_state[NAME_KEY] = default_name
+                st.session_state[NAME_KEY] = default_name
+            # else: createモードではsession_stateに設定しない（UIのデフォルトに任せる）
         
         # ★ text_input は必ず毎回呼ぶ（value= は削除、key だけで管理）
         name_val = st.text_input(
             "1-1 材料名（正式）*",
             key=NAME_KEY,
             help="材料の正式名称を入力してください",
+            on_change=mark_touched,
+            args=(NAME_KEY,),
         )
-        
-        # ★ 空でキャッシュを上書きしない
-        if name_val and name_val.strip():
-            st.session_state[NAME_CACHE] = name_val.strip()
-        elif NAME_CACHE not in st.session_state:
-            st.session_state[NAME_CACHE] = ""
     
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         st.caption("材料IDは自動採番されます")
     
     # 画像アップロード（st.form の外に配置して、submit時に値が消えないようにする）
+    # 画像は特別扱い（wkeyではなく従来のkeyを使用）
     PRIMARY_KEY = f"primary_image_{suffix}"
     CACHE_KEY = f"primary_image_cached_{suffix}"
     
@@ -605,7 +811,7 @@ def show_detailed_material_form(material_id: int = None):
                     
                     if "existing_material" in params:
                         # existing_material パラメータが存在する場合
-                        layer2_data = show_layer2_form(existing_material=existing_material)
+                        layer2_data = show_layer2_form(existing_material=existing_material, scope=scope, material_id_for_wkey=material_id)
                     else:
                         # existing_material パラメータが存在しない場合（古い実装）
                         if os.getenv("DEBUG", "0") == "1":
@@ -617,7 +823,7 @@ def show_detailed_material_form(material_id: int = None):
                                 "has_existing_material": False,
                                 "parameters": list(params.keys()),
                             })
-                        layer2_data = show_layer2_form()
+                        layer2_data = show_layer2_form(scope=scope, material_id_for_wkey=material_id)
                 except TypeError as e:
                     # 念のため最終フォールバック（古い関数でも落ちない）
                     if os.getenv("DEBUG", "0") == "1":
@@ -637,7 +843,7 @@ def show_detailed_material_form(material_id: int = None):
                             st.error(f"⚠️ Layer2呼び出しでTypeError: {e}（診断情報の取得も失敗: {diag_error}）")
                     # フォールバック: existing_material なしで呼び出す
                     try:
-                        layer2_data = show_layer2_form()
+                        layer2_data = show_layer2_form(scope=scope, material_id_for_wkey=material_id)
                     except Exception as fallback_error:
                         # それでも失敗する場合は空のdictを設定（クラッシュを防ぐ）
                         if os.getenv("DEBUG", "0") == "1":
@@ -661,7 +867,7 @@ def show_detailed_material_form(material_id: int = None):
             # 掲載可否の設定
             st.markdown("---")
             st.markdown("### 📢 掲載設定")
-            pub_key = f"is_published_{suffix}"
+            pub_key = wkey("is_published", scope, material_id=material_id)
             
             # 過去のsession_stateのゴミを吸収する正規化
             # 1) 旧key（is_published_<id> / is_published_new 等）で suffix と違うものが存在したら削除する（移行のため）
@@ -706,13 +912,13 @@ def show_detailed_material_form(material_id: int = None):
                     # 正規化できない値は削除
                     del st.session_state[pub_key]
             
-            # 3) default は existing_material.is_published があればそれを int化、なければ 1
+            # 3) default は existing_material.is_published があればそれを int化
+            # createモードでは主要6項目（CORE_FIELDS）のデフォルト値をsession_stateに設定しない
             if pub_key not in st.session_state:
                 if existing_material:
                     default_pub = int(getattr(existing_material, "is_published", 1) or 1)
-                else:
-                    default_pub = 1
-                st.session_state[pub_key] = default_pub
+                    st.session_state[pub_key] = default_pub
+                # else: createモードではsession_stateに設定しない（UIのデフォルトに任せる）
             
             # 4) radio の options は int に統一して [1, 0] を使う
             # 5) 表示は format_func で "公開/非公開" に変換する
@@ -722,6 +928,8 @@ def show_detailed_material_form(material_id: int = None):
                 format_func=lambda v: "公開" if int(v) == 1 else "非公開",
                 key=pub_key,
                 horizontal=True,
+                on_change=mark_touched,
+                args=(pub_key,),
             )
             
             # 6) form_data['is_published'] には必ず int を入れる
@@ -772,11 +980,43 @@ def show_detailed_material_form(material_id: int = None):
             if submitted and os.getenv("DEBUG", "0") == "1":
                 st.success("DEBUG: submitted=True (フォーム送信を検知)")
     
-    # submitted 時は、必ず st.session_state から画像を取得（rerunで消えるのを防ぐ）
+    # submitted 時は、extract_payloadでwkeyから値を収集
     if submitted:
-        st.info("DEBUG: entering save_material()")
-        # 通称の削除/追加処理（submitted 時に実行）
-        if '_alias_del_flags' in form_data:
+        # DEBUG_ENV=1のときだけ、投稿直前に5項目のkeyと値をログ出力
+        try:
+            from utils.settings import get_flag
+            debug_env_enabled = get_flag("DEBUG_ENV", False)
+        except Exception:
+            debug_env_enabled = os.getenv("DEBUG_ENV", "0") == "1"
+        
+        if debug_env_enabled:
+            # 主要5項目のkeyと値をログ出力
+            core_values = {}
+            for field in CORE_FIELDS:
+                key = wkey(field, scope, material_id=material_id if is_edit_mode else None, submission_id=None)
+                value = st.session_state.get(key)
+                core_values[field] = {
+                    'key': key,
+                    'value': repr(value) if value is not None else None
+                }
+            logger.info(f"[DEBUG_ENV] CORE_FIELDS before extract_payload: {core_values}")
+        
+        # extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ）
+        payload = extract_payload(scope, material_id=material_id if is_edit_mode else None, submission_id=None)
+        
+        # DEBUG_ENV=1のときだけ、extract_payloadのkeysとname_officialの最終値をログ出力
+        if debug_env_enabled:
+            logger.info(f"[DEBUG_ENV] extract_payload keys: {list(payload.keys())}")
+            logger.info(f"[DEBUG_ENV] extract_payload name_official final: {repr(payload.get('name_official'))}")
+        
+        # デバッグログ（送信直前）
+        _debug_dump_form_state(prefix="mf:")
+        
+        # payloadをベースにform_dataを作成（extract_payload()のみから作成）
+        form_data = payload.copy()
+        
+        # 通称の削除/追加処理（従来のkeyから取得）
+        if '_alias_del_flags' in st.session_state:
             # 削除フラグが True のものを除外
             aliases_filtered = []
             for i, alias in enumerate(form_data.get('name_aliases', [])):
@@ -793,65 +1033,59 @@ def show_detailed_material_form(material_id: int = None):
             form_data.pop('_alias_del_flags', None)
             form_data.pop('_new_alias', None)
         
-        # 参照URLの削除/追加処理（同様）
-        if '_ref_del_flags' in form_data:
-            ref_urls_filtered = []
-            for i, ref in enumerate(form_data.get('reference_urls', [])):
-                if not form_data['_ref_del_flags'].get(i, False):
-                    ref_urls_filtered.append(ref)
-            form_data['reference_urls'] = ref_urls_filtered
-            form_data.pop('_ref_del_flags', None)
+        # 参照URLの削除/追加処理（従来のkeyから取得、payloadには含まれない）
+        # 削除フラグの処理
+        ref_urls_from_payload = form_data.get('reference_urls', [])
+        ref_urls_filtered = []
+        # 削除フラグはst.session_stateのdel_ref_{i}キーから取得
+        for i, ref in enumerate(ref_urls_from_payload):
+            if not st.session_state.get(f'del_ref_{i}', False):
+                ref_urls_filtered.append(ref)
         
-        # 使用例の削除/追加処理（同様）
-        if '_ex_del_flags' in form_data:
-            use_examples_filtered = []
-            for i, ex in enumerate(form_data.get('use_examples', [])):
-                if not form_data['_ex_del_flags'].get(i, False):
-                    use_examples_filtered.append(ex)
-            form_data['use_examples'] = use_examples_filtered
-            form_data.pop('_ex_del_flags', None)
+        # 使用例の削除/追加処理（従来のkeyから取得、payloadには含まれない）
+        # 削除フラグの処理
+        use_examples_from_payload = form_data.get('use_examples', [])
+        use_examples_filtered = []
+        # 削除フラグはst.session_stateのdel_ex_{i}キーから取得
+        for i, ex in enumerate(use_examples_from_payload):
+            if not st.session_state.get(f'del_ex_{i}', False):
+                use_examples_filtered.append(ex)
         
-        # 参照URLの追加処理
-        if '_new_ref_url' in form_data and form_data['_new_ref_url']:
-            new_ref = {
-                "url": form_data['_new_ref_url'],
-                "type": form_data.get('_new_ref_type', ''),
-                "desc": form_data.get('_new_ref_desc', '')
-            }
-            if new_ref['url'] not in [r.get('url', '') for r in form_data.get('reference_urls', [])]:
-                form_data['reference_urls'].append(new_ref)
-            form_data.pop('_new_ref_url', None)
-            form_data.pop('_new_ref_type', None)
-            form_data.pop('_new_ref_desc', None)
+        # 参照URLの追加処理（従来のkeyから取得、payloadには含まれない）
+        if 'new_ref_url' in st.session_state:
+            new_ref_url = st.session_state.get('new_ref_url', '').strip()
+            if new_ref_url:
+                new_ref = {
+                    "url": new_ref_url,
+                    "type": st.session_state.get('new_ref_type', ''),
+                    "desc": st.session_state.get('new_ref_desc', '').strip()
+                }
+                if new_ref['url'] not in [r.get('url', '') for r in ref_urls_filtered]:
+                    ref_urls_filtered.append(new_ref)
         
-        # 使用例の追加処理
-        if '_new_ex_name' in form_data and form_data['_new_ex_name']:
-            new_ex = {
-                "name": form_data['_new_ex_name'],
-                "url": form_data.get('_new_ex_url', ''),
-                "desc": form_data.get('_new_ex_desc', '')
-            }
-            if new_ex['name'] not in [e.get('name', '') for e in form_data.get('use_examples', [])]:
-                form_data['use_examples'].append(new_ex)
-            form_data.pop('_new_ex_name', None)
-            form_data.pop('_new_ex_url', None)
-            form_data.pop('_new_ex_desc', None)
+        # 使用例の追加処理（従来のkeyから取得、payloadには含まれない）
+        if 'new_ex_name' in st.session_state:
+            new_ex_name = st.session_state.get('new_ex_name', '').strip()
+            if new_ex_name:
+                new_ex = {
+                    "name": new_ex_name,
+                    "url": st.session_state.get('new_ex_url', '').strip(),
+                    "desc": st.session_state.get('new_ex_desc', '').strip()
+                }
+                if new_ex['name'] not in [e.get('name', '') for e in use_examples_filtered]:
+                    use_examples_filtered.append(new_ex)
         
-        # name_official を session_state のキャッシュから取得（submit時に確実に保持される）
-        NAME_CACHE = "name_official_cached"
-        name_official = st.session_state.get(NAME_CACHE, "").strip()
-        name_official_raw = st.session_state.get("name_official_input", "")
+        # フィルタ済みの参照URLと使用例をform_dataに設定
+        form_data['reference_urls'] = ref_urls_filtered
+        form_data['use_examples'] = use_examples_filtered
         
-        # ログ出力（送信時の値を確認）
-        logger.info(f"[FORM] name_official_cached='{name_official}'")
-        logger.info(f"[FORM] name_official_raw='{name_official_raw}'")
-        
-        # DEBUG=1 のときは UI にも表示
-        if os.getenv("DEBUG", "0") == "1":
-            st.info(f"🧾 材料名（送信値）: {name_official or '(EMPTY)'}")
-        
-        # form_data の name_official を設定（確実に取得）
-        form_data['name_official'] = name_official
+        # name_official は extract_payload() から取得済み（キャッシュ上書きを削除）
+        # payloadに含まれていない場合は、wkeyから直接取得
+        if 'name_official' not in form_data:
+            name_key = wkey("name_official", scope, material_id=material_id if is_edit_mode else None, submission_id=None)
+            name_official_value = st.session_state.get(name_key)
+            if name_official_value:
+                form_data['name_official'] = name_official_value.strip() if isinstance(name_official_value, str) else name_official_value
         
         # 画像を session_state のキャッシュから取得（submit時に確実に保持される）
         CACHE_KEY = f"primary_image_cached_{suffix}"
@@ -900,14 +1134,10 @@ def show_detailed_material_form(material_id: int = None):
                 st.info("ℹ️ 画像は選択されていません")
             logger.info(f"[MATERIAL FORM] No images selected (is_edit_mode={is_edit_mode})")
         
-        # 最後の最後に name_official をキャッシュから確実に採用（上書きを防ぐ）
-        NAME_CACHE = "name_official_cached"
-        NAME_INPUT_KEY = "name_official_input"
-        name_official_final = st.session_state.get(NAME_CACHE, "").strip()
-        name_official_raw = st.session_state.get(NAME_INPUT_KEY, "")
-        
-        form_data["name_official"] = name_official_final
-        form_data["name"] = name_official_final  # 画面表示の安定化
+        # name_official は extract_payload() から取得済み（キャッシュ上書きを削除）
+        # 後方互換性のため name も設定
+        if 'name_official' in form_data:
+            form_data["name"] = form_data["name_official"]
         
         # 編集モードの場合、既存値とマージ（フォームで触ってないキーは既存値を保持）
         if is_edit_mode and material_id:
@@ -934,7 +1164,7 @@ def show_detailed_material_form(material_id: int = None):
                     logger.info(f"[SUBMIT] is_edit_mode=True, material_id={material_id}, payload_keys_count={len(form_touched_keys)}, preserved_keys_count={len(preserved_keys)}")
         
         # save_material_submission() の直前に "最終値" をログに出す（DEBUG=0でも1行出す）
-        logger.info(f"[SUBMIT] final name_official='{form_data.get('name_official')}' raw='{name_official_raw}' cached='{st.session_state.get(NAME_CACHE, '')}'")
+        logger.info(f"[SUBMIT] final name_official='{form_data.get('name_official')}' payload_keys_count={len(form_data)}")
         
         # フォーム送信処理
         if is_edit_mode or is_admin:
@@ -977,28 +1207,54 @@ def show_detailed_material_form(material_id: int = None):
     else:
         # 一般ユーザーモード：submissionsに保存
         if form_data and st.button("📤 投稿を送信（承認待ち）", type="primary", use_container_width=True):
-            # save_material_submission() を呼ぶ "直前" に必ずこれを実行
-            NAME_CACHE = "name_official_cached"
-            NAME_INPUT_KEY = "name_official_input"
-            name = st.session_state.get(NAME_CACHE, "").strip()
-            form_data["name_official"] = name
-            form_data["name"] = name
+            # DEBUG_ENV=1のときだけ、投稿直前に5項目のkeyと値をログ出力
+            try:
+                from utils.settings import get_flag
+                debug_env_enabled = get_flag("DEBUG_ENV", False)
+            except Exception:
+                debug_env_enabled = os.getenv("DEBUG_ENV", "0") == "1"
             
-            # その直後に、空なら必ず return（INSERTしない）
-            if not form_data["name_official"]:
+            if debug_env_enabled:
+                # 主要5項目のkeyと値をログ出力
+                core_values = {}
+                scope_create = "create"
+                for field in CORE_FIELDS:
+                    key = wkey(field, scope_create, material_id=None, submission_id=None)
+                    value = st.session_state.get(key)
+                    core_values[field] = {
+                        'key': key,
+                        'value': repr(value) if value is not None else None
+                    }
+                logger.info(f"[DEBUG_ENV] CORE_FIELDS before extract_payload (create mode): {core_values}")
+            
+            # extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ）
+            scope = "create"
+            payload = extract_payload(scope, material_id=None, submission_id=None)
+            
+            # DEBUG_ENV=1のときだけ、extract_payloadのkeysとname_officialの最終値をログ出力
+            if debug_env_enabled:
+                logger.info(f"[DEBUG_ENV] extract_payload keys: {list(payload.keys())}")
+                logger.info(f"[DEBUG_ENV] extract_payload name_official final: {repr(payload.get('name_official'))}")
+            
+            # デバッグログ（送信直前）
+            _debug_dump_form_state(prefix="mf:")
+            
+            # name_officialの必須チェック
+            if not payload.get("name_official") or not payload["name_official"].strip():
                 st.error("❌ 材料名（正式）が空です。送信できません。")
-                logger.warning(f"[SUBMIT] blocked: name_official empty, raw='{st.session_state.get(NAME_INPUT_KEY, '')}' cached='{st.session_state.get(NAME_CACHE, '')}'")
+                logger.warning(f"[SUBMIT] blocked: name_official empty in payload")
                 return
             
-            # その場でログに必ず出す（DEBUG=0でも1行は残す）
-            logger.info(f"[SUBMIT] final name_official='{form_data['name_official']}' raw='{st.session_state.get(NAME_INPUT_KEY, '')}' cached='{st.session_state.get(NAME_CACHE, '')}'")
-            
-            # submitted 時は session_state のキャッシュから確実に取得
+            # 画像を取得（従来のkeyを使用）
             CACHE_KEY = f"primary_image_cached_{suffix}"
             cached_files = st.session_state.get(CACHE_KEY, [])
             uploaded_files = normalize_uploaded_files(cached_files)
             
-            result = save_material_submission(form_data, uploaded_files=uploaded_files, submitted_by=submitted_by)
+            # DEBUG時のみログ出力
+            if os.getenv("DEBUG", "0") == "1":
+                logger.info(f"[SUBMIT] payload_keys={list(payload.keys())}, payload_sample={dict(list(payload.items())[:5])}")
+            
+            result = save_material_submission(payload, uploaded_files=uploaded_files, submitted_by=submitted_by)
             
             # 防御的にresult.get("ok")で分岐
             if result.get("ok"):
@@ -1042,8 +1298,13 @@ def show_layer1_form(existing_material=None, suffix="new"):
     
     Args:
         existing_material: 編集モードの場合、既存のMaterialオブジェクト
+        suffix: サフィックス（material_id or "new"）
     """
     form_data = {}
+    
+    # scopeとmaterial_idを決定（suffixから推測）
+    scope = "edit" if existing_material else "create"
+    material_id_for_wkey = existing_material.id if existing_material else None
     
     # name_official は st.form の外で処理されるため、ここでは何もしない
     # （show_detailed_material_form で form_data に設定済み）
@@ -1101,14 +1362,14 @@ def show_layer1_form(existing_material=None, suffix="new"):
     col1, col2 = st.columns([2, 1])
     with col1:
         # session_state に初期値を設定（seed で既に設定済みの場合はスキップ）
-        supplier_org_key = f"supplier_org_{suffix}"
+        supplier_org_key = wkey("supplier_org", scope, material_id=material_id_for_wkey)
         if supplier_org_key not in st.session_state:
             default_supplier_org = getattr(existing_material, 'supplier_org', '') if existing_material else ''
             st.session_state[supplier_org_key] = default_supplier_org
         form_data['supplier_org'] = st.text_input("組織名*", key=supplier_org_key)
     with col2:
         # selectbox の index を計算（session_state があればそれ優先）
-        supplier_type_key = f"supplier_type_{suffix}"
+        supplier_type_key = wkey("supplier_type", scope, material_id=material_id_for_wkey)
         if supplier_type_key in st.session_state:
             supplier_type_value = st.session_state[supplier_type_key]
             supplier_type_index = SUPPLIER_TYPES.index(supplier_type_value) if supplier_type_value in SUPPLIER_TYPES else 0
@@ -1118,7 +1379,7 @@ def show_layer1_form(existing_material=None, suffix="new"):
             st.session_state[supplier_type_key] = SUPPLIER_TYPES[supplier_type_index]
         form_data['supplier_type'] = st.selectbox("種別*", SUPPLIER_TYPES, index=supplier_type_index, key=supplier_type_key)
         if form_data['supplier_type'] == "その他（自由記述）":
-            supplier_other_key = f"supplier_other_{suffix}"
+            supplier_other_key = wkey("supplier_other", scope, material_id=material_id_for_wkey)
             if supplier_other_key not in st.session_state:
                 default_supplier_other = getattr(existing_material, 'supplier_other', '') if existing_material else ''
                 st.session_state[supplier_other_key] = default_supplier_other
@@ -1186,48 +1447,82 @@ def show_layer1_form(existing_material=None, suffix="new"):
     st.markdown("---")
     st.markdown("### 2. 分類")
     
+    # scope と material_id_for_wkey は既に1142-1143行目で定義済み（重複定義を削除）
+    
+    # category_main selectbox の index を計算（UI表示と内部値の整合を保証）
+    category_main_key = wkey("category_main", scope, material_id=material_id_for_wkey)
+    options = MATERIAL_CATEGORIES
+    
+    # current_value を優先順で取得: 1) session_state 2) edit時のexisting_material 3) None
+    current_value = st.session_state.get(category_main_key)
+    if current_value is None or (isinstance(current_value, str) and current_value.strip() == ""):
+        # session_stateに値が無い場合、editモードで既存materialから取得
+        if scope == "edit" and existing_material:
+            current_value = getattr(existing_material, 'category_main', None)
+        else:
+            current_value = None
+    
+    # index を計算（optionsに存在すればそのindex、なければ0にフォールバック）
+    if current_value and current_value in options:
+        category_main_index = options.index(current_value)
+        # editモードでsession_stateに無い場合は設定（createモードでは設定しない）
+        if scope == "edit" and existing_material and category_main_key not in st.session_state:
+            st.session_state[category_main_key] = current_value
+    else:
+        # optionsに存在しない、またはcurrent_valueがNoneの場合は0にフォールバック
+        category_main_index = 0
     form_data['category_main'] = st.selectbox(
         "2-1 材料カテゴリ（大分類）*",
         MATERIAL_CATEGORIES,
-        key=f"category_main_{suffix}"
+        index=category_main_index,
+        key=category_main_key,
+        on_change=mark_touched,
+        args=(category_main_key,),
     )
     if form_data['category_main'] == "その他（自由記述）":
-        form_data['category_other'] = st.text_input("その他（詳細）", key=f"category_other_{suffix}")
+        form_data['category_other'] = st.text_input("その他（詳細）", key=wkey("category_other", scope, material_id=material_id_for_wkey))
     
     form_data['material_forms'] = st.multiselect(
         "2-2 材料形態（供給形状）*",
         MATERIAL_FORMS,
-        key=f"material_forms_{suffix}"
+        key=wkey("material_forms", scope, material_id=material_id_for_wkey)
     )
     if "その他（自由記述）" in form_data['material_forms']:
-        form_data['material_forms_other'] = st.text_input("その他（詳細）", key=f"material_forms_other_{suffix}")
+        form_data['material_forms_other'] = st.text_input("その他（詳細）", key=wkey("material_forms_other", scope, material_id=material_id_for_wkey))
     
     st.markdown("---")
     st.markdown("### 3. 由来・原料")
     
     # selectbox の index を計算（session_state があればそれ優先）
-    origin_type_key = f"origin_type_{suffix}"
+    origin_type_key = wkey("origin_type", scope, material_id=material_id_for_wkey)
     if origin_type_key in st.session_state:
         origin_type_value = st.session_state[origin_type_key]
         origin_type_index = ORIGIN_TYPES.index(origin_type_value) if origin_type_value in ORIGIN_TYPES else 0
     else:
-        default_origin_type = getattr(existing_material, 'origin_type', ORIGIN_TYPES[0]) if existing_material else ORIGIN_TYPES[0]
-        origin_type_index = ORIGIN_TYPES.index(default_origin_type) if default_origin_type in ORIGIN_TYPES else 0
-        st.session_state[origin_type_key] = ORIGIN_TYPES[origin_type_index]
+        # createモードでは主要6項目（CORE_FIELDS）のデフォルト値をsession_stateに設定しない
+        if existing_material:
+            default_origin_type = getattr(existing_material, 'origin_type', ORIGIN_TYPES[0])
+            origin_type_index = ORIGIN_TYPES.index(default_origin_type) if default_origin_type in ORIGIN_TYPES else 0
+            st.session_state[origin_type_key] = ORIGIN_TYPES[origin_type_index]
+        else:
+            # createモード: index=0（UIのデフォルトに任せる）で、session_stateには設定しない
+            origin_type_index = 0
     form_data['origin_type'] = st.selectbox(
         "3-1 原料由来（一次分類）*",
         ORIGIN_TYPES,
         index=origin_type_index,
-        key=origin_type_key
+        key=origin_type_key,
+        on_change=mark_touched,
+        args=(origin_type_key,),
     )
     if form_data['origin_type'] == "その他（自由記述）":
-        origin_other_key = f"origin_other_{suffix}"
+        origin_other_key = wkey("origin_other", scope, material_id=material_id_for_wkey)
         if origin_other_key not in st.session_state:
             default_origin_other = getattr(existing_material, 'origin_other', '') if existing_material else ''
             st.session_state[origin_other_key] = default_origin_other
         form_data['origin_other'] = st.text_input("その他（詳細）", key=origin_other_key)
     
-    origin_detail_key = f"origin_detail_{suffix}"
+    origin_detail_key = wkey("origin_detail", scope, material_id=material_id_for_wkey)
     if origin_detail_key not in st.session_state:
         default_origin_detail = getattr(existing_material, 'origin_detail', '') if existing_material else ''
         st.session_state[origin_detail_key] = default_origin_detail
@@ -1244,11 +1539,11 @@ def show_layer1_form(existing_material=None, suffix="new"):
             min_value=0.0,
             max_value=100.0,
             value=None,
-            key=f"recycle_bio_rate_{suffix}"
+            key=wkey("recycle_bio_rate", scope, material_id=material_id_for_wkey)
         )
     with col2:
         # selectbox の index を計算（session_state があればそれ優先）
-        recycle_basis_key = f"recycle_bio_basis_{suffix}"
+        recycle_basis_key = wkey("recycle_bio_basis", scope, material_id=material_id_for_wkey)
         recycle_basis_options = ["自己申告", "第三者認証", "文献", "不明"]
         if recycle_basis_key in st.session_state:
             recycle_basis_value = st.session_state[recycle_basis_key]
@@ -1270,29 +1565,36 @@ def show_layer1_form(existing_material=None, suffix="new"):
     form_data['color_tags'] = st.multiselect(
         "4-1 色*",
         COLOR_OPTIONS,
-        key=f"color_tags_{suffix}"
+        key=wkey("color_tags", scope, material_id=material_id_for_wkey)
     )
     
     # selectbox の index を計算（session_state があればそれ優先）
-    transparency_key = f"transparency_{suffix}"
+    transparency_key = wkey("transparency", scope, material_id=material_id_for_wkey)
     if transparency_key in st.session_state:
         transparency_value = st.session_state[transparency_key]
         transparency_index = TRANSPARENCY_OPTIONS.index(transparency_value) if transparency_value in TRANSPARENCY_OPTIONS else 0
     else:
-        default_transparency = getattr(existing_material, 'transparency', TRANSPARENCY_OPTIONS[0]) if existing_material else TRANSPARENCY_OPTIONS[0]
-        transparency_index = TRANSPARENCY_OPTIONS.index(default_transparency) if default_transparency in TRANSPARENCY_OPTIONS else 0
-        st.session_state[transparency_key] = TRANSPARENCY_OPTIONS[transparency_index]
+        # createモードでは主要6項目（CORE_FIELDS）のデフォルト値をsession_stateに設定しない
+        if existing_material:
+            default_transparency = getattr(existing_material, 'transparency', TRANSPARENCY_OPTIONS[0])
+            transparency_index = TRANSPARENCY_OPTIONS.index(default_transparency) if default_transparency in TRANSPARENCY_OPTIONS else 0
+            st.session_state[transparency_key] = TRANSPARENCY_OPTIONS[transparency_index]
+        else:
+            # createモード: index=0（UIのデフォルトに任せる）で、session_stateには設定しない
+            transparency_index = 0
     form_data['transparency'] = st.selectbox(
         "透明性*",
         TRANSPARENCY_OPTIONS,
         index=transparency_index,
-        key=transparency_key
+        key=transparency_key,
+        on_change=mark_touched,
+        args=(transparency_key,),
     )
     
     col1, col2 = st.columns(2)
     with col1:
         # selectbox の index を計算（session_state があればそれ優先）
-        hardness_key = f"hardness_qualitative_{suffix}"
+        hardness_key = wkey("hardness_qualitative", scope, material_id=material_id_for_wkey)
         if hardness_key in st.session_state:
             hardness_value = st.session_state[hardness_key]
             hardness_index = HARDNESS_OPTIONS.index(hardness_value) if hardness_value in HARDNESS_OPTIONS else 0
@@ -1310,13 +1612,13 @@ def show_layer1_form(existing_material=None, suffix="new"):
         form_data['hardness_value'] = st.text_input(
             "硬さ（数値）",
             placeholder="例：Shore A 50, Mohs 3",
-            key=f"hardness_value_{suffix}"
+            key=wkey("hardness_value", scope, material_id=material_id_for_wkey)
         )
     
     col1, col2 = st.columns(2)
     with col1:
         # selectbox の index を計算（session_state があればそれ優先）
-        weight_key = f"weight_qualitative_{suffix}"
+        weight_key = wkey("weight_qualitative", scope, material_id=material_id_for_wkey)
         if weight_key in st.session_state:
             weight_value = st.session_state[weight_key]
             weight_index = WEIGHT_OPTIONS.index(weight_value) if weight_value in WEIGHT_OPTIONS else 0
@@ -1335,11 +1637,11 @@ def show_layer1_form(existing_material=None, suffix="new"):
             "比重",
             min_value=0.0,
             value=None,
-            key=f"specific_gravity_{suffix}"
+            key=wkey("specific_gravity", scope, material_id=material_id_for_wkey)
         )
     
     # selectbox の index を計算（session_state があればそれ優先）
-    water_resistance_key = f"water_resistance_{suffix}"
+    water_resistance_key = wkey("water_resistance", scope, material_id=material_id_for_wkey)
     if water_resistance_key in st.session_state:
         water_resistance_value = st.session_state[water_resistance_key]
         water_resistance_index = WATER_RESISTANCE_OPTIONS.index(water_resistance_value) if water_resistance_value in WATER_RESISTANCE_OPTIONS else 0
@@ -1360,11 +1662,11 @@ def show_layer1_form(existing_material=None, suffix="new"):
             "4-5 耐熱性（温度℃）",
             min_value=-273.0,
             value=None,
-            key=f"heat_resistance_temp_{suffix}"
+            key=wkey("heat_resistance_temp", scope, material_id=material_id_for_wkey)
         )
     with col2:
         # selectbox の index を計算（session_state があればそれ優先）
-        heat_range_key = f"heat_resistance_range_{suffix}"
+        heat_range_key = wkey("heat_resistance_range", scope, material_id=material_id_for_wkey)
         if heat_range_key in st.session_state:
             heat_range_value = st.session_state[heat_range_key]
             heat_range_index = HEAT_RANGE_OPTIONS.index(heat_range_value) if heat_range_value in HEAT_RANGE_OPTIONS else 0
@@ -1380,7 +1682,7 @@ def show_layer1_form(existing_material=None, suffix="new"):
         )
     
     # selectbox の index を計算（session_state があればそれ優先）
-    weather_resistance_key = f"weather_resistance_{suffix}"
+    weather_resistance_key = wkey("weather_resistance", scope, material_id=material_id_for_wkey)
     if weather_resistance_key in st.session_state:
         weather_resistance_value = st.session_state[weather_resistance_key]
         weather_resistance_index = WEATHER_RESISTANCE_OPTIONS.index(weather_resistance_value) if weather_resistance_value in WEATHER_RESISTANCE_OPTIONS else 0
@@ -1401,13 +1703,13 @@ def show_layer1_form(existing_material=None, suffix="new"):
     form_data['processing_methods'] = st.multiselect(
         "5-1 加工方法（可能なもの）*",
         PROCESSING_METHODS,
-        key=f"processing_methods_{suffix}"
+        key=wkey("processing_methods", scope, material_id=material_id_for_wkey)
     )
     if "その他（自由記述）" in form_data['processing_methods']:
-        form_data['processing_other'] = st.text_input("その他（詳細）", key=f"processing_other_{suffix}")
+        form_data['processing_other'] = st.text_input("その他（詳細）", key=wkey("processing_other", scope, material_id=material_id_for_wkey))
     
     # selectbox の index を計算（session_state があればそれ優先）
-    equipment_level_key = f"equipment_level_{suffix}"
+    equipment_level_key = wkey("equipment_level", scope, material_id=material_id_for_wkey)
     if equipment_level_key in st.session_state:
         equipment_level_value = st.session_state[equipment_level_key]
         equipment_level_index = EQUIPMENT_LEVELS.index(equipment_level_value) if equipment_level_value in EQUIPMENT_LEVELS else 0
@@ -1421,7 +1723,7 @@ def show_layer1_form(existing_material=None, suffix="new"):
         key=equipment_level_key
     )
     
-    prototyping_difficulty_key = f"prototyping_difficulty_{suffix}"
+    prototyping_difficulty_key = wkey("prototyping_difficulty", scope, material_id=material_id_for_wkey)
     if prototyping_difficulty_key in st.session_state:
         prototyping_difficulty_value = st.session_state[prototyping_difficulty_key]
         prototyping_difficulty_index = DIFFICULTY_OPTIONS.index(prototyping_difficulty_value) if prototyping_difficulty_value in DIFFICULTY_OPTIONS else 1
@@ -1450,10 +1752,10 @@ def show_layer1_form(existing_material=None, suffix="new"):
         "6-2 主用途カテゴリ*",
         USE_CATEGORIES,
         default=form_data.get('use_categories', []),
-        key=f"use_categories_{suffix}"
+        key=wkey("use_categories", scope, material_id=material_id_for_wkey)
     )
     if "その他（自由記述）" in form_data['use_categories']:
-        form_data['use_other'] = st.text_input("その他（詳細）", key=f"use_other_{suffix}")
+        form_data['use_other'] = st.text_input("その他（詳細）", key=wkey("use_other", scope, material_id=material_id_for_wkey))
     
     # 代表的使用例（複数）（st.form内で完結）
     st.markdown("**6-2 代表的使用例**")
@@ -1503,7 +1805,7 @@ def show_layer1_form(existing_material=None, suffix="new"):
     form_data['_new_ex_desc'] = new_ex_desc.strip() if new_ex_desc else ""
     
     # selectbox の index を計算（session_state があればそれ優先）
-    procurement_key = f"procurement_status_{suffix}"
+    procurement_key = wkey("procurement_status", scope, material_id=material_id_for_wkey)
     if procurement_key in st.session_state:
         procurement_value = st.session_state[procurement_key]
         procurement_index = PROCUREMENT_OPTIONS.index(procurement_value) if procurement_value in PROCUREMENT_OPTIONS else 0
@@ -1521,7 +1823,7 @@ def show_layer1_form(existing_material=None, suffix="new"):
     col1, col2, col3 = st.columns(3)
     with col1:
         # selectbox の index を計算（session_state があればそれ優先）
-        cost_level_key = f"cost_level_{suffix}"
+        cost_level_key = wkey("cost_level", scope, material_id=material_id_for_wkey)
         if cost_level_key in st.session_state:
             cost_level_value = st.session_state[cost_level_key]
             cost_level_index = COST_LEVELS.index(cost_level_value) if cost_level_value in COST_LEVELS else 0
@@ -1540,13 +1842,13 @@ def show_layer1_form(existing_material=None, suffix="new"):
             "価格情報（数値）",
             min_value=0.0,
             value=None,
-            key=f"cost_value_{suffix}"
+            key=wkey("cost_value", scope, material_id=material_id_for_wkey)
         )
     with col3:
         form_data['cost_unit'] = st.text_input(
             "単位",
             placeholder="例：円/kg, 円/m²",
-            key=f"cost_unit_{suffix}"
+            key=wkey("cost_unit", scope, material_id=material_id_for_wkey)
         )
     
     st.markdown("---")
@@ -1555,34 +1857,41 @@ def show_layer1_form(existing_material=None, suffix="new"):
     form_data['safety_tags'] = st.multiselect(
         "7-1 安全区分（用途制限）*",
         SAFETY_TAGS,
-        key=f"safety_tags_{suffix}"
+        key=wkey("safety_tags", scope, material_id=material_id_for_wkey)
     )
     if "その他（自由記述）" in form_data['safety_tags']:
-        form_data['safety_other'] = st.text_input("その他（詳細）", key=f"safety_other_{suffix}")
+        form_data['safety_other'] = st.text_input("その他（詳細）", key=wkey("safety_other", scope, material_id=material_id_for_wkey))
     
     form_data['restrictions'] = st.text_area(
         "7-2 禁止・注意事項（自由記述）",
         placeholder="使用上の注意点、禁止事項などを記入してください",
-        key=f"restrictions_{suffix}"
+        key=wkey("restrictions", scope, material_id=material_id_for_wkey)
     )
     
     st.markdown("---")
     st.markdown("### 8. 公開範囲")
     
     # selectbox の index を計算（session_state があればそれ優先）
-    visibility_key = f"visibility_{suffix}"
+    visibility_key = wkey("visibility", scope, material_id=material_id_for_wkey)
     if visibility_key in st.session_state:
         visibility_value = st.session_state[visibility_key]
         visibility_index = VISIBILITY_OPTIONS.index(visibility_value) if visibility_value in VISIBILITY_OPTIONS else 0
     else:
-        default_visibility = getattr(existing_material, 'visibility', VISIBILITY_OPTIONS[0]) if existing_material else VISIBILITY_OPTIONS[0]
-        visibility_index = VISIBILITY_OPTIONS.index(default_visibility) if default_visibility in VISIBILITY_OPTIONS else 0
-        st.session_state[visibility_key] = VISIBILITY_OPTIONS[visibility_index]
+        # createモードでは主要6項目（CORE_FIELDS）のデフォルト値をsession_stateに設定しない
+        if existing_material:
+            default_visibility = getattr(existing_material, 'visibility', VISIBILITY_OPTIONS[0])
+            visibility_index = VISIBILITY_OPTIONS.index(default_visibility) if default_visibility in VISIBILITY_OPTIONS else 0
+            st.session_state[visibility_key] = VISIBILITY_OPTIONS[visibility_index]
+        else:
+            # createモード: index=0（UIのデフォルトに任せる）で、session_stateには設定しない
+            visibility_index = 0
     form_data['visibility'] = st.selectbox(
         "8-1 公開設定*",
         VISIBILITY_OPTIONS,
         index=visibility_index,
-        key=visibility_key
+        key=visibility_key,
+        on_change=mark_touched,
+        args=(visibility_key,),
     )
     
     st.markdown("---")
@@ -1590,11 +1899,12 @@ def show_layer1_form(existing_material=None, suffix="new"):
     
     st.info("💡 **思考の補助**として、この材料に含まれる主要元素の原子番号を入力してください。\n\n例: 水 (H₂O) → `1, 8`、鉄 (Fe) → `26`、プラスチック (C, H, O) → `1, 6, 8`")
     
+    main_elements_key = wkey("main_elements", scope, material_id=material_id_for_wkey)
     main_elements_input = st.text_input(
         "主要元素の原子番号（カンマ区切り）",
         placeholder="例: 1, 6, 8 または 26",
         help="1-118の範囲で、カンマ区切りで入力してください",
-        key="main_elements_input"
+        key=main_elements_key
     )
     
     if main_elements_input:
@@ -1604,23 +1914,41 @@ def show_layer1_form(existing_material=None, suffix="new"):
             # 1-118の範囲に制限
             elements_list = [e for e in elements_list if 1 <= e <= 118]
             if elements_list:
+                # session_stateにJSON文字列として保存（extract_payloadで取得される）
+                st.session_state[main_elements_key] = json.dumps(elements_list, ensure_ascii=False)
                 form_data['main_elements'] = json.dumps(elements_list, ensure_ascii=False)
                 st.success(f"✅ {len(elements_list)}個の元素を登録: {elements_list}")
             else:
+                st.session_state[main_elements_key] = None
                 form_data['main_elements'] = None
                 st.warning("⚠️ 有効な原子番号（1-118）が見つかりませんでした。")
         except Exception as e:
+            st.session_state[main_elements_key] = None
             form_data['main_elements'] = None
             st.warning(f"⚠️ 入力形式が正しくありません: {e}")
     else:
+        st.session_state[main_elements_key] = None
         form_data['main_elements'] = None
     
     return form_data
 
 
-def show_layer2_form():
-    """レイヤー②：任意情報フォーム"""
+def show_layer2_form(existing_material=None, scope="create", material_id_for_wkey=None):
+    """
+    レイヤー②：任意情報フォーム
+    
+    Args:
+        existing_material: 編集モードの場合、既存のMaterialオブジェクト
+        scope: スコープ（"create", "edit", "approve"）
+        material_id_for_wkey: 材料ID（編集モードの場合）
+    """
     form_data = {}
+    
+    # scopeとmaterial_id_for_wkeyが未指定の場合は推測
+    if scope is None:
+        scope = "edit" if existing_material else "create"
+    if material_id_for_wkey is None and existing_material:
+        material_id_for_wkey = existing_material.id
     
     st.markdown("### A. ストーリー・背景")
     
@@ -1634,21 +1962,21 @@ def show_layer2_form():
     form_data['development_motives'] = st.multiselect(
         "A-1 開発動機タイプ",
         DEVELOPMENT_MOTIVES,
-        key="dev_motives"
+        key=wkey("development_motives", scope, material_id=material_id_for_wkey)
     )
     if "その他（自由記述）" in form_data.get('development_motives', []):
-        form_data['development_motive_other'] = st.text_input("その他（詳細）", key="dev_motive_other")
+        form_data['development_motive_other'] = st.text_input("その他（詳細）", key=wkey("development_motive_other", scope, material_id=material_id_for_wkey))
     
     form_data['development_background_short'] = st.text_input(
         "A-2 開発背景（短文）",
-        key="dev_background_short"
+        key=wkey("development_background_short", scope, material_id=material_id_for_wkey)
     )
     
     form_data['development_story'] = st.text_area(
         "A-3 開発ストーリー（長文）",
         placeholder="課題、転機、学びなどを記入してください",
         height=150,
-        key="dev_story"
+        key=wkey("development_story", scope, material_id=material_id_for_wkey)
     )
     
     st.markdown("---")
@@ -1663,10 +1991,10 @@ def show_layer2_form():
     form_data['tactile_tags'] = st.multiselect(
         "C-1 触感タグ",
         TACTILE_TAGS,
-        key="tactile_tags"
+        key=wkey("tactile_tags", scope, material_id=material_id_for_wkey)
     )
     if "その他（自由記述）" in form_data.get('tactile_tags', []):
-        form_data['tactile_other'] = st.text_input("その他（詳細）", key="tactile_other")
+        form_data['tactile_other'] = st.text_input("その他（詳細）", key=wkey("tactile_other", scope, material_id=material_id_for_wkey))
     
     VISUAL_TAGS = [
         "マット", "グロス", "パール/干渉", "透過散乱", "蛍光",
@@ -1676,15 +2004,15 @@ def show_layer2_form():
     form_data['visual_tags'] = st.multiselect(
         "C-2 視覚タグ（光の反応）",
         VISUAL_TAGS,
-        key="visual_tags"
+        key=wkey("visual_tags", scope, material_id=material_id_for_wkey)
     )
     if "その他（自由記述）" in form_data.get('visual_tags', []):
-        form_data['visual_other'] = st.text_input("その他（詳細）", key="visual_other")
+        form_data['visual_other'] = st.text_input("その他（詳細）", key=wkey("visual_other", scope, material_id=material_id_for_wkey))
     
     form_data['sound_smell'] = st.text_input(
         "C-3 音・匂い",
         placeholder="音や匂いの特徴を記入してください",
-        key="sound_smell"
+        key=wkey("sound_smell", scope, material_id=material_id_for_wkey)
     )
     
     st.markdown("---")
@@ -1698,7 +2026,7 @@ def show_layer2_form():
             value=None,
             step=0.01,
             format="%.2f",
-            key="density",
+            key="density",  # CANONICAL_FIELDSに含まれていないためwkey化しない
             help="材料の密度を入力してください（例: 1.38）"
         )
         if density_value is not None and density_value > 0:
@@ -1711,7 +2039,7 @@ def show_layer2_form():
             value=None,
             step=0.1,
             format="%.1f",
-            key="tensile_strength",
+            key="tensile_strength",  # CANONICAL_FIELDSに含まれていないためwkey化しない
             help="引張強度を入力してください（例: 50.0）"
         )
         if tensile_strength_value is not None and tensile_strength_value > 0:
@@ -1724,7 +2052,7 @@ def show_layer2_form():
             value=None,
             step=0.1,
             format="%.1f",
-            key="yield_strength",
+            key="yield_strength",  # CANONICAL_FIELDSに含まれていないためwkey化しない
             help="降伏強度を入力してください（例: 45.0）"
         )
         if yield_strength_value is not None and yield_strength_value > 0:
@@ -1741,7 +2069,7 @@ def show_layer2_form():
     form_data['circularity'] = st.selectbox(
         "F-1 循環性（ざっくり評価）",
         CIRCULARITY_OPTIONS,
-        key="circularity"
+        key=wkey("circularity", scope, material_id=material_id_for_wkey)
     )
     
     CERTIFICATIONS = [
@@ -1752,10 +2080,10 @@ def show_layer2_form():
     form_data['certifications'] = st.multiselect(
         "F-2 認証・規格（あれば）",
         CERTIFICATIONS,
-        key="certifications"
+        key=wkey("certifications", scope, material_id=material_id_for_wkey)
     )
     if "その他（自由記述）" in form_data.get('certifications', []):
-        form_data['certifications_other'] = st.text_input("その他（詳細）", key="certifications_other")
+        form_data['certifications_other'] = st.text_input("その他（詳細）", key=wkey("certifications_other", scope, material_id=material_id_for_wkey))
     
     return form_data
 
@@ -2172,13 +2500,23 @@ def save_material_submission(form_data, uploaded_files=None, submitted_by=None):
         pass
 
     # 3) payload_json を作る（uploaded_images はここで混ぜる）
+    # form_dataは既にCANONICAL_FIELDSのみを含む（extract_payloadでフィルタ済み）
+    payload_dict = dict(form_data)
     if uploaded_images:
-        form_data = dict(form_data)
-        form_data["uploaded_images"] = uploaded_images
-    payload_json = json.dumps(form_data, ensure_ascii=False, default=str)
+        payload_dict["uploaded_images"] = uploaded_images
+    payload_json = json.dumps(payload_dict, ensure_ascii=False, default=str)
+    
+    # DEBUG時のみログ出力（payload_jsonのkeys headを表示）
+    if os.getenv("DEBUG", "0") == "1":
+        import json as json_module
+        try:
+            payload_sample = json_module.loads(payload_json)
+            logger.info(f"[SAVE_SUBMISSION] payload_json keys_head={list(payload_sample.keys())[:10]}, name_official='{payload_sample.get('name_official', '')[:50]}'")
+        except Exception:
+            pass
 
     # 4) DB保存（セッション内で完結）
-    name_official = (form_data.get("name_official") or "").strip()
+    name_official = (payload_dict.get("name_official") or "").strip()
     submitted_by_value = submitted_by.strip() if (submitted_by and submitted_by.strip()) else None
 
     # session 内で必要な値を取得し、session 外では submission を参照しない

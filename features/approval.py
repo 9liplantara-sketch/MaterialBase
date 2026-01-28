@@ -3,8 +3,17 @@
 """
 import streamlit as st
 import os
+import logging
 from datetime import datetime
 from features.approval_actions import approve_submission, reject_submission, reopen_submission, calculate_submission_diff
+
+# ロガーを設定
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('[%(name)s] %(levelname)s: %(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 def show_approval_queue():
@@ -143,15 +152,97 @@ def show_approval_queue():
             f"{status_icon} {created_at_display} - {submitted_by} - {submission_status}",
             expanded=False
         ):
-            # payload_jsonをパースして表示（TODO: 実装）
+            # payload_jsonをパースして表示
+            import json
+            
+            # DEBUG_ENV=1のときのみログ出力
+            try:
+                from utils.settings import get_flag
+                debug_enabled = get_flag("DEBUG_ENV", False)
+            except Exception:
+                debug_enabled = os.getenv("DEBUG_ENV", "0") == "1"
+            
+            # payload_jsonを取得してパース
+            payload_json_raw = getattr(submission, "payload_json", None)
+            payload_dict = None
+            
+            if payload_json_raw:
+                try:
+                    # payload_jsonがstrの場合はjson.loadsしてdict化
+                    if isinstance(payload_json_raw, str):
+                        payload_dict = json.loads(payload_json_raw)
+                    elif isinstance(payload_json_raw, dict):
+                        payload_dict = payload_json_raw
+                    else:
+                        logger.warning(f"[APPROVAL_VIEW] payload_json is neither str nor dict: {type(payload_json_raw)}")
+                except json.JSONDecodeError as e:
+                    logger.warning(f"[APPROVAL_VIEW] Failed to parse payload_json: {e}")
+                    payload_dict = None
+                except Exception as e:
+                    logger.warning(f"[APPROVAL_VIEW] Unexpected error parsing payload_json: {e}")
+                    payload_dict = None
+            
+            # DEBUG_ENV=1のときのみログ出力
+            if debug_enabled:
+                if payload_dict:
+                    payload_keys = list(payload_dict.keys())
+                    payload_keys_head = payload_keys[:30]
+                    
+                    # 主要項目の値を取得
+                    core_fields = {
+                        'name_official': payload_dict.get('name_official'),
+                        'category_main': payload_dict.get('category_main'),
+                        'origin_type': payload_dict.get('origin_type'),
+                        'transparency': payload_dict.get('transparency'),
+                        'visibility': payload_dict.get('visibility'),
+                        'is_published': payload_dict.get('is_published'),
+                    }
+                    
+                    logger.info(
+                        f"[APPROVAL_VIEW] submission_id={submission.id}, "
+                        f"status={submission_status}, "
+                        f"payload_keys_count={len(payload_keys)}, "
+                        f"payload_keys_head={payload_keys_head}, "
+                        f"core_fields={core_fields}"
+                    )
+                else:
+                    logger.info(
+                        f"[APPROVAL_VIEW] submission_id={submission.id}, "
+                        f"status={submission_status}, "
+                        f"payload_json=None or parse failed"
+                    )
+            
             st.markdown("### 投稿内容")
             
-            # 主要フィールドを表示（モック）
+            # 主要フィールドを表示
             col1, col2 = st.columns(2)
             with col1:
-                st.write(f"**材料名（正式）**: N/A")
-                st.write(f"**カテゴリ**: N/A")
-                st.write(f"**供給元**: N/A")
+                # payload_dictから主要項目を取得して表示
+                name_official = payload_dict.get('name_official', 'N/A') if payload_dict else 'N/A'
+                category_main = payload_dict.get('category_main', 'N/A') if payload_dict else 'N/A'
+                origin_type = payload_dict.get('origin_type', 'N/A') if payload_dict else 'N/A'
+                
+                st.write(f"**材料名（正式）**: {name_official}")
+                st.write(f"**カテゴリ**: {category_main}")
+                st.write(f"**由来タイプ**: {origin_type}")
+                
+                # 透明性、公開設定、掲載可否も表示
+                transparency = payload_dict.get('transparency', 'N/A') if payload_dict else 'N/A'
+                visibility = payload_dict.get('visibility', 'N/A') if payload_dict else 'N/A'
+                is_published = payload_dict.get('is_published', 'N/A') if payload_dict else 'N/A'
+                
+                # is_publishedの表示を整形
+                if is_published == 1 or is_published == "1" or is_published is True:
+                    is_published_display = "公開"
+                elif is_published == 0 or is_published == "0" or is_published is False:
+                    is_published_display = "非公開"
+                else:
+                    is_published_display = str(is_published)
+                
+                st.write(f"**透明性**: {transparency}")
+                st.write(f"**公開設定**: {visibility}")
+                st.write(f"**掲載可否**: {is_published_display}")
+            
             with col2:
                 st.write(f"**投稿者**: {submitted_by}")
                 st.write(f"**投稿日時**: {created_at_display}")
