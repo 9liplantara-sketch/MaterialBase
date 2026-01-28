@@ -878,6 +878,9 @@ def show_detailed_material_form(material_id: int = None):
     button_text = "📤 投稿を送信（承認待ち）"  # デフォルト値（一般ユーザーモード）
     is_admin = os.getenv("DEBUG", "0") == "1" or os.getenv("ADMIN", "0") == "1"
     # is_edit_mode と suffix は既に188行目と194行目で定義済み（finally 内で参照可能）
+    # layer1_data と layer2_data を事前に初期化（submitブロックで参照可能にするため）
+    layer1_data = {}
+    layer2_data = {}
     
     with st.form("material_form", clear_on_submit=False):
         try:
@@ -1075,7 +1078,9 @@ def show_detailed_material_form(material_id: int = None):
             if is_edit_mode or is_admin:
                 # 管理者モードまたは編集モード：直接materialsに保存
                 button_text = "✅ 材料を更新" if is_edit_mode else "✅ 材料を登録"
-            # else は不要（button_text は既にデフォルト値で初期化済み）
+            else:
+                # 一般ユーザーモード：submissionsに保存
+                button_text = "📤 投稿を送信（承認待ち）"
             
             # 必ず form ブロック内で submit ボタンを定義（finally ブロックで必ず実行される）
             submitted = st.form_submit_button(button_text, type="primary", use_container_width=True)
@@ -1093,26 +1098,6 @@ def show_detailed_material_form(material_id: int = None):
         except Exception:
             debug_env_enabled = os.getenv("DEBUG_ENV", "0") == "1"
         
-        # ---- 原因確定ログ（DEBUG_ENV=1のときのみ） ----
-        if debug_env_enabled:
-            logger.warning(f"[SUBMIT_DEBUG] scope={scope!r}, material_id={material_id}, submission_id=None, suffix={suffix}")
-            logger.warning(f"[SUBMIT_DEBUG] NAME_KEY={NAME_KEY!r}")
-            
-            # NAME_KEYの生値とcoerce後
-            name_raw = st.session_state.get(NAME_KEY)
-            name_coerced = _coerce_text_input_value(name_raw)
-            logger.warning(f"[SUBMIT_DEBUG] NAME_KEY raw value: {repr(name_raw)}")
-            logger.warning(f"[SUBMIT_DEBUG] NAME_KEY coerced value: {repr(name_coerced)}")
-            
-            # session_state内で"name_official"を含むキー一覧と値
-            name_official_keys = [k for k in st.session_state.keys() if isinstance(k, str) and "name_official" in k]
-            logger.warning(f"[SUBMIT_DEBUG] session_state keys containing 'name_official': {len(name_official_keys)}")
-            for k in name_official_keys:
-                v = st.session_state.get(k)
-                v_repr = repr(v)
-                if len(v_repr) > 200:
-                    v_repr = v_repr[:197] + "..."
-                logger.warning(f"[SUBMIT_DEBUG]   {k!r} = {v_repr}")
         
         # ---- name_official を直接取得（方式1: 最も堅牢） ----
         # st.text_input の返り値（name_val）から直接取得（session_state依存を排除）
@@ -1133,13 +1118,6 @@ def show_detailed_material_form(material_id: int = None):
         if isinstance(form_data, dict):
             core_source.update(form_data)
         
-        # DEBUG_ENV=1のときだけ、core_sourceのキー状況をログ出力
-        if debug_env_enabled:
-            keys_list = list(core_source.keys())[:30]
-            keys_str = ",".join(keys_list) if keys_list else "(empty)"
-            has_category_main = 1 if "category_main" in core_source else 0
-            has_is_published = 1 if "is_published" in core_source else 0
-            logger.warning(f"[SUBMIT_CORE_SRC] scope={scope!r} keys={keys_str} has_category_main={has_category_main} has_is_published={has_is_published}")
         
         # B) CORE_FIELDS（name_official以外）を core_source から取得（touched gate付き）
         for field in CORE_FIELDS:
@@ -1172,25 +1150,7 @@ def show_detailed_material_form(material_id: int = None):
                 else:
                     reason = "skipped_none"
             
-            # DEBUG_ENV=1 のときのみログ出力
-            if debug_env_enabled:
-                value_repr = repr(val) if val is not None else "None"
-                if len(value_repr) > 120:
-                    value_repr = value_repr[:117] + "..."
-                logger.warning(f"[SUBMIT_CORE] field={field} key={key!r} touched={1 if touched else 0} included={included} value={value_repr}")
-                logger.warning(f"[SUBMIT_CORE_RULE] scope={scope!r} field={field} touched={1 if touched else 0} included={included} reason={reason}")
         
-        if debug_env_enabled:
-            # 主要5項目のkeyと値をログ出力
-            core_values = {}
-            for field in CORE_FIELDS:
-                key = wkey(field, scope, material_id=material_id if is_edit_mode else None, submission_id=None)
-                value = st.session_state.get(key)
-                core_values[field] = {
-                    'key': key,
-                    'value': repr(value) if value is not None else None
-                }
-            logger.info(f"[DEBUG_ENV] CORE_FIELDS before extract_payload: {core_values}")
         
         # D) extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ）
         extracted = extract_payload(scope, material_id=material_id if is_edit_mode else None, submission_id=None)
@@ -1202,29 +1162,19 @@ def show_detailed_material_form(material_id: int = None):
         extracted.pop("name_official", None)
         payload.update(extracted)
         
-        # DEBUG_ENV=1のときのみ、widget返り値・session_state・final payloadをログ出力
+        # DEBUG_ENV=1のときのみ、最終payloadのCORE_FIELDSを1行でログ出力
         if debug_env_enabled:
-            # 比較用にsession_stateの値も取得（ログ用途のみ）
-            name_from_session_state = st.session_state.get(NAME_KEY)
-            name_from_session_state_coerced = _coerce_text_input_value(name_from_session_state)
-            name_from_session_state_coerced = str(name_from_session_state_coerced or "").strip()
-            
-            logger.warning(f"[SUBMIT_DEBUG] name_official from widget return value: {repr(name_clean)}")
-            logger.warning(f"[SUBMIT_DEBUG] name_official from session_state[{NAME_KEY!r}]: {repr(name_from_session_state_coerced)}")
-            logger.warning(f"[SUBMIT_DEBUG] final payload['name_official']: {repr(payload.get('name_official'))}")
-            
-            # 最終的なpayloadに含まれるCORE_FIELDSをログ出力（実害検証用）
-            core_fields_in_payload = {}
+            core_fields_summary = {}
             for field in CORE_FIELDS:
-                if field in payload:
-                    val = payload[field]
-                    val_repr = repr(val) if val is not None else "None"
-                    if len(val_repr) > 100:
-                        val_repr = val_repr[:97] + "..."
-                    core_fields_in_payload[field] = val_repr
+                val = payload.get(field)
+                if val is not None:
+                    val_str = str(val)
+                    if len(val_str) > 50:
+                        val_str = val_str[:47] + "..."
+                    core_fields_summary[field] = val_str
                 else:
-                    core_fields_in_payload[field] = "(missing)"
-            logger.warning(f"[SUBMIT_PAYLOAD_CORE] scope={scope!r} core_fields_in_payload={core_fields_in_payload}")
+                    core_fields_summary[field] = "(missing)"
+            logger.warning(f"[SUBMIT_PAYLOAD_CORE] scope={scope!r} {core_fields_summary}")
         
         # デバッグログ（送信直前）
         _debug_dump_form_state(prefix="mf:")
@@ -1416,194 +1366,142 @@ def show_detailed_material_form(material_id: int = None):
                 if result.get("traceback"):
                     with st.expander("🔍 エラー詳細（デバッグ用）", expanded=False):
                         st.code(result["traceback"], language="python")
-    else:
-        # 一般ユーザーモード：submissionsに保存
-        if form_data and st.button("📤 投稿を送信（承認待ち）", type="primary", use_container_width=True):
-            # DEBUG_ENV=1のときだけ、投稿直前に5項目のkeyと値をログ出力
-            try:
-                from utils.settings import get_flag
-                debug_env_enabled = get_flag("DEBUG_ENV", False)
-            except Exception:
-                debug_env_enabled = os.getenv("DEBUG_ENV", "0") == "1"
-            
-            # ---- 原因確定ログ（DEBUG_ENV=1のときのみ） ----
-            if debug_env_enabled:
-                logger.warning(f"[SUBMIT_DEBUG] scope=create, material_id=None, submission_id=None, suffix={suffix}")
-                logger.warning(f"[SUBMIT_DEBUG] NAME_KEY={NAME_KEY!r}")
+        else:
+            # 一般ユーザーモード：submissionsに保存
+            if form_data:
+                # DEBUG_ENV=1のときだけ、投稿直前に5項目のkeyと値をログ出力
+                try:
+                    from utils.settings import get_flag
+                    debug_env_enabled = get_flag("DEBUG_ENV", False)
+                except Exception:
+                    debug_env_enabled = os.getenv("DEBUG_ENV", "0") == "1"
                 
-                # NAME_KEYの生値とcoerce後
-                name_raw = st.session_state.get(NAME_KEY)
-                name_coerced = _coerce_text_input_value(name_raw)
-                logger.warning(f"[SUBMIT_DEBUG] NAME_KEY raw value: {repr(name_raw)}")
-                logger.warning(f"[SUBMIT_DEBUG] NAME_KEY coerced value: {repr(name_coerced)}")
                 
-                # session_state内で"name_official"を含むキー一覧と値
-                name_official_keys = [k for k in st.session_state.keys() if isinstance(k, str) and "name_official" in k]
-                logger.warning(f"[SUBMIT_DEBUG] session_state keys containing 'name_official': {len(name_official_keys)}")
-                for k in name_official_keys:
-                    v = st.session_state.get(k)
-                    v_repr = repr(v)
-                    if len(v_repr) > 200:
-                        v_repr = v_repr[:197] + "..."
-                    logger.warning(f"[SUBMIT_DEBUG]   {k!r} = {v_repr}")
-            
-            # ---- name_official を直接取得（方式1: 最も堅牢） ----
-            # st.text_input の返り値（name_val）から直接取得（session_state依存を排除）
-            # name_val は widget の返り値なので、key不一致の影響を受けない
-            coerced = _coerce_text_input_value(name_val)
-            name_clean = str(coerced or "").strip()
-            
-            # payloadを初期化し、name_officialを最初に設定
-            payload = {}
-            if name_clean:
-                payload["name_official"] = name_clean
-            
-            # ---- CORE_FIELDS を widget返り値dict（layer1_data/form_data統合）から取得 ----
-            # A) core_source を決め打ち（form_data が統合dictである可能性が高い）
-            # 一般ユーザーモードは form ブロック外のため、layer1_data は直接参照できない
-            # form_data は form ブロック内で layer1_data と統合済み（894行目）
-            core_source = {}
-            if isinstance(form_data, dict):
-                core_source.update(form_data)
-            
-            # DEBUG_ENV=1のときだけ、core_sourceのキー状況をログ出力
-            if debug_env_enabled:
-                keys_list = list(core_source.keys())[:30]
-                keys_str = ",".join(keys_list) if keys_list else "(empty)"
-                has_category_main = 1 if "category_main" in core_source else 0
-                has_is_published = 1 if "is_published" in core_source else 0
-                logger.warning(f"[SUBMIT_CORE_SRC] scope=create keys={keys_str} has_category_main={has_category_main} has_is_published={has_is_published}")
-            
-            # B) CORE_FIELDS（name_official以外）を core_source から取得（一般ユーザーは常にcreate）
-            scope_submit = "create"  # E) 変数の整合性チェック: submitのscopeをそのまま使う（外側のscopeを上書きしない）
-            for field in CORE_FIELDS:
-                # name_official は既に設定済みなのでスキップ
-                if field == "name_official":
-                    continue
+                # ---- name_official を直接取得（方式1: 最も堅牢） ----
+                # st.text_input の返り値（name_val）から直接取得（session_state依存を排除）
+                # name_val は widget の返り値なので、key不一致の影響を受けない
+                coerced = _coerce_text_input_value(name_val)
+                name_clean = str(coerced or "").strip()
                 
-                # widget key を生成（ウィジェット生成時と同じ wkey を使用）
-                key = wkey(field, scope_submit, material_id=None, submission_id=None)
-                touched = bool(st.session_state.get(f"touched:{key}", False))  # ログ用に保持
-                val = core_source.get(field)
+                # payloadを初期化し、name_officialを最初に設定
+                payload = {}
+                if name_clean:
+                    payload["name_official"] = name_clean
                 
-                # 一般ユーザーは常にcreateなので、touchedを見ずに常にpayloadに入れる（valがNoneの場合はスキップ）
-                included = 0
-                reason = ""
-                if val is not None:
-                    payload[field] = val
-                    included = 1
-                    reason = "create+always"
-                else:
-                    reason = "skipped_none"
+                # ---- CORE_FIELDS を widget返り値dict（layer1_data/layer2_data統合）から取得 ----
+                # A) core_source を決め打ち（layer1_data と layer2_data を統合、widget返り値優先）
+                # session_state依存のfallbackを極力やめる（name_official同様、返り値優先）
+                core_source = {}
+                if isinstance(layer1_data, dict):
+                    core_source.update(layer1_data)
+                if isinstance(layer2_data, dict):
+                    core_source.update(layer2_data)
+                # form_data も統合（layer1_data/layer2_dataに含まれないフィールドのため）
+                if isinstance(form_data, dict):
+                    core_source.update(form_data)
                 
-                # DEBUG_ENV=1 のときのみログ出力
-                if debug_env_enabled:
-                    value_repr = repr(val) if val is not None else "None"
-                    if len(value_repr) > 120:
-                        value_repr = value_repr[:117] + "..."
-                    logger.warning(f"[SUBMIT_CORE] field={field} key={key!r} touched={1 if touched else 0} included={included} value={value_repr}")
-                    logger.warning(f"[SUBMIT_CORE_RULE] scope={scope_submit!r} field={field} touched={1 if touched else 0} included={included} reason={reason}")
-            
-            if debug_env_enabled:
-                # 主要5項目のkeyと値をログ出力
-                core_values = {}
+                
+                # B) CORE_FIELDS（name_official以外）を core_source から取得（一般ユーザーは常にcreate）
+                scope_submit = "create"  # E) 変数の整合性チェック: submitのscopeをそのまま使う（外側のscopeを上書きしない）
                 for field in CORE_FIELDS:
-                    key = wkey(field, scope_submit, material_id=None)
-                    value = st.session_state.get(key)
-                    core_values[field] = {
-                        'key': key,
-                        'value': repr(value) if value is not None else None
-                    }
-                logger.info(f"[DEBUG_ENV] CORE_FIELDS before extract_payload (create mode): {core_values}")
-            
-            # D) extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ）
-            extracted = extract_payload(scope_submit, material_id=None, submission_id=None)
-            
-            # extract_payloadの結果からCORE_FIELDSを全て削除してからマージ（widget返り値を優先）
-            for core_field in CORE_FIELDS:
-                extracted.pop(core_field, None)
-            # name_official は上書きしない（既に設定済み）
-            extracted.pop("name_official", None)
-            payload.update(extracted)
-            
-            # DEBUG_ENV=1のときのみ、widget返り値・session_state・final payloadをログ出力
-            if debug_env_enabled:
-                # 比較用にsession_stateの値も取得（ログ用途のみ）
-                name_from_session_state = st.session_state.get(NAME_KEY)
-                name_from_session_state_coerced = _coerce_text_input_value(name_from_session_state)
-                name_from_session_state_coerced = str(name_from_session_state_coerced or "").strip()
-                
-                logger.warning(f"[SUBMIT_DEBUG] name_official from widget return value: {repr(name_clean)}")
-                logger.warning(f"[SUBMIT_DEBUG] name_official from session_state[{NAME_KEY!r}]: {repr(name_from_session_state_coerced)}")
-                logger.warning(f"[SUBMIT_DEBUG] final payload['name_official']: {repr(payload.get('name_official'))}")
-                
-                # 最終的なpayloadに含まれるCORE_FIELDSをログ出力（実害検証用）
-                core_fields_in_payload = {}
-                for field in CORE_FIELDS:
-                    if field in payload:
-                        val = payload[field]
-                        val_repr = repr(val) if val is not None else "None"
-                        if len(val_repr) > 100:
-                            val_repr = val_repr[:97] + "..."
-                        core_fields_in_payload[field] = val_repr
+                    # name_official は既に設定済みなのでスキップ
+                    if field == "name_official":
+                        continue
+                    
+                    # widget key を生成（ウィジェット生成時と同じ wkey を使用）
+                    key = wkey(field, scope_submit, material_id=None, submission_id=None)
+                    touched = bool(st.session_state.get(f"touched:{key}", False))  # ログ用に保持
+                    val = core_source.get(field)
+                    
+                    # 一般ユーザーは常にcreateなので、touchedを見ずに常にpayloadに入れる（valがNoneの場合はスキップ）
+                    included = 0
+                    reason = ""
+                    if val is not None:
+                        payload[field] = val
+                        included = 1
+                        reason = "create+always"
                     else:
-                        core_fields_in_payload[field] = "(missing)"
-                logger.warning(f"[SUBMIT_PAYLOAD_CORE] scope={scope_submit!r} core_fields_in_payload={core_fields_in_payload}")
-            
-            # デバッグログ（送信直前）
-            _debug_dump_form_state(prefix="mf:")
-            
-            # name_officialの必須チェック
-            if not payload.get("name_official") or not payload["name_official"].strip():
-                st.error("❌ 材料名（正式）が空です。送信できません。")
-                logger.warning(f"[SUBMIT] blocked: name_official empty in payload")
-                return
-            
-            # 画像を取得（従来のkeyを使用）
-            CACHE_KEY = f"primary_image_cached_{suffix}"
-            cached_files = st.session_state.get(CACHE_KEY, [])
-            uploaded_files = normalize_uploaded_files(cached_files)
-            
-            # DEBUG時のみログ出力
-            if os.getenv("DEBUG", "0") == "1":
-                logger.info(f"[SUBMIT] payload_keys={list(payload.keys())}, payload_sample={dict(list(payload.items())[:5])}")
-            
-            result = save_material_submission(payload, uploaded_files=uploaded_files, submitted_by=submitted_by)
-            
-            # 防御的にresult.get("ok")で分岐
-            if result.get("ok"):
-                submission_id = result.get("submission_id")
-                submission_uuid = result.get("uuid")
-                uploaded_images = result.get("uploaded_images", [])
+                        reason = "skipped_none"
+                    
                 
-                st.success("✅ 投稿を送信しました！管理者の承認をお待ちください。")
-                st.info("📝 承認後、材料一覧に表示されます。")
-                st.markdown("---")
-                st.markdown("### 📋 投稿控え")
-                st.code(f"投稿ID: {submission_id}\nUUID: {submission_uuid}", language="text")
-                st.info("💡 このIDを控えておくと、後で投稿ステータスを確認できます。")
                 
-                # アップロードされた画像のプレビュー
-                if uploaded_images:
-                    st.markdown("---")
-                    st.markdown("### 📷 アップロードされた画像")
-                    for img_info in uploaded_images:
-                        kind = img_info.get('kind', 'primary')
-                        public_url = img_info.get('public_url')
-                        if public_url:
-                            st.markdown(f"**{kind}画像:**")
-                            st.image(public_url, caption=f"{kind}画像", use_container_width=True)
-                            st.caption(f"URL: {public_url}")
-            else:
-                # 失敗時：st.error(result["error"])とst.expanderでtraceback表示
-                error_msg = result.get('error', '不明なエラー')
-                st.error(f"❌ エラーが発生しました: {error_msg}")
-                # name_official が空の場合は特別なメッセージを表示
-                if result.get("error_code") == "name_official_empty":
-                    st.info("💡 材料名（正式）を入力してから再度送信してください。")
-                if result.get("traceback"):
-                    with st.expander("🔍 エラー詳細（デバッグ用）", expanded=False):
-                        st.code(result["traceback"], language="python")
+                # D) extract_payloadでwkeyから値を収集（CANONICAL_FIELDSのみ）
+                extracted = extract_payload(scope_submit, material_id=None, submission_id=None)
+                
+                # extract_payloadの結果からCORE_FIELDSを全て削除してからマージ（widget返り値を優先）
+                for core_field in CORE_FIELDS:
+                    extracted.pop(core_field, None)
+                # name_official は上書きしない（既に設定済み）
+                extracted.pop("name_official", None)
+                payload.update(extracted)
+                
+                # DEBUG_ENV=1のときのみ、最終payloadのCORE_FIELDSを1行でログ出力
+                if debug_env_enabled:
+                    core_fields_summary = {}
+                    for field in CORE_FIELDS:
+                        val = payload.get(field)
+                        if val is not None:
+                            val_str = str(val)
+                            if len(val_str) > 50:
+                                val_str = val_str[:47] + "..."
+                            core_fields_summary[field] = val_str
+                        else:
+                            core_fields_summary[field] = "(missing)"
+                    logger.warning(f"[SUBMIT_PAYLOAD_CORE] scope={scope_submit!r} {core_fields_summary}")
+                
+                # デバッグログ（送信直前）
+                _debug_dump_form_state(prefix="mf:")
+                
+                # name_officialの必須チェック
+                if not payload.get("name_official") or not payload["name_official"].strip():
+                    st.error("❌ 材料名（正式）が空です。送信できません。")
+                    logger.warning(f"[SUBMIT] blocked: name_official empty in payload")
+                else:
+                    # 画像を取得（従来のkeyを使用）
+                    CACHE_KEY = f"primary_image_cached_{suffix}"
+                    cached_files = st.session_state.get(CACHE_KEY, [])
+                    uploaded_files = normalize_uploaded_files(cached_files)
+                    
+                    # DEBUG時のみログ出力
+                    if os.getenv("DEBUG", "0") == "1":
+                        logger.info(f"[SUBMIT] payload_keys={list(payload.keys())}, payload_sample={dict(list(payload.items())[:5])}")
+                    
+                    result = save_material_submission(payload, uploaded_files=uploaded_files, submitted_by=submitted_by)
+                    
+                    # 防御的にresult.get("ok")で分岐
+                    if result.get("ok"):
+                        submission_id = result.get("submission_id")
+                        submission_uuid = result.get("uuid")
+                        uploaded_images = result.get("uploaded_images", [])
+                        
+                        st.success("✅ 投稿を送信しました！管理者の承認をお待ちください。")
+                        st.info("📝 承認後、材料一覧に表示されます。")
+                        st.markdown("---")
+                        st.markdown("### 📋 投稿控え")
+                        st.code(f"投稿ID: {submission_id}\nUUID: {submission_uuid}", language="text")
+                        st.info("💡 このIDを控えておくと、後で投稿ステータスを確認できます。")
+                        
+                        # アップロードされた画像のプレビュー
+                        if uploaded_images:
+                            st.markdown("---")
+                            st.markdown("### 📷 アップロードされた画像")
+                            for img_info in uploaded_images:
+                                kind = img_info.get('kind', 'primary')
+                                public_url = img_info.get('public_url')
+                                if public_url:
+                                    st.markdown(f"**{kind}画像:**")
+                                    st.image(public_url, caption=f"{kind}画像", use_container_width=True)
+                                    st.caption(f"URL: {public_url}")
+                    else:
+                        # 失敗時：st.error(result["error"])とst.expanderでtraceback表示
+                        error_msg = result.get('error', '不明なエラー')
+                        st.error(f"❌ エラーが発生しました: {error_msg}")
+                        # name_official が空の場合は特別なメッセージを表示
+                        if result.get("error_code") == "name_official_empty":
+                            st.info("💡 材料名（正式）を入力してから再度送信してください。")
+                        if result.get("traceback"):
+                            with st.expander("🔍 エラー詳細（デバッグ用）", expanded=False):
+                                st.code(result["traceback"], language="python")
 
 
 def show_layer1_form(existing_material=None, suffix="new"):
