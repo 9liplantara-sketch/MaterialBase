@@ -2677,7 +2677,6 @@ def save_material(form_data, material_id: int = None):
         except Exception as e:
             # 埋め込み更新失敗は警告のみ（保存は継続）
             import logging
-            logger = logging.getLogger(__name__)
             logger.warning(f"[SAVE MATERIAL] Failed to update embedding for material_id={material.id}: {e}")
         
         # 参照URL保存（既存のものは削除してから再作成）
