@@ -1017,8 +1017,10 @@ def show_detailed_material_form(material_id: int = None):
             
             # 3) default は existing_material.is_published があればそれを int化
             # createモードでは主要6項目（CORE_FIELDS）のデフォルト値をsession_stateに設定しない
+            # editモード: touchedが立っていない限り代入しない（ユーザー操作を潰さないため）
             if pub_key not in st.session_state:
                 if existing_material:
+                    # 初回seedのみ許可（毎rerunで上書き禁止）
                     default_pub = int(getattr(existing_material, "is_published", 1) or 1)
                     st.session_state[pub_key] = default_pub
                 # else: createモードではsession_stateに設定しない（UIのデフォルトに任せる）
@@ -1098,6 +1100,26 @@ def show_detailed_material_form(material_id: int = None):
         except Exception:
             debug_env_enabled = os.getenv("DEBUG_ENV", "0") == "1"
         
+        # CORE_FIELDS取得用ヘルパー関数（優先順位: layer1_data -> layer2_data -> form_data）
+        def _pick_core_val(field: str, layer1_data, layer2_data, form_data):
+            """CORE_FIELDSの値を優先順位で取得（widget返り値が必ず勝つ）"""
+            if isinstance(layer1_data, dict) and field in layer1_data:
+                return layer1_data.get(field)
+            if isinstance(layer2_data, dict) and field in layer2_data:
+                return layer2_data.get(field)
+            if isinstance(form_data, dict):
+                return form_data.get(field)
+            return None
+        
+        # submit直前ログ: transparencyの優先順位確認（DEBUG_ENV=1時のみ）
+        if debug_env_enabled:
+            logger.warning(f"[SUBMIT_CORE_PICK] layer1={layer1_data.get('transparency') if isinstance(layer1_data, dict) else None!r} layer2={layer2_data.get('transparency') if isinstance(layer2_data, dict) else None!r} form_data={form_data.get('transparency') if isinstance(form_data, dict) else None!r}")
+        
+        # submit直前ログ: widget return値を確認（layer1_data/form_data）
+        if debug_env_enabled:
+            transparency_from_layer1 = layer1_data.get('transparency') if isinstance(layer1_data, dict) else None
+            transparency_from_form_data = form_data.get('transparency') if isinstance(form_data, dict) else None
+            logger.warning(f"[SUBMIT_SNAPSHOT] transparency_from_layer1={transparency_from_layer1!r} transparency_from_form_data={transparency_from_form_data!r}")
         
         # ---- name_official を直接取得（方式1: 最も堅牢） ----
         # st.text_input の返り値（name_val）から直接取得（session_state依存を排除）
@@ -1110,16 +1132,10 @@ def show_detailed_material_form(material_id: int = None):
         if name_clean:
             payload["name_official"] = name_clean
         
-        # ---- CORE_FIELDS を widget返り値dict（layer1_data/form_data統合）から取得 ----
-        # A) core_source を決め打ち（layer1_data と form_data を統合）
-        core_source = {}
-        if isinstance(layer1_data, dict):
-            core_source.update(layer1_data)
-        if isinstance(form_data, dict):
-            core_source.update(form_data)
+        # ---- CORE_FIELDS を widget返り値dict（layer1_data優先）から取得 ----
+        # widget返り値が必ず勝つように、優先順位: layer1_data -> layer2_data -> form_data
         
-        
-        # B) CORE_FIELDS（name_official以外）を core_source から取得（touched gate付き）
+        # B) CORE_FIELDS（name_official以外）を優先順位で取得（touched gate付き）
         for field in CORE_FIELDS:
             # name_official は既に設定済みなのでスキップ
             if field == "name_official":
@@ -1128,7 +1144,9 @@ def show_detailed_material_form(material_id: int = None):
             # widget key を生成（ウィジェット生成時と同じ wkey を使用）
             key = wkey(field, scope, material_id=material_id if scope == "edit" else None, submission_id=None)
             touched = bool(st.session_state.get(f"touched:{key}", False))
-            val = core_source.get(field)
+            
+            # 優先順位: layer1_data -> layer2_data -> form_data（widget返り値が必ず勝つ）
+            val = _pick_core_val(field, layer1_data, layer2_data, form_data)
             
             # scope別の追加ロジック
             # - edit: touchedがTrueのときだけ追加（上書き事故防止）
@@ -1376,6 +1394,15 @@ def show_detailed_material_form(material_id: int = None):
                 except Exception:
                     debug_env_enabled = os.getenv("DEBUG_ENV", "0") == "1"
                 
+                # submit直前ログ: transparencyの優先順位確認（DEBUG_ENV=1時のみ）
+                if debug_env_enabled:
+                    logger.warning(f"[SUBMIT_CORE_PICK] layer1={layer1_data.get('transparency') if isinstance(layer1_data, dict) else None!r} layer2={layer2_data.get('transparency') if isinstance(layer2_data, dict) else None!r} form_data={form_data.get('transparency') if isinstance(form_data, dict) else None!r}")
+                
+                # submit直前ログ: widget return値を確認（layer1_data/form_data）
+                if debug_env_enabled:
+                    transparency_from_layer1 = layer1_data.get('transparency') if isinstance(layer1_data, dict) else None
+                    transparency_from_form_data = form_data.get('transparency') if isinstance(form_data, dict) else None
+                    logger.warning(f"[SUBMIT_SNAPSHOT] transparency_from_layer1={transparency_from_layer1!r} transparency_from_form_data={transparency_from_form_data!r}")
                 
                 # ---- name_official を直接取得（方式1: 最も堅牢） ----
                 # st.text_input の返り値（name_val）から直接取得（session_state依存を排除）
@@ -1388,20 +1415,10 @@ def show_detailed_material_form(material_id: int = None):
                 if name_clean:
                     payload["name_official"] = name_clean
                 
-                # ---- CORE_FIELDS を widget返り値dict（layer1_data/layer2_data統合）から取得 ----
-                # A) core_source を決め打ち（layer1_data と layer2_data を統合、widget返り値優先）
-                # session_state依存のfallbackを極力やめる（name_official同様、返り値優先）
-                core_source = {}
-                if isinstance(layer1_data, dict):
-                    core_source.update(layer1_data)
-                if isinstance(layer2_data, dict):
-                    core_source.update(layer2_data)
-                # form_data も統合（layer1_data/layer2_dataに含まれないフィールドのため）
-                if isinstance(form_data, dict):
-                    core_source.update(form_data)
+                # ---- CORE_FIELDS を widget返り値dict（layer1_data優先）から取得 ----
+                # widget返り値が必ず勝つように、優先順位: layer1_data -> layer2_data -> form_data
                 
-                
-                # B) CORE_FIELDS（name_official以外）を core_source から取得（一般ユーザーは常にcreate）
+                # B) CORE_FIELDS（name_official以外）を優先順位で取得（一般ユーザーは常にcreate）
                 scope_submit = "create"  # E) 変数の整合性チェック: submitのscopeをそのまま使う（外側のscopeを上書きしない）
                 for field in CORE_FIELDS:
                     # name_official は既に設定済みなのでスキップ
@@ -1411,7 +1428,9 @@ def show_detailed_material_form(material_id: int = None):
                     # widget key を生成（ウィジェット生成時と同じ wkey を使用）
                     key = wkey(field, scope_submit, material_id=None, submission_id=None)
                     touched = bool(st.session_state.get(f"touched:{key}", False))  # ログ用に保持
-                    val = core_source.get(field)
+                    
+                    # 優先順位: layer1_data -> layer2_data -> form_data（widget返り値が必ず勝つ）
+                    val = _pick_core_val(field, layer1_data, layer2_data, form_data)
                     
                     # 一般ユーザーは常にcreateなので、touchedを見ずに常にpayloadに入れる（valがNoneの場合はスキップ）
                     included = 0
@@ -1677,7 +1696,8 @@ def show_layer1_form(existing_material=None, suffix="new"):
     # index を計算（optionsに存在すればそのindex、なければ0にフォールバック）
     if current_value and current_value in options:
         category_main_index = options.index(current_value)
-        # editモードでsession_stateに無い場合は設定（createモードでは設定しない）
+        # editモード: touchedが立っていない限り代入しない（ユーザー操作を潰さないため）
+        # 初回seedのみ許可（毎rerunで上書き禁止）
         if scope == "edit" and existing_material and category_main_key not in st.session_state:
             st.session_state[category_main_key] = current_value
     else:
@@ -1716,9 +1736,16 @@ def show_layer1_form(existing_material=None, suffix="new"):
     else:
         # createモードでは主要6項目（CORE_FIELDS）のデフォルト値をsession_stateに設定しない
         if existing_material:
-            default_origin_type = getattr(existing_material, 'origin_type', ORIGIN_TYPES[0])
-            origin_type_index = ORIGIN_TYPES.index(default_origin_type) if default_origin_type in ORIGIN_TYPES else 0
-            st.session_state[origin_type_key] = ORIGIN_TYPES[origin_type_index]
+            # editモード: touchedが立っていない限り代入しない（ユーザー操作を潰さないため）
+            if origin_type_key not in st.session_state:
+                # 初回seedのみ許可（毎rerunで上書き禁止）
+                default_origin_type = getattr(existing_material, 'origin_type', ORIGIN_TYPES[0])
+                origin_type_index = ORIGIN_TYPES.index(default_origin_type) if default_origin_type in ORIGIN_TYPES else 0
+                st.session_state[origin_type_key] = ORIGIN_TYPES[origin_type_index]
+            else:
+                # session_stateに既に値がある場合は、その値からindexを計算
+                origin_type_value = st.session_state[origin_type_key]
+                origin_type_index = ORIGIN_TYPES.index(origin_type_value) if origin_type_value in ORIGIN_TYPES else 0
         else:
             # createモード: index=0（UIのデフォルトに任せる）で、session_stateには設定しない
             origin_type_index = 0
@@ -1794,9 +1821,17 @@ def show_layer1_form(existing_material=None, suffix="new"):
     else:
         # createモードでは主要6項目（CORE_FIELDS）のデフォルト値をsession_stateに設定しない
         if existing_material:
-            default_transparency = getattr(existing_material, 'transparency', TRANSPARENCY_OPTIONS[0])
-            transparency_index = TRANSPARENCY_OPTIONS.index(default_transparency) if default_transparency in TRANSPARENCY_OPTIONS else 0
-            st.session_state[transparency_key] = TRANSPARENCY_OPTIONS[transparency_index]
+            # editモード: touchedが立っていない限り代入しない（ユーザー操作を潰さないため）
+            # 初回seedのみ許可（毎rerunで上書き禁止）
+            if transparency_key not in st.session_state:
+                # 初回seedのみ許可（毎rerunで上書き禁止）
+                default_transparency = getattr(existing_material, 'transparency', TRANSPARENCY_OPTIONS[0])
+                transparency_index = TRANSPARENCY_OPTIONS.index(default_transparency) if default_transparency in TRANSPARENCY_OPTIONS else 0
+                st.session_state[transparency_key] = TRANSPARENCY_OPTIONS[transparency_index]
+            else:
+                # session_stateに既に値がある場合は、その値からindexを計算
+                transparency_value = st.session_state[transparency_key]
+                transparency_index = TRANSPARENCY_OPTIONS.index(transparency_value) if transparency_value in TRANSPARENCY_OPTIONS else 0
         else:
             # createモード: index=0（UIのデフォルトに任せる）で、session_stateには設定しない
             transparency_index = 0
@@ -1806,6 +1841,22 @@ def show_layer1_form(existing_material=None, suffix="new"):
         index=transparency_index,
         key=transparency_key,
     )
+    
+    # DEBUG_ENV=1のときのみ、widget生成直後の値をログ出力（原因特定用）
+    try:
+        from utils.settings import get_flag
+        debug_env_enabled = get_flag("DEBUG_ENV", False)
+    except Exception:
+        debug_env_enabled = os.getenv("DEBUG_ENV", "0") == "1"
+    
+    if debug_env_enabled:
+        return_value = form_data['transparency']
+        session_value = st.session_state.get(transparency_key)
+        touched_key = f"touched:{transparency_key}"
+        touched_value = st.session_state.get(touched_key, False)
+        logger.warning(f"[WIDGET_VAL] field=transparency scope={scope!r} key={transparency_key!r} return={return_value!r} session={session_value!r}")
+        logger.warning(f"[WIDGET_TOUCH] touched_key={touched_key!r} touched={touched_value!r}")
+    
     # touched gate: 値の差分でtouchedを立てる（st.form内ではon_changeが使えない）
     default_transparency = TRANSPARENCY_OPTIONS[0] if scope == "create" else None
     existing_transparency = getattr(existing_material, 'transparency', None) if existing_material else None
@@ -2100,9 +2151,16 @@ def show_layer1_form(existing_material=None, suffix="new"):
     else:
         # createモードでは主要6項目（CORE_FIELDS）のデフォルト値をsession_stateに設定しない
         if existing_material:
-            default_visibility = getattr(existing_material, 'visibility', VISIBILITY_OPTIONS[0])
-            visibility_index = VISIBILITY_OPTIONS.index(default_visibility) if default_visibility in VISIBILITY_OPTIONS else 0
-            st.session_state[visibility_key] = VISIBILITY_OPTIONS[visibility_index]
+            # editモード: touchedが立っていない限り代入しない（ユーザー操作を潰さないため）
+            if visibility_key not in st.session_state:
+                # 初回seedのみ許可（毎rerunで上書き禁止）
+                default_visibility = getattr(existing_material, 'visibility', VISIBILITY_OPTIONS[0])
+                visibility_index = VISIBILITY_OPTIONS.index(default_visibility) if default_visibility in VISIBILITY_OPTIONS else 0
+                st.session_state[visibility_key] = VISIBILITY_OPTIONS[visibility_index]
+            else:
+                # session_stateに既に値がある場合は、その値からindexを計算
+                visibility_value = st.session_state[visibility_key]
+                visibility_index = VISIBILITY_OPTIONS.index(visibility_value) if visibility_value in VISIBILITY_OPTIONS else 0
         else:
             # createモード: index=0（UIのデフォルトに任せる）で、session_stateには設定しない
             visibility_index = 0
@@ -2470,11 +2528,25 @@ def save_material(form_data, material_id: int = None):
             material = db.merge(existing_material)
             material_uuid = material.uuid  # UUIDは保持
             
+            # VARCHARカラム用サニタイズ関数（dict/listをJSON文字列に変換）
+            def _to_varchar(v):
+                """VARCHARカラムに入れる値を正規化（文字列 or None）"""
+                if v is None:
+                    return None
+                if isinstance(v, (dict, list)):
+                    return json.dumps(v, ensure_ascii=False)
+                if isinstance(v, (bool, int, float)):
+                    return str(v)
+                return v  # 文字列など
+            
             # 編集モードでは、form_dataに存在するキーだけを更新（存在しないキーは既存値を保持）
             # ただし、None/空文字列/空配列は「ユーザーが意図的に空にした」とみなして更新する
             json_array_fields = ['name_aliases', 'material_forms', 'color_tags', 'processing_methods',
                                 'use_categories', 'safety_tags', 'question_templates', 'main_elements',
                                 'development_motives', 'tactile_tags', 'visual_tags', 'certifications']
+            
+            # VARCHARカラム（特にdict/listが混入しやすいフィールド）
+            varchar_fields = {'question_templates', 'main_elements'}
             
             # システムキーやリレーションを除外
             system_keys = {"id", "created_at", "updated_at", "deleted_at", "uuid", "search_text"}
@@ -2485,10 +2557,17 @@ def save_material(form_data, material_id: int = None):
                 if k in system_keys or k in relationship_keys:
                     continue
                 
+                # VARCHARカラムのサニタイズ（dict/listをJSON文字列に変換）
+                if k in varchar_fields:
+                    v = _to_varchar(v)
+                
                 # JSON配列フィールドの処理
                 if k in json_array_fields:
                     if isinstance(v, list):
                         # リストの場合はJSON文字列に変換
+                        setattr(material, k, json.dumps(v, ensure_ascii=False))
+                    elif isinstance(v, dict):
+                        # dictの場合はJSON文字列に変換（VARCHARカラム対策）
                         setattr(material, k, json.dumps(v, ensure_ascii=False))
                     elif v is not None:
                         # Noneでない場合はそのまま設定（既にJSON文字列の可能性）
@@ -2506,6 +2585,17 @@ def save_material(form_data, material_id: int = None):
                 id=None  # 新規作成
             )
             db.add(material)
+            
+            # VARCHARカラム用サニタイズ関数（dict/listをJSON文字列に変換）
+            def _to_varchar(v):
+                """VARCHARカラムに入れる値を正規化（文字列 or None）"""
+                if v is None:
+                    return None
+                if isinstance(v, (dict, list)):
+                    return json.dumps(v, ensure_ascii=False)
+                if isinstance(v, (bool, int, float)):
+                    return str(v)
+                return v  # 文字列など
         
         # Materialデータを設定（新規/更新共通）
         # 注意：既存レコードの更新は上記のループで完了しているため、ここは新規のみ
@@ -2564,7 +2654,13 @@ def save_material(form_data, material_id: int = None):
             material.certifications = json.dumps(form_data.get('certifications', []), ensure_ascii=False)
             material.certifications_other = form_data.get('certifications_other')
             # STEP 6: 材料×元素マッピング
-            material.main_elements = form_data.get('main_elements')
+            # VARCHARカラムのサニタイズ（dict/listをJSON文字列に変換）
+            main_elements_val = form_data.get('main_elements')
+            material.main_elements = _to_varchar(main_elements_val)
+            # question_templatesも同様にサニタイズ（存在する場合）
+            question_templates_val = form_data.get('question_templates')
+            if question_templates_val is not None:
+                material.question_templates = _to_varchar(question_templates_val)
             # 後方互換性
             material.name = form_data['name_official']
             material.category = form_data['category_main']

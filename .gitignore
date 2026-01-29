@@ -60,3 +60,4 @@ app.py.bak*
 
 # Streamlit multipage folder (unused)
 pages/
+materials.db.bak_*
