@@ -207,6 +207,47 @@ def safe_url(url: str) -> str:
         return url
 
 
+@st.cache_data(ttl=600)  # 画像URL: 600秒（10分）TTL（Network transfer削減のため）
+def get_material_image_url_cached(material_id: int, updated_at_str: str = None) -> Optional[str]:
+    """
+    材料の画像URLを取得（キャッシュ付き、primaryのみ）
+    
+    Args:
+        material_id: 材料ID
+        updated_at_str: 更新日時文字列（キャッシュキー用、Noneの場合は無視）
+    
+    Returns:
+        primary画像URL（見つからない場合はNone）
+    
+    Note:
+        - 画像URLが無い場合もキャッシュ（Noneをキャッシュ）して無駄なDB問い合わせを抑える
+        - updated_at_strが変更されると自動的にキャッシュが無効化される
+    """
+    if not material_id:
+        return None
+    
+    # imagesテーブルから取得（primaryのみ）
+    from utils.db import get_session, DBUnavailableError
+    try:
+        with get_session() as db:
+            from database import Image
+            from sqlalchemy import select
+            stmt = select(Image).filter(
+                Image.material_id == material_id,
+                Image.kind == 'primary'
+            )
+            result = db.execute(stmt)
+            primary_img = result.scalar_one_or_none()
+            if primary_img and primary_img.public_url:
+                return primary_img.public_url
+    except DBUnavailableError:
+        # DB接続エラー時はNoneを返す（UI崩壊を防ぐ）
+        logger.warning(f"[get_material_image_url_cached] DB unavailable for material_id={material_id}")
+        return None
+    
+    return None
+
+
 def get_material_image_url(material) -> Optional[str]:
     """
     materialsテーブルから画像URLを取得（primaryのみ）
@@ -219,27 +260,31 @@ def get_material_image_url(material) -> Optional[str]:
     
     Returns:
         primary画像URL（見つからない場合はNone）
+    
+    Note:
+        - primary_image_url属性がある場合はそれを優先（DBアクセス不要）
+        - なければキャッシュ付き関数でDBから取得
     """
     material_id = getattr(material, 'id', None)
     if not material_id:
         return None
     
-    # primary_image_urlを確認
+    # primary_image_urlを確認（DBアクセス不要）
     primary_image_url = getattr(material, "primary_image_url", None)
     if primary_image_url and primary_image_url.strip() and primary_image_url.startswith(('http://', 'https://')):
         return primary_image_url
     
-    # imagesテーブルから直接取得（primaryのみ）
-    from utils.db import get_session
-    with get_session() as db:
-        primary_img = db.query(Image).filter(
-            Image.material_id == material_id,
-            Image.kind == 'primary'
-        ).first()
-        if primary_img and primary_img.public_url:
-            return primary_img.public_url
+    # キャッシュ付き関数でDBから取得
+    # updated_atをキャッシュキーに含める（更新で自動無効化）
+    updated_at = getattr(material, "updated_at", None)
+    updated_at_str = None
+    if updated_at:
+        if hasattr(updated_at, "isoformat"):
+            updated_at_str = updated_at.isoformat()
+        else:
+            updated_at_str = str(updated_at)
     
-    return None
+    return get_material_image_url_cached(material_id, updated_at_str)
 
 
 def get_image_path(filename):
@@ -262,7 +307,7 @@ def get_base64_image(image_path):
             with open(image_path, "rb") as img_file:
                 return base64.b64encode(img_file.read()).decode()
         except Exception as e:
-            print(f"画像読み込みエラー: {e}")
+            logger.warning(f"画像読み込みエラー: {e}")
             return None
     return None
 
@@ -876,7 +921,7 @@ def get_material_count_sqlite(db_path: Path) -> int:
         finally:
             conn.close()
     except Exception as e:
-        print(f"Warning: get_material_count_sqlite failed: {e}")
+        logger.warning(f"get_material_count_sqlite failed: {e}")
         return 0
 
 
@@ -919,13 +964,13 @@ def maybe_init_sample_data():
         # Lazy import: 起動時にimportしない（SyntaxErrorがあっても起動できる）
         from init_sample_data import init_sample_data
         init_sample_data()
-        print("[INFO] Sample data initialized successfully")
+        logger.info("Sample data initialized successfully")
     except Exception as e:
         # 落とさない（DEBUG時だけ表示でもOK）
         import traceback
-        print(f"[WARN] init_sample_data failed: {e}")
+        logger.warning(f"init_sample_data failed: {e}")
         if os.getenv("DEBUG", "0") == "1":
-            print(traceback.format_exc())
+            logger.debug(traceback.format_exc())
     finally:
         # 成功/失敗問わず、セッション内で1回だけ実行するフラグを立てる
         st.session_state["_seed_done"] = True
@@ -938,10 +983,10 @@ def maybe_init_sample_data():
 # 書き込み: with session_scope() as db: ...
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)  # 件数/統計: 300秒（5分）TTL（起床頻度を下げる）
 def get_material_count_cached(db_url: str, include_unpublished: bool = False, include_deleted: bool = False) -> int:
     """
-    材料件数を取得（キャッシュ付き、30秒TTL）
+    材料件数を取得（キャッシュ付き、300秒TTL）
     
     Args:
         db_url: データベースURL（キャッシュキー用）
@@ -951,37 +996,12 @@ def get_material_count_cached(db_url: str, include_unpublished: bool = False, in
     Returns:
         材料件数
     """
-    import time
-    # 実行順序の安全策: is_debug_flag が存在することを確認
-    if "is_debug_flag" not in globals() or not callable(globals().get("is_debug_flag")):
-        debug_enabled = os.getenv("DEBUG", "0") == "1"
-    else:
-        debug_enabled = is_debug_flag()
-    t0 = time.perf_counter() if debug_enabled else None
-    
-    from utils.db import get_sessionmaker
-    from sqlalchemy import select, func
-    from utils.db import get_session
-    with get_session() as db:
-        stmt = select(func.count()).select_from(Material)
-        
-        if not include_deleted:
-            if hasattr(Material, 'is_deleted'):
-                stmt = stmt.filter(Material.is_deleted == 0)
-        
-        if not include_unpublished:
-            if hasattr(Material, 'is_published'):
-                stmt = stmt.filter(Material.is_published == 1)
-        
-        count = db.execute(stmt).scalar_one()
-        
-        if t0 is not None:
-            print(f"[PERF] get_material_count_cached: {time.perf_counter() - t0:.3f}s")
-        
-        return count
+    from services.materials_service import get_material_count
+    bump_db_call_counter("count")
+    return get_material_count(include_unpublished=include_unpublished, include_deleted=include_deleted)
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=120)  # 一覧: 120秒（2分）TTL
 def fetch_materials_page_cached(
     db_url: str,
     include_unpublished: bool = False,
@@ -991,7 +1011,7 @@ def fetch_materials_page_cached(
     search_query: str = None
 ) -> List[Dict[str, Any]]:
     """
-    材料一覧をページングで取得（キャッシュ付き、30秒TTL、dict化して返す）
+    材料一覧をページングで取得（キャッシュ付き、120秒TTL、dict化して返す）
     
     Args:
         db_url: データベースURL（キャッシュキー用）
@@ -1003,127 +1023,22 @@ def fetch_materials_page_cached(
     
     Returns:
         材料データのdictリスト（表示用）
+    
+    Note:
+        - サービス層経由でDBアクセス
     """
-    import time
-    # 実行順序の安全策: is_debug_flag が存在することを確認
-    if "is_debug_flag" not in globals() or not callable(globals().get("is_debug_flag")):
-        debug_enabled = os.getenv("DEBUG", "0") == "1"
-    else:
-        debug_enabled = is_debug_flag()
-    t0 = time.perf_counter() if debug_enabled else None
-    
-    from utils.db import get_sessionmaker
-    from utils.material_cache import freeze_material_row
-    from sqlalchemy import select
-    from sqlalchemy.orm import noload, load_only
-    from database import Image
-    from database import Image
-    from utils.db import get_session
-    
-    with get_session() as db:
-        # 一覧表示用：必要な列だけをロードし、リレーションは全てnoload（高速化）
-        stmt = (
-            select(Material)
-            .options(
-                # 必要な列だけをロード（パフォーマンス向上）
-                load_only(
-                    Material.id,
-                    Material.uuid,
-                    Material.name_official,
-                    Material.name,  # 後方互換
-                    Material.category_main,
-                    Material.category,  # 後方互換
-                    Material.is_published,
-                    Material.is_deleted,
-                    Material.created_at,
-                    Material.updated_at,
-                ),
-                # リレーションは全てnoload（一覧では不要）
-                noload(Material.properties),
-                noload(Material.images),
-                noload(Material.reference_urls),
-                noload(Material.use_examples),
-                noload(Material.metadata_items),
-                noload(Material.process_example_images),
-            )
-        )
-        
-        # フィルタ
-        if not include_deleted:
-            if hasattr(Material, 'is_deleted'):
-                stmt = stmt.filter(Material.is_deleted == 0)
-        
-        if not include_unpublished:
-            if hasattr(Material, 'is_published'):
-                stmt = stmt.filter(Material.is_published == 1)
-        
-        # 検索クエリ
-        if search_query and search_query.strip():
-            stmt = stmt.filter(Material.name_official.ilike(f"%{search_query.strip()}%"))
-        
-        # ソート
-        stmt = stmt.order_by(
-            Material.created_at.desc() if hasattr(Material, 'created_at') else Material.id.desc()
-        )
-        
-        # ページング
-        stmt = stmt.limit(limit).offset(offset)
-        
-        # 実行
-        result = db.execute(stmt)
-        materials = result.unique().scalars().all()
-        
-        # material_idsを取得して画像情報とpropertiesを一括取得（N+1問題を回避）
-        material_ids = [m.id for m in materials]
-        primary_images_dict = {}  # {material_id: public_url}
-        properties_dict = {}  # {material_id: [Property, ...]}
-        
-        if material_ids:
-            # primary画像を一括取得
-            images_stmt = select(Image).filter(
-                Image.material_id.in_(material_ids),
-                Image.kind == "primary"
-            )
-            images_result = db.execute(images_stmt)
-            images = images_result.scalars().all()
-            for img in images:
-                if img.public_url:
-                    primary_images_dict[img.material_id] = img.public_url
-            
-            # propertiesを一括取得（表示用、最大3件まで）
-            from database import Property
-            properties_stmt = select(Property).filter(
-                Property.material_id.in_(material_ids)
-            )
-            properties_result = db.execute(properties_stmt)
-            properties_list = properties_result.scalars().all()
-            for prop in properties_list:
-                if prop.material_id not in properties_dict:
-                    properties_dict[prop.material_id] = []
-                # Propertyオブジェクトをdict化（DetachedInstanceErrorを防ぐ）
-                prop_dict = {
-                    "property_name": prop.property_name,
-                    "value": prop.value,
-                    "unit": prop.unit,
-                }
-                properties_dict[prop.material_id].append(prop_dict)
-        
-        # dict化（DetachedInstanceErrorを防ぐ、scalar列のみ参照、画像URLとpropertiesも含める）
-        material_dicts = []
-        for m in materials:
-            d = freeze_material_row(m)
-            # primary画像のpublic_urlを追加
-            d["primary_image_url"] = primary_images_dict.get(m.id)
-            # propertiesを追加（表示用、最大3件まで）
-            d["properties"] = properties_dict.get(m.id, [])[:3]
-            material_dicts.append(d)
-        
-        if t0 is not None:
-            print(f"[PERF] fetch_materials_page_cached(limit={limit}, offset={offset}): {time.perf_counter() - t0:.3f}s")
-        
-        return material_dicts
+    from services.materials_service import get_materials_page
+    bump_db_call_counter("page")
+    return get_materials_page(
+        include_unpublished=include_unpublished,
+        include_deleted=include_deleted,
+        limit=limit,
+        offset=offset,
+        search_query=search_query
+    )
 
 
+@st.cache_data(ttl=120)  # 全材料: 120秒（2分）TTL
 def get_all_materials(include_unpublished: bool = False, include_deleted: bool = False):
     """
     全材料を取得（Eager Loadでリレーションも先読み・全リレーション網羅）
@@ -1133,167 +1048,30 @@ def get_all_materials(include_unpublished: bool = False, include_deleted: bool =
         include_unpublished: Trueの場合、非公開（is_published=0）も含める
         include_deleted: Trueの場合、論理削除済み（is_deleted=1）も含める
     
-    OperationalErrorをキャッチしてUI崩壊を防ぐ
-    スキーマドリフト検知: images.kind が存在しない場合は安全モードで動作
+    Note:
+        - NeonのCU-hours節約のため、ttl=120秒でキャッシュ
+        - サービス層経由でDBアクセス
     """
-    # スキーマドリフト検知（軽量、キャッシュ済み）
-    try:
-        from database import get_schema_drift_status
-        from utils.settings import get_database_url
-        schema_status = get_schema_drift_status(get_database_url())
-        
-        # スキーマチェックが成功した場合のみ images_ok を使用
-        if schema_status.get("ok", False):
-            images_ok = schema_status.get("images_ok", False)
-            # 後方互換: images_kind_exists も確認（images_ok が無い場合のフォールバック）
-            if "images_ok" not in schema_status:
-                images_ok = schema_status.get("images_kind_exists", False)
-        else:
-            # スキーマチェック失敗時は安全側に倒す（images をロードしない）
-            images_ok = False
-            if os.getenv("DEBUG", "0") == "1":
-                print(f"[SCHEMA] schema check failed (ok=False), using safe mode: {schema_status.get('errors', [])}")
-    except Exception as e:
-        # スキーマチェック失敗時は安全側に倒す（images をロードしない）
-        images_ok = False
-        if os.getenv("DEBUG", "0") == "1":
-            print(f"[SCHEMA] schema check exception, using safe mode: {e}")
-    
-    # Phase 2: 統一APIを使用（読み取り専用）
-    from utils.db import get_session
-    try:
-        with get_session() as db:
-            # 安全モード: images の必須列が欠けている場合は images をロードしない
-            if images_ok:
-                # 通常モード: 全リレーションを先読み
-                stmt = (
-                    select(Material)
-                    .options(
-                        selectinload(Material.properties),
-                        selectinload(Material.images),
-                        selectinload(Material.metadata_items),
-                        selectinload(Material.reference_urls),
-                        selectinload(Material.use_examples),
-                        selectinload(Material.process_example_images),  # 加工例画像
-                    )
-                )
-            else:
-                # 安全モード: images をロードしない（スキーマ不整合を回避）
-                from sqlalchemy.orm import noload
-                stmt = (
-                    select(Material)
-                    .options(
-                        selectinload(Material.properties),
-                        noload(Material.images),  # images をロードしない
-                        selectinload(Material.metadata_items),
-                        selectinload(Material.reference_urls),
-                        selectinload(Material.use_examples),
-                        selectinload(Material.process_example_images),
-                    )
-                )
-            
-            # is_deletedフィルタ（デフォルトで削除されていないもののみ）
-            if not include_deleted:
-                if hasattr(Material, 'is_deleted'):
-                    stmt = stmt.filter(Material.is_deleted == 0)
-            
-            # is_publishedフィルタ（デフォルトで公開のみ）
-            if not include_unpublished:
-                if hasattr(Material, 'is_published'):
-                    stmt = stmt.filter(Material.is_published == 1)
-            
-            stmt = stmt.order_by(Material.created_at.desc() if hasattr(Material, 'created_at') else Material.id.desc())
-            
-            # SQLAlchemy 2.0のunique()で重複を除去
-            result = db.execute(stmt)
-            materials = result.unique().scalars().all()
-            return materials
-    except Exception as e:
-        from sqlalchemy.exc import OperationalError
-        import sqlite3
-        
-        # OperationalErrorをキャッチ（DB query failed）
-        if isinstance(e, (OperationalError, sqlite3.OperationalError)) or "no such column" in str(e).lower():
-            # DB query failed (OperationalError) - 本文に表示してst.stop()
-            st.error("DB query failed (OperationalError)")
-            st.code(str(e))
-            st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
-            # PRAGMA table_info(materials) を全部出す
-            db_path = Path("materials.db")
-            if db_path.exists():
-                try:
-                    conn = sqlite3.connect(str(db_path.absolute()))
-                    cursor = conn.cursor()
-                    cursor.execute("PRAGMA table_info(materials)")
-                    columns = cursor.fetchall()
-                    st.write("**PRAGMA table_info(materials):**")
-                    for col in columns:
-                        st.write(f"- {col[1]} ({col[2]})")
-                    conn.close()
-                except Exception as inner_e:
-                    st.exception(inner_e)
-            st.stop()  # 以降のUIを止める（崩壊させない）
-        raise  # その他のエラーは再発生
+    from services.materials_service import get_all_materials as _get_all_materials
+    bump_db_call_counter("list")
+    return _get_all_materials(include_unpublished=include_unpublished, include_deleted=include_deleted)
 
 def get_material_by_id(material_id: int):
     """
-    IDで材料を取得（Eager Loadでリレーションも先読み・全リレーション網羅）
-    スキーマドリフト検知: images.kind が存在しない場合は安全モードで動作
-    """
-    # スキーマドリフト検知（軽量、キャッシュ済み）
-    try:
-        from database import get_schema_drift_status
-        from utils.settings import get_database_url
-        schema_status = get_schema_drift_status(get_database_url())
-        
-        # スキーマチェックが成功した場合のみ images_ok を使用
-        if schema_status.get("ok", False):
-            images_ok = schema_status.get("images_ok", False)
-            # 後方互換: images_kind_exists も確認（images_ok が無い場合のフォールバック）
-            if "images_ok" not in schema_status:
-                images_ok = schema_status.get("images_kind_exists", False)
-        else:
-            # スキーマチェック失敗時は安全側に倒す
-            images_ok = False
-    except Exception:
-        # スキーマチェック失敗時は安全側に倒す
-        images_ok = False
+    IDで材料を取得（サービス層経由）
     
-    # Phase 2: 統一APIを使用（読み取り専用）
-    from utils.db import get_session
-    with get_session() as db:
-        # 安全モード: images の必須列が欠けている場合は images をロードしない
-        if images_ok:
-            # 通常モード: 全リレーションを先読み
-            stmt = (
-                select(Material)
-                .options(
-                    selectinload(Material.properties),
-                    selectinload(Material.images),
-                    selectinload(Material.metadata_items),
-                    selectinload(Material.reference_urls),
-                    selectinload(Material.use_examples),
-                    selectinload(Material.process_example_images),  # 加工例画像
-                )
-                .filter(Material.id == material_id)
-            )
-        else:
-            # 安全モード: images をロードしない（スキーマ不整合を回避）
-            from sqlalchemy.orm import noload
-            stmt = (
-                select(Material)
-                .options(
-                    selectinload(Material.properties),
-                    noload(Material.images),  # images をロードしない
-                    selectinload(Material.metadata_items),
-                    selectinload(Material.reference_urls),
-                    selectinload(Material.use_examples),
-                    selectinload(Material.process_example_images),
-                )
-                .filter(Material.id == material_id)
-            )
-        material = db.execute(stmt).scalar_one_or_none()
-        return material
+    Args:
+        material_id: 材料ID
+    
+    Returns:
+        Materialオブジェクト（見つからない場合はNone）
+    
+    Note:
+        - サービス層経由でDBアクセス
+    """
+    from services.materials_service import get_material_by_id as _get_material_by_id
+    bump_db_call_counter("detail")
+    return _get_material_by_id(material_id)
 
 def create_material(name, category, description, properties_data):
     """材料を作成"""
@@ -1633,6 +1411,74 @@ def get_assets_mode_stats():
         return mode, url_count, total_count
 
 
+def bump_db_call_counter(kind: str):
+    """
+    DB呼び出しカウンタをインクリメント（DEBUG_ENV=1時のみ）
+    
+    Args:
+        kind: DB呼び出し種別（count/page/list/detail/statistics）
+    """
+    if os.getenv("DEBUG_ENV", "0") == "1":
+        if "_db_call_counts" not in st.session_state:
+            st.session_state["_db_call_counts"] = {
+                "count": 0,
+                "page": 0,
+                "list": 0,
+                "detail": 0,
+                "statistics": 0,
+            }
+        if kind in st.session_state["_db_call_counts"]:
+            st.session_state["_db_call_counts"][kind] += 1
+
+
+def handle_db_unavailable(context: str, retry_fn=None, operation: str = None):
+    """
+    DBUnavailableError時の共通処理（ウォームアップUX + 統一メッセージ）
+    
+    Args:
+        context: エラー発生コンテキスト（ログ用、「どの画面で」「どの操作で」）
+        retry_fn: 再試行する関数（Noneの場合は自動リトライなし）
+        operation: 操作名（例: "材料一覧取得"、"統計情報取得"）
+    
+    Note:
+        - 最大2回の軽量リトライを試行
+        - それでもダメなら統一メッセージ + st.stop()
+        - 無限リトライ禁止（CU節約のため）
+        - DEBUG_ENV=1では例外種別もloggerに出力（UIには出しすぎない）
+    """
+    from utils.db import DBUnavailableError
+    from services.db_retry import db_retry
+    import traceback
+    
+    # DEBUG_ENV=1では例外種別もloggerに出力
+    if os.getenv("DEBUG_ENV", "0") == "1":
+        import sys
+        exc_type, exc_value, exc_tb = sys.exc_info()
+        if exc_type:
+            logger.warning(f"[DB_UNAVAILABLE] context={context} operation={operation} exception={exc_type.__name__}: {exc_value}")
+    
+    # ウォームアップ表示
+    st.info("🔄 データベースを起こしています...")
+    
+    # 自動リトライ（最大2回）
+    if retry_fn is not None:
+        try:
+            result = db_retry(retry_fn, operation_name=f"{context} (自動リトライ)")
+            # リトライ成功時はrerunして続行
+            st.success("✅ データベース接続が復帰しました")
+            st.rerun()
+            return
+        except DBUnavailableError:
+            # リトライ失敗時は統一メッセージへ
+            pass
+    
+    # 統一メッセージ + 再試行ボタン
+    st.warning("⚠️ データベースがスリープ中の可能性があります。数秒後に再試行してください。")
+    if st.button("🔄 再試行", key=f"retry_{context}"):
+        st.rerun()
+    st.stop()
+
+
 def render_debug_sidebar_early():
     """
     Debugを先に描画（UIが出る前に死ぬ問題を回避）
@@ -1653,6 +1499,19 @@ def render_debug_sidebar_early():
             st.sidebar.warning("Sidebar: build/time debug failed")
             with st.sidebar.expander("詳細", expanded=False):
                 st.sidebar.exception(e)
+        
+        # DB呼び出し回数表示（DEBUG_ENV=1時のみ）
+        if os.getenv("DEBUG_ENV", "0") == "1":
+            if "_db_call_counts" in st.session_state:
+                counts = st.session_state["_db_call_counts"]
+                total = sum(counts.values())
+                if total > 0:
+                    st.sidebar.markdown("---")
+                    st.sidebar.markdown("### 📊 DB呼び出し回数")
+                    st.sidebar.write(f"**合計:** {total} 回")
+                    for kind, count in counts.items():
+                        if count > 0:
+                            st.sidebar.write(f"- {kind}: {count} 回")
         
         # デバッグ情報（DEBUG=1のときのみ表示）
         if os.getenv("DEBUG", "0") == "1":
@@ -1773,6 +1632,7 @@ def render_debug_sidebar_early():
                             material_count = get_material_count_cached(db_url, include_unpublished=False, include_deleted=False)
                             st.write(f"- **materials count:** {material_count}")
                             # 詳細な素材ごとの探索結果はDEBUG=1の時のみ（重い処理のため）
+                            bump_db_call_counter("list")
                             materials = get_all_materials()
                             if materials:
                                 st.write("**素材ごとの探索結果（先頭30件）:**")
@@ -2331,10 +2191,27 @@ def main():
                 key="admin_include_unpublished"
             )
             st.session_state["include_unpublished"] = include_unpublished
+            
+            # DB起床ボタン（管理者のみ）
+            st.markdown("---")
+            st.markdown("### 🔌 DB管理")
+            if st.button("🔌 DBを起こす", key="wake_db_btn"):
+                from services.db_health import ping_db
+                from utils.db import DBUnavailableError
+                try:
+                    ping_db()
+                    st.success("✅ DB接続成功")
+                except DBUnavailableError:
+                    handle_db_unavailable("DB起床", retry_fn=ping_db, operation="DB起床")
         else:
             include_unpublished = False
         
-        # 統計情報（画面左下に小さく表示）- 軽量クエリで取得
+        # 統計情報（画面左下に小さく表示）- 遅延取得（ボタン押下時のみ）
+        # 初期表示ではDBアクセスしない（起床頻度を下げる）
+        stats_key = "show_statistics"
+        if stats_key not in st.session_state:
+            st.session_state[stats_key] = False
+        
         # 変数を初期化（エラー回避）
         materials = []
         categories = 0
@@ -2344,51 +2221,70 @@ def main():
         
         include_deleted = st.session_state.get("include_deleted", False) if is_admin else False
         
-        # 統計情報を取得（try/exceptで囲み、失敗時はデフォルト値のまま進む）
-        try:
-            from utils.settings import get_database_url
-            db_url = get_database_url()
-            material_count = get_material_count_cached(db_url, include_unpublished=include_unpublished, include_deleted=include_deleted)
-            
-            # materialsリストを取得（カテゴリ数計算用）
+        # 統計情報表示ボタン（サイドバーに配置）
+        if not st.session_state[stats_key]:
+            if st.sidebar.button("📊 統計情報を表示", key="show_stats_btn"):
+                st.session_state[stats_key] = True
+                st.rerun()
+        else:
+            # 統計情報を取得（try/exceptで囲み、失敗時はデフォルト値のまま進む）
             try:
-                materials = get_all_materials(include_unpublished=include_unpublished, include_deleted=include_deleted)
-                # カテゴリ数を計算
-                if materials:
-                    categories = len(set([m.category for m in materials if m.category]))
+                from utils.settings import get_database_url
+                from services.materials_service import get_statistics
+                from services.db_retry import db_retry
+                from utils.db import DBUnavailableError
+                
+                db_url = get_database_url()
+                
+                # 軽量リトライ付きで統計情報を取得（管理者限定）
+                from utils.settings import is_admin_mode
+                is_admin = is_admin_mode()
+                if not is_admin:
+                    # 一般ユーザーには統計を表示しない（DB呼び出しも発生しない）
+                    material_count = 0
+                    categories = 0
+                    total_properties = 0
+                    avg_properties = 0.0
+                else:
+                    try:
+                        bump_db_call_counter("statistics")
+                        stats = db_retry(
+                            lambda: get_statistics(
+                                include_unpublished=include_unpublished,
+                                include_deleted=include_deleted
+                            ),
+                            operation_name="統計情報取得"
+                        )
+                        material_count = stats["material_count"]
+                        categories = stats["categories"]
+                        total_properties = stats["total_properties"]
+                        avg_properties = stats["avg_properties"]
+                    except DBUnavailableError:
+                        handle_db_unavailable(
+                            "統計情報取得",
+                            retry_fn=lambda: get_statistics(
+                                include_unpublished=include_unpublished,
+                                include_deleted=include_deleted
+                            )
+                        )
             except Exception as e:
-                # materials取得失敗時はmaterial_countのみ使用
-                materials = []
-                categories = 0
+                # 統計情報取得失敗時はデフォルト値のまま進む（PANICさせない）
+                material_count = 0
                 if is_debug_flag():
-                    st.caption(f"materials取得エラー（統計表示は続行）: {e}")
-            
-            # SQLで直接カウント（DetachedInstanceError回避）
-            # Phase 2: 統一APIを使用（読み取り専用）
-            from utils.db import get_session
-            with get_session() as db:
-                total_properties = db.execute(select(func.count(Property.id))).scalar() or 0
-            
-            # 平均物性数を計算（使用している場合）
-            if materials and len(materials) > 0:
-                avg_properties = total_properties / len(materials)
-        except Exception as e:
-            # 統計情報取得失敗時はデフォルト値のまま進む（PANICさせない）
-            material_count = 0
-            if is_debug_flag():
-                st.caption(f"統計情報取得エラー（表示は続行）: {e}")
+                    st.caption(f"統計情報取得エラー（表示は続行）: {e}")
         
         # 材料数はmaterial_countを使用（materialsが空でも表示できる）
         material_display_count = material_count if material_count > 0 else (len(materials) if materials else 0)
         
-        # 左下に小さく配置
-        st.markdown("""
-        <div class="stats-fixed">
-            <div>材料数: <strong>{}</strong></div>
-            <div>カテゴリ: <strong>{}</strong></div>
-            <div>物性データ: <strong>{}</strong></div>
-        </div>
-        """.format(material_display_count, categories, total_properties), unsafe_allow_html=True)
+        # 左下に小さく配置（統計情報が取得済みの場合のみ表示）
+        if st.session_state[stats_key]:
+            st.markdown("""
+            <div class="stats-fixed">
+                <div>材料数: <strong>{}</strong></div>
+                <div>カテゴリ: <strong>{}</strong></div>
+                <div>物性データ: <strong>{}</strong></div>
+            </div>
+            """.format(material_display_count, categories, total_properties), unsafe_allow_html=True)
         
         st.markdown("""
         <div style="text-align: center; padding: 20px 0; color: #666;">
@@ -2405,9 +2301,16 @@ def main():
     debug_enabled = os.getenv("DEBUG", "0") == "1"
     if debug_images and debug_enabled:
         from utils.image_diagnostics import show_image_diagnostics
-        materials = get_all_materials()
-        show_image_diagnostics(materials, Path.cwd())
-        return  # 診断モード時は他のページを表示しない
+        from utils.db import DBUnavailableError
+        try:
+            materials = get_all_materials()
+            show_image_diagnostics(materials, Path.cwd())
+            return  # 診断モード時は他のページを表示しない
+        except DBUnavailableError:
+            handle_db_unavailable(
+                "画像診断",
+                retry_fn=lambda: get_all_materials()
+            )
     
     # 管理者表示フラグを取得
     include_unpublished = st.session_state.get("include_unpublished", False)
@@ -2752,21 +2655,56 @@ def show_home():
     # 管理者表示フラグを取得
     include_unpublished = st.session_state.get("include_unpublished", False)
     
-    # ページングで材料を取得（軽量クエリ、limit=50）
-    from utils.settings import get_database_url
-    db_url = get_database_url()
+    # 初期表示ではDBアクセスしない（起床頻度を下げる）
+    # ユーザーが明示的に「一覧を表示」ボタンを押した時だけ取得
+    show_materials_key = "show_materials_on_home"
+    if show_materials_key not in st.session_state:
+        st.session_state[show_materials_key] = False
     
-    # DBアクセス計測
-    t1 = time.perf_counter() if t0 is not None else None
-    materials_dicts = fetch_materials_page_cached(
-        db_url=db_url,
-        include_unpublished=include_unpublished,
-        include_deleted=False,
-        limit=50,
-        offset=0
-    )
-    if t1 is not None:
-        print(f"[PERF] show_home() fetch_materials_page_cached: {time.perf_counter() - t1:.3f}s")
+    # 一覧表示ボタン
+    st.markdown("---")
+    col_btn1, col_btn2 = st.columns([1, 3])
+    with col_btn1:
+        if st.button("📋 材料一覧を表示", type="primary", key="show_materials_btn"):
+            st.session_state[show_materials_key] = True
+            st.rerun()
+    
+    # 一覧表示が有効な場合のみDBアクセス
+    materials_dicts = []
+    if st.session_state[show_materials_key]:
+        from utils.settings import get_database_url
+        from utils.db import DBUnavailableError
+        from services.db_retry import db_retry
+        
+        db_url = get_database_url()
+        
+        # DBアクセス計測
+        t1 = time.perf_counter() if t0 is not None else None
+        try:
+            # 軽量リトライ付きで取得
+            materials_dicts = db_retry(
+                lambda: fetch_materials_page_cached(
+                    db_url=db_url,
+                    include_unpublished=include_unpublished,
+                    include_deleted=False,
+                    limit=50,
+                    offset=0
+                ),
+                operation_name="材料一覧取得"
+            )
+        except DBUnavailableError as e:
+            handle_db_unavailable(
+                "材料一覧取得",
+                retry_fn=lambda: fetch_materials_page_cached(
+                    db_url=db_url,
+                    include_unpublished=include_unpublished,
+                    include_deleted=False,
+                    limit=50,
+                    offset=0
+                )
+            )
+        if t1 is not None:
+            print(f"[PERF] show_home() fetch_materials_page_cached: {time.perf_counter() - t1:.3f}s")
     
     # dict から Material 風のオブジェクトを作成（後方互換のため）
     class MaterialProxy:
@@ -2786,15 +2724,30 @@ def show_home():
             self.images = []  # 一覧ではロードしない
             self.primary_image_url = d.get("primary_image_url")  # imagesテーブルから取得したpublic_url
     
-    materials = [MaterialProxy(d) for d in materials_dicts]
+    # 一覧表示が有効な場合のみ表示
+    materials = []
+    if st.session_state[show_materials_key]:
+        materials = [MaterialProxy(d) for d in materials_dicts]
+        
+        if not materials:
+            st.info("📭 材料が登録されていません。")
+        else:
+            # 材料カード表示（既存のコード）
+            st.markdown('<h3 class="section-title">材料一覧</h3>', unsafe_allow_html=True)
+            
+            # 画像表示トグル（Network transfer削減のため）
+            if "show_images_in_list" not in st.session_state:
+                st.session_state.show_images_in_list = False
+            show_images = st.toggle("🖼️ 画像を表示", value=st.session_state.show_images_in_list, key="toggle_images_home")
+            st.session_state.show_images_in_list = show_images
     
     # ヒーローセクション
     st.markdown("""
     <div class="hero-section">
         <h2 style="color: #2c3e50; margin-bottom: 20px; font-size: 2.5rem; font-weight: 800;">✨ ようこそ！</h2>
         <p style="font-size: 1.2rem; color: #555; line-height: 1.8; max-width: 800px; margin: 0 auto; font-weight: 500;">
-            素材カード形式でマテリアル情報を管理する、美しく使いやすいデータベースシステムです。<br>
-            デザイナーやエンジニアが、材料の可能性を探索するためのツールです。
+            素材を、カードのように集めて、眺めて、比べ、このデータベースは、材料について理解するための万華鏡のような道具です。<br>
+            歴史や加工法などこれまで分断されてきた材料の活用法を記録することで意外な発見を共有します。
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -2888,7 +2841,10 @@ def show_home():
                 with col_img:
                     # サムネ画像を表示（高速化: imagesテーブルのpublic_urlを直接使用、base64化やローカル探索をしない）
                     # primaryのみを使用（space/productは用途タブ専用）
-                    image_url = get_material_image_url(material)
+                    # 画像表示トグルがOFFの場合は画像URL取得をスキップ（Network transfer削減）
+                    image_url = None
+                    if st.session_state.get("show_images_in_list", False):
+                        image_url = get_material_image_url(material)
                     
                     # サムネサイズで表示（プレースホルダー付き）
                     if image_url and image_url.strip() and image_url.startswith(('http://', 'https://')):
@@ -2979,15 +2935,47 @@ def show_home():
                 <p style="color: #666; font-size: 13px; margin: 0; line-height: 1.6;">{desc}</p>
             </div>
             """, unsafe_allow_html=True)
+    
+    # バグ報告フォーム（Googleフォーム埋め込み）
+    st.markdown("---")
+    st.markdown('<h3 class="section-title">バグ報告・フィードバック</h3>', unsafe_allow_html=True)
+    st.markdown("不具合の報告やご意見・ご要望をお寄せください。")
+    
+    import streamlit.components.v1 as components
+    components.iframe(
+        src="https://docs.google.com/forms/d/e/1FAIpQLSeXFOtD4HJSc6Cu2KF6kd1TXnUKRiNXrWO9V_gFhi5UfiAxGQ/viewform?embedded=true",
+        height=520,
+        scrolling=True
+    )
 
 
 def clear_material_cache():
-    """材料関連のキャッシュをクリア（承認/編集/削除後に呼ぶ）"""
+    """
+    材料関連のキャッシュをクリア（保存/承認/編集/削除後に呼ぶ）
+    
+    クリア対象:
+    - get_all_materials: 全材料一覧
+    - fetch_materials_page_cached: ページング一覧
+    - get_material_count_cached: 材料件数
+    
+    理由: 反映遅延による再読み込み連打（=DB起床増加）を防ぐ
+    """
     try:
-        st.cache_data.clear()
-        logger.info("[CACHE] Material cache cleared")
+        # 関数単位でキャッシュをクリア（全キャッシュクリアを避ける）
+        get_all_materials.clear()
+        fetch_materials_page_cached.clear()
+        get_material_count_cached.clear()
+        get_material_image_url_cached.clear()
+        logger.info("[CACHE] Material cache cleared (get_all_materials, fetch_materials_page_cached, get_material_count_cached, get_material_image_url_cached)")
     except Exception as e:
         logger.warning(f"[CACHE] Failed to clear cache: {e}")
+    
+    # サービス層のキャッシュもクリア（サービス層が独自にキャッシュを持っている場合）
+    try:
+        # サービス層はキャッシュを持たないが、念のため
+        pass
+    except Exception:
+        pass
 
 
 def show_materials_list(include_unpublished: bool = False, include_deleted: bool = False):
@@ -3038,7 +3026,14 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
         # 詳細表示モードのチェック
         if st.session_state.selected_material_id:
             material_id = st.session_state.selected_material_id
-            material = get_material_by_id(material_id)
+            from utils.db import DBUnavailableError
+            try:
+                material = get_material_by_id(material_id)
+            except DBUnavailableError:
+                handle_db_unavailable(
+                    "材料詳細取得",
+                    retry_fn=lambda: get_material_by_id(material_id)
+                )
             
             if material:
                 # 戻るボタン
@@ -3059,33 +3054,41 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                     images = list(material.images)
                 else:
                     # データベースから直接取得（kind/image_typeの両方に対応）
-                    with get_session() as db_images:
-                        # kind列またはimage_type列でspace/productを検索
-                        try:
-                            images = db_images.query(Image).filter(
-                                Image.material_id == material.id,
-                                or_(
-                                    Image.kind.in_(['space', 'product']),
-                                    Image.image_type.in_(['space', 'product'])
-                                )
-                            ).all()
-                        except Exception:
-                            # image_type列が存在しない場合はkind列のみで検索
+                    from utils.db import DBUnavailableError
+                    try:
+                        with get_session() as db_images:
+                            # kind列またはimage_type列でspace/productを検索
                             try:
                                 images = db_images.query(Image).filter(
                                     Image.material_id == material.id,
-                                    Image.kind.in_(['space', 'product'])
+                                    or_(
+                                        Image.kind.in_(['space', 'product']),
+                                        Image.image_type.in_(['space', 'product'])
+                                    )
                                 ).all()
+                            except DBUnavailableError:
+                                handle_db_unavailable("画像取得（space/product）")
                             except Exception:
-                                # どちらも失敗した場合は全画像を取得して後でフィルタ
-                                all_images = db_images.query(Image).filter(
-                                    Image.material_id == material.id
-                                ).all()
-                                images = []
-                                for img in all_images:
-                                    k = getattr(img, "kind", None) or getattr(img, "image_type", None)
-                                    if k in ('space', 'product'):
-                                        images.append(img)
+                                # image_type列が存在しない場合はkind列のみで検索
+                                try:
+                                    images = db_images.query(Image).filter(
+                                        Image.material_id == material.id,
+                                        Image.kind.in_(['space', 'product'])
+                                    ).all()
+                                except DBUnavailableError:
+                                    handle_db_unavailable("画像取得（kind列のみ）")
+                                except Exception:
+                                    # どちらも失敗した場合は全画像を取得して後でフィルタ
+                                    all_images = db_images.query(Image).filter(
+                                        Image.material_id == material.id
+                                    ).all()
+                                    images = []
+                                    for img in all_images:
+                                        k = getattr(img, "kind", None) or getattr(img, "image_type", None)
+                                        if k in ('space', 'product'):
+                                            images.append(img)
+                    except DBUnavailableError:
+                        handle_db_unavailable("画像取得")
                 
                 # images を {kind: public_url} にする（kind名やurl列名の揺れを吸収）
                 images_by_kind: dict[str, str] = {}
@@ -3312,6 +3315,12 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
         
         st.markdown(f"### **{len(filtered_materials)}件**の材料が見つかりました")
         
+        # 画像表示トグル（Network transfer削減のため）
+        if "show_images_in_list" not in st.session_state:
+            st.session_state.show_images_in_list = False
+        show_images = st.toggle("🖼️ 画像を表示", value=st.session_state.show_images_in_list, key="toggle_images_list")
+        st.session_state.show_images_in_list = show_images
+        
         # 材料カード表示（グリッドレイアウト）
         cols = st.columns(3)
         for idx, material in enumerate(filtered_materials):
@@ -3331,7 +3340,10 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                         
                         # 素材画像を取得（高速化: imagesテーブルのpublic_urlを直接使用、base64化やローカル探索をしない）
                         # primaryのみを使用（space/productは用途タブ専用）
-                        image_url = get_material_image_url(material)
+                        # 画像表示トグルがOFFの場合は画像URL取得をスキップ（Network transfer削減）
+                        image_url = None
+                        if st.session_state.get("show_images_in_list", False):
+                            image_url = get_material_image_url(material)
                         
                         # 画像HTML（public_urlがある場合は直接使用、なければプレースホルダー）
                         if image_url and image_url.strip() and image_url.startswith(('http://', 'https://')):
@@ -3568,15 +3580,32 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
             st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
 
 def show_dashboard():
-    """ダッシュボードページ"""
+    """ダッシュボードページ（管理者限定、全件取得）"""
     is_debug = os.getenv("DEBUG", "0") == "1"
     st.markdown(render_site_header(debug=is_debug), unsafe_allow_html=True)
     st.markdown('<h2 class="section-title">ダッシュボード</h2>', unsafe_allow_html=True)
     
+    # 管理者限定（重い操作のため）
+    from utils.settings import is_admin_mode
+    is_admin = is_admin_mode()
+    if not is_admin:
+        st.warning("⚠️ ダッシュボードは管理者のみ利用可能です。")
+        return
+    
     # 管理者表示フラグを取得
     include_unpublished = st.session_state.get("include_unpublished", False)
     
-    materials = get_all_materials(include_unpublished=include_unpublished)
+    from utils.db import DBUnavailableError
+    try:
+        # ダッシュボードは全件取得が必要（統計・グラフ表示のため）
+        # MAX_LIST_LIMIT=200がサービス層で適用される
+        materials = get_all_materials(include_unpublished=include_unpublished)
+    except DBUnavailableError:
+        handle_db_unavailable(
+            "ダッシュボード（管理者）",
+            retry_fn=lambda: get_all_materials(include_unpublished=include_unpublished),
+            operation="ダッシュボード全件取得"
+        )
     
     if not materials:
         st.info("ダッシュボードを表示するには、まず材料を登録してください。")
@@ -3675,12 +3704,30 @@ def show_search():
         }
         st.code(f"Page state: {page_state}")
     
-    # 自然言語検索バー（上）
-    search_query = st.text_input(
-        "🔍 自然言語検索", 
-        placeholder="例: 透明 屋外 工房（自然言語で検索できます）", 
-        key="search_input"
-    )
+    # 自然言語検索バー（上）- 確定ボタン化（DB起床削減のため）
+    col_search, col_btn = st.columns([4, 1])
+    with col_search:
+        search_query_input = st.text_input(
+            "🔍 自然言語検索", 
+            placeholder="例: 透明 屋外 工房（自然言語で検索できます）", 
+            key="search_input_raw"
+        )
+    with col_btn:
+        st.write("")  # スペーサー
+        st.write("")  # スペーサー
+        search_button_clicked = st.button("🔍 検索", type="primary", key="search_execute_btn")
+    
+    # 検索実行フラグを管理（確定ボタン押下時のみ検索実行）
+    if "search_executed" not in st.session_state:
+        st.session_state.search_executed = False
+    
+    if search_button_clicked:
+        st.session_state.search_executed = True
+        st.session_state.search_query_executed = search_query_input
+        st.rerun()
+    
+    # 実行された検索クエリを使用（入力中のクエリは無視）
+    search_query = st.session_state.get("search_query_executed", "") if st.session_state.get("search_executed", False) else ""
     
     st.markdown("---")
     
@@ -3794,8 +3841,18 @@ def show_search():
         }
         st.code(f"DEBUG: Before search\n  query: {search_query_short}\n  filters: {filters_summary}")
     
-    # 検索実行（クエリまたはフィルタがある場合）
-    if (search_query and search_query.strip()) or filters:
+    # 検索実行（確定ボタン押下時のみ、クエリまたはフィルタがある場合）
+    # フィルタ変更時も検索を実行（selectbox/multiselectは確定操作）
+    filters_changed = any([
+        selected_uses,
+        selected_transparency != "すべて",
+        selected_weather != "すべて",
+        selected_water != "すべて",
+        selected_equipment != "すべて",
+        selected_cost != "すべて"
+    ])
+    
+    if (st.session_state.get("search_executed", False) and (search_query and search_query.strip())) or filters_changed:
         from utils.db import get_session
         
         # ハイブリッド検索を無効化できるフラグ（ENABLE_VECTOR_SEARCH=0で無効化）
