@@ -32,6 +32,11 @@ except Exception:
         return False
 
 
+class DBUnavailableError(Exception):
+    """DBがスリープ中/停止中などで接続できないときに投げる共通例外"""
+    pass
+
+
 def _create_engine_impl(db_url: str):
     """
     engine を作成（内部実装、キャッシュされない）
@@ -143,6 +148,7 @@ else:
 from contextlib import contextmanager
 from typing import Generator
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError, DatabaseError
 
 
 @contextmanager
@@ -160,8 +166,11 @@ def get_session() -> Generator[Session, None, None]:
         - 読み取り専用のクエリに使用
         - 例外時も自動rollbackしない（明示的に制御するため）
     """
-    session_maker = get_sessionmaker()
-    session = session_maker()
+    try:
+        session_maker = get_sessionmaker()
+        session = session_maker()
+    except (OperationalError, DatabaseError) as e:
+        raise DBUnavailableError(f"データベース接続エラー: {e}") from e
     try:
         yield session
     finally:
@@ -183,14 +192,23 @@ def session_scope() -> Generator[Session, None, None]:
         - 例外時は自動rollback
         - 明示的なcommit/rollbackは不要
     """
-    session_maker = get_sessionmaker()
-    session = session_maker()
+    try:
+        session_maker = get_sessionmaker()
+        session = session_maker()
+    except (OperationalError, DatabaseError) as e:
+        raise DBUnavailableError(f"データベース接続エラー: {e}") from e
     try:
         yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
+        try:
+            session.commit()
+        except (OperationalError, DatabaseError) as e:
+            raise DBUnavailableError(f"データベース接続エラー: {e}") from e
+    except (OperationalError, DatabaseError) as e:
+        try:
+            session.rollback()
+        except Exception:
+            pass  # rollback失敗時は無視（接続エラーの可能性が高い）
+        raise DBUnavailableError(f"データベース接続エラー: {e}") from e
     finally:
         session.close()
 
