@@ -115,6 +115,196 @@ DEPLOY_VERSION = "2026-01-15T15:05:00"
 
 # エントリーポイント関数（本文の最初に必ず出るマーカー、main呼び出しの強制、例外の可視化）
 import traceback
+import sys
+
+def render_startup_import_error(error_type, error_description, hints, debug_payload=None):
+    """
+    起動時の import エラーを表示する（統一フォーマット）
+    
+    Args:
+        error_type: エラー種別（例: "ModuleNotFoundError", "ImportError", "想定外の例外"）
+        error_description: エラーの説明文
+        hints: 考えられる原因のリスト（文字列のリスト）
+        debug_payload: DEBUG_ENV=1 のときに表示する詳細情報（辞書またはNone）
+    """
+    st.error("❌ **アプリケーション起動エラー**")
+    st.error("必須モジュールの import に失敗しました。")
+    st.error("")
+    st.error("**これは運用側で修正が必要な問題です。**")
+    st.error("")
+    st.error(f"**エラー種別:** {error_type}")
+    if error_description:
+        st.error(error_description)
+    st.error("")
+    
+    if hints:
+        st.error("考えられる原因:")
+        for hint in hints:
+            st.error(f"- {hint}")
+        st.error("")
+    
+    # DEBUG_ENV=1 のときだけ詳細情報を表示（診断用、1つの code ブロックにまとめてコピペしやすくする）
+    if os.getenv("DEBUG_ENV") == "1" and debug_payload:
+        st.error("**DEBUG 情報 (DEBUG_ENV=1):**")
+        st.code(debug_payload.strip(), language="text")
+    
+    # 必ず停止する（DEBUG_ENV に関わらず、後段での例外連鎖を防ぐ）
+    st.stop()
+
+# 必須モジュールの import 保険チェック（本番環境での import エラーを早期検出）
+# services.materials_service と utils.db.DBUnavailableError の両方をチェック
+# どちらかが失敗したら、UIにエラーを表示して必ず st.stop() で停止する
+
+# 1. services.materials_service の import チェック
+try:
+    import services.materials_service
+except ModuleNotFoundError as e:
+    debug_payload = None
+    if os.getenv("DEBUG_ENV") == "1":
+        debug_payload = f"""
+エラー詳細: {e}
+例外タイプ: {type(e).__name__}
+__file__: {__file__}
+現在の作業ディレクトリ: {os.getcwd()}
+sys.path:
+{chr(10).join(f'  [{i}] {p}' for i, p in enumerate(sys.path))}
+
+Traceback:
+{traceback.format_exc()}
+        """.strip()
+    
+    render_startup_import_error(
+        error_type="ModuleNotFoundError",
+        error_description="`services` パッケージやモジュールが見つかりません。",
+        hints=[
+            "`services/` がデプロイに含まれていない",
+            "リポジトリルートから `streamlit run app.py` が実行されていない",
+            "作業ディレクトリが正しく設定されていない",
+            "Python の `sys.path` にリポジトリルートが含まれていない"
+        ],
+        debug_payload=debug_payload
+    )
+except ImportError as e:
+    debug_payload = None
+    if os.getenv("DEBUG_ENV") == "1":
+        debug_payload = f"""
+エラー詳細: {e}
+例外タイプ: {type(e).__name__}
+__file__: {__file__}
+現在の作業ディレクトリ: {os.getcwd()}
+sys.path:
+{chr(10).join(f'  [{i}] {p}' for i, p in enumerate(sys.path))}
+
+Traceback:
+{traceback.format_exc()}
+        """.strip()
+    
+    render_startup_import_error(
+        error_type="ImportError",
+        error_description="`services` モジュールは見つかりましたが、import に失敗しました。",
+        hints=[
+            "循環 import が発生している",
+            "`services.materials_service` 内で依存モジュールの import に失敗している"
+        ],
+        debug_payload=debug_payload
+    )
+except Exception as e:
+    debug_payload = None
+    if os.getenv("DEBUG_ENV") == "1":
+        debug_payload = f"""
+エラー詳細: {e}
+例外タイプ: {type(e).__name__}
+__file__: {__file__}
+現在の作業ディレクトリ: {os.getcwd()}
+sys.path:
+{chr(10).join(f'  [{i}] {p}' for i, p in enumerate(sys.path))}
+
+Traceback:
+{traceback.format_exc()}
+        """.strip()
+    
+    render_startup_import_error(
+        error_type="想定外の例外",
+        error_description="",
+        hints=[],
+        debug_payload=debug_payload
+    )
+
+# 2. utils.db.DBUnavailableError の import チェック
+try:
+    from utils.db import DBUnavailableError
+except ModuleNotFoundError as e:
+    debug_payload = None
+    if os.getenv("DEBUG_ENV") == "1":
+        debug_payload = f"""
+エラー詳細: {e}
+例外タイプ: {type(e).__name__}
+__file__: {__file__}
+現在の作業ディレクトリ: {os.getcwd()}
+sys.path:
+{chr(10).join(f'  [{i}] {p}' for i, p in enumerate(sys.path))}
+
+Traceback:
+{traceback.format_exc()}
+        """.strip()
+    
+    render_startup_import_error(
+        error_type="ModuleNotFoundError",
+        error_description="`utils.db` モジュールが見つかりません。",
+        hints=[
+            "`utils/` がデプロイに含まれていない",
+            "リポジトリルートから `streamlit run app.py` が実行されていない",
+            "作業ディレクトリが正しく設定されていない",
+            "Python の `sys.path` にリポジトリルートが含まれていない"
+        ],
+        debug_payload=debug_payload
+    )
+except ImportError as e:
+    debug_payload = None
+    if os.getenv("DEBUG_ENV") == "1":
+        debug_payload = f"""
+エラー詳細: {e}
+例外タイプ: {type(e).__name__}
+__file__: {__file__}
+現在の作業ディレクトリ: {os.getcwd()}
+sys.path:
+{chr(10).join(f'  [{i}] {p}' for i, p in enumerate(sys.path))}
+
+Traceback:
+{traceback.format_exc()}
+        """.strip()
+    
+    render_startup_import_error(
+        error_type="ImportError",
+        error_description="`utils.db` モジュールは見つかりましたが、`DBUnavailableError` が import できません。",
+        hints=[
+            "`utils.db` 内で `DBUnavailableError` が定義されていない",
+            "`utils.db` 内で循環 import が発生している",
+            "`utils.db` 内で依存モジュールの import に失敗している"
+        ],
+        debug_payload=debug_payload
+    )
+except Exception as e:
+    debug_payload = None
+    if os.getenv("DEBUG_ENV") == "1":
+        debug_payload = f"""
+エラー詳細: {e}
+例外タイプ: {type(e).__name__}
+__file__: {__file__}
+現在の作業ディレクトリ: {os.getcwd()}
+sys.path:
+{chr(10).join(f'  [{i}] {p}' for i, p in enumerate(sys.path))}
+
+Traceback:
+{traceback.format_exc()}
+        """.strip()
+    
+    render_startup_import_error(
+        error_type="想定外の例外",
+        error_description="",
+        hints=[],
+        debug_payload=debug_payload
+    )
 
 def _panic_screen(where: str, e: Exception):
     """例外を可視化するパニック画面"""
@@ -154,10 +344,15 @@ def run_app_entrypoint():
         # st.stop()は呼ばない（本文を表示するため）
 
     # 4) ここから本来のUI（main）を"必ず"呼ぶ
+    # 最後の砦: DBUnavailableError の捕捉漏れを防ぐ（落ちない設計の維持）
+    from utils.db import DBUnavailableError
     try:
         if "main" not in globals():
             raise RuntimeError("main() function is not defined in app.py")
         main()
+    except DBUnavailableError as e:
+        # 既存の個別捕捉（9箇所）で捕捉できなかった場合の統一UX
+        handle_db_unavailable(context="main-top", operation="main()実行")
     except Exception as e:
         _panic_screen("main()", e)
         # st.stop()は呼ばない（本文を表示するため）
@@ -208,11 +403,12 @@ def safe_url(url: str) -> str:
 
 
 @st.cache_data(ttl=600)  # 画像URL: 600秒（10分）TTL（Network transfer削減のため）
-def get_material_image_url_cached(material_id: int, updated_at_str: str = None) -> Optional[str]:
+def get_material_image_url_cached(db_url: str, material_id: int, updated_at_str: str = None) -> Optional[str]:
     """
     材料の画像URLを取得（キャッシュ付き、primaryのみ）
     
     Args:
+        db_url: データベースURL（キャッシュキー用、DB切替時にキャッシュが混ざらないようにする）
         material_id: 材料ID
         updated_at_str: 更新日時文字列（キャッシュキー用、Noneの場合は無視）
     
@@ -222,6 +418,7 @@ def get_material_image_url_cached(material_id: int, updated_at_str: str = None) 
     Note:
         - 画像URLが無い場合もキャッシュ（Noneをキャッシュ）して無駄なDB問い合わせを抑える
         - updated_at_strが変更されると自動的にキャッシュが無効化される
+        - db_urlをキャッシュキーに含めることで、DB切替時にキャッシュが混ざらないようにする
     """
     if not material_id:
         return None
@@ -248,7 +445,7 @@ def get_material_image_url_cached(material_id: int, updated_at_str: str = None) 
     return None
 
 
-def get_material_image_url(material) -> Optional[str]:
+def get_material_image_url(material_id: int, updated_at_str: str | None = None, db_url: str | None = None) -> Optional[str]:
     """
     materialsテーブルから画像URLを取得（primaryのみ）
     
@@ -256,26 +453,40 @@ def get_material_image_url(material) -> Optional[str]:
     space/productは用途タブ専用のため、ここでは返さない。
     
     Args:
-        material: MaterialオブジェクトまたはMaterialProxy
+        material_id: 材料ID
+        updated_at_str: 更新日時文字列（キャッシュキー用、Noneの場合は無視）
+        db_url: データベースURL（キャッシュキー用、Noneの場合は内部で取得）
     
     Returns:
         primary画像URL（見つからない場合はNone）
     
     Note:
-        - primary_image_url属性がある場合はそれを優先（DBアクセス不要）
-        - なければキャッシュ付き関数でDBから取得
+        - キャッシュ付き関数でDBから取得
+        - db_urlがNoneの場合は内部でget_database_url()を呼ぶ
+        - updated_at_strが変更されると自動的にキャッシュが無効化される
     """
-    material_id = getattr(material, 'id', None)
     if not material_id:
         return None
     
-    # primary_image_urlを確認（DBアクセス不要）
+    # db_urlをキャッシュキーに含める（DB切替時にキャッシュが混ざらないようにする）
+    # 呼び出し元がdb_urlを持っている場合はそれを使用、なければ内部で取得
+    if db_url is None:
+        from utils.settings import get_database_url
+        db_url = get_database_url()
+    return get_material_image_url_cached(db_url, material_id, updated_at_str)
+
+
+def resolve_material_image_url(material, db_url: str) -> Optional[str]:
+    # primary_image_url があれば即return（DBアクセスなし）
+    # updated_at が無くても DB取得は試みる（updated_at_str=None OK）
     primary_image_url = getattr(material, "primary_image_url", None)
-    if primary_image_url and primary_image_url.strip() and primary_image_url.startswith(('http://', 'https://')):
+    if primary_image_url and primary_image_url.strip() and primary_image_url.startswith(("http://", "https://")):
         return primary_image_url
-    
-    # キャッシュ付き関数でDBから取得
-    # updated_atをキャッシュキーに含める（更新で自動無効化）
+
+    material_id = getattr(material, "id", None)
+    if not material_id:
+        return None
+
     updated_at = getattr(material, "updated_at", None)
     updated_at_str = None
     if updated_at:
@@ -283,8 +494,8 @@ def get_material_image_url(material) -> Optional[str]:
             updated_at_str = updated_at.isoformat()
         else:
             updated_at_str = str(updated_at)
-    
-    return get_material_image_url_cached(material_id, updated_at_str)
+
+    return get_material_image_url(material_id, updated_at_str, db_url=db_url)
 
 
 def get_image_path(filename):
@@ -1039,18 +1250,20 @@ def fetch_materials_page_cached(
 
 
 @st.cache_data(ttl=120)  # 全材料: 120秒（2分）TTL
-def get_all_materials(include_unpublished: bool = False, include_deleted: bool = False):
+def get_all_materials(db_url: str, include_unpublished: bool = False, include_deleted: bool = False):
     """
     全材料を取得（Eager Loadでリレーションも先読み・全リレーション網羅）
     重複を除去して返す（DB由来のデータに一本化）
     
     Args:
+        db_url: データベースURL（キャッシュキー用、DB切替時にキャッシュが混ざらないようにする）
         include_unpublished: Trueの場合、非公開（is_published=0）も含める
         include_deleted: Trueの場合、論理削除済み（is_deleted=1）も含める
     
     Note:
         - NeonのCU-hours節約のため、ttl=120秒でキャッシュ
         - サービス層経由でDBアクセス
+        - db_urlをキャッシュキーに含めることで、DB切替時にキャッシュが混ざらないようにする
     """
     from services.materials_service import get_all_materials as _get_all_materials
     bump_db_call_counter("list")
@@ -1449,13 +1662,22 @@ def handle_db_unavailable(context: str, retry_fn=None, operation: str = None):
     from utils.db import DBUnavailableError
     from services.db_retry import db_retry
     import traceback
+    import sys
     
-    # DEBUG_ENV=1では例外種別もloggerに出力
-    if os.getenv("DEBUG_ENV", "0") == "1":
-        import sys
-        exc_type, exc_value, exc_tb = sys.exc_info()
-        if exc_type:
-            logger.warning(f"[DB_UNAVAILABLE] context={context} operation={operation} exception={exc_type.__name__}: {exc_value}")
+    # 例外情報を取得（例外ハンドラから呼ばれる前提）
+    exc_type, exc_value, exc_tb = sys.exc_info()
+    
+    # 常にログに出力（context と例外メッセージを含める）
+    if exc_type and exc_value:
+        exception_msg = str(exc_value)
+        logger.warning(f"[DB_UNAVAILABLE] context={context} operation={operation} exception={exc_type.__name__}: {exception_msg}")
+        
+        # DEBUG_ENV=1 のときだけ traceback を logger に出す（UI表示ではなくログ）
+        if os.getenv("DEBUG_ENV", "0") == "1":
+            logger.warning(f"[DB_UNAVAILABLE] traceback:\n{traceback.format_exc()}")
+    else:
+        # 例外情報が取得できない場合（通常は発生しない）
+        logger.warning(f"[DB_UNAVAILABLE] context={context} operation={operation} (例外情報が取得できませんでした)")
     
     # ウォームアップ表示
     st.info("🔄 データベースを起こしています...")
@@ -1633,7 +1855,7 @@ def render_debug_sidebar_early():
                             st.write(f"- **materials count:** {material_count}")
                             # 詳細な素材ごとの探索結果はDEBUG=1の時のみ（重い処理のため）
                             bump_db_call_counter("list")
-                            materials = get_all_materials()
+                            materials = get_all_materials(db_url)
                             if materials:
                                 st.write("**素材ごとの探索結果（先頭30件）:**")
                                 
@@ -1737,6 +1959,15 @@ def _handle_approval_queue(is_admin: bool = False):
 
 
 def main():
+    # ===== DBアクセス禁止ゾーン（初期表示時） =====
+    # 運用ルール: 初期表示ではDBを叩かない（Neon節約 / Scale-to-zero前提）
+    # - DBアクセスは「ユーザー操作（ボタン/確定）」または「管理者限定」に寄せる
+    # - ここで get_*_cached() / services.* を呼ぶな（将来の事故防止）
+    # - 件数表示や統計情報はボタンクリック時のみ取得する設計
+    # - スキーマチェックも管理者モード時のみ自動実行、それ以外はボタンで実行
+    # - 例外: DEBUG/診断モードのみ（必要な場合）
+    # ============================================
+    
     # 実行順序の安全策: is_debug_flag が存在することを確認
     if "is_debug_flag" not in globals() or not callable(globals().get("is_debug_flag")):
         # 万が一 is_debug_flag が存在しない場合は警告を出して続行
@@ -1887,84 +2118,103 @@ def main():
         st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
         # st.stop()は呼ばない（本文を表示するため）
     
-    # 3. スキーマドリフト検知（軽量、キャッシュ済み）
-    try:
-        from database import get_schema_drift_status
-        from utils.settings import get_database_url
-        schema_status = get_schema_drift_status(get_database_url())
-        
-        # スキーマチェックが成功した場合のみ、スキーマ不整合の警告を表示
-        if schema_status.get("ok", False):
-            # スキーマ不整合がある場合は警告を表示
-            images_ok = schema_status.get("images_ok", False)
-            # 後方互換: images_kind_exists も確認
-            if not images_ok and not schema_status.get("images_kind_exists", False):
-                missing_columns = schema_status.get("images_missing_columns", [])
-                if missing_columns:
-                    missing_cols_str = ", ".join(missing_columns)
-                    st.warning(f"""
-                    ⚠️ **DB Schema Mismatch Detected**
+    # 3. スキーマドリフト検知（Neon節約のため、ボタンクリック時のみDBアクセス）
+    # 初期表示ではDBを叩かない（毎rerunでのDBアクセスを削減）
+    if "check_schema_drift" not in st.session_state:
+        st.session_state.check_schema_drift = False
+    
+    # 管理者モード時は自動チェック、それ以外はボタンでチェック
+    from utils.settings import is_admin_mode
+    if is_admin_mode():
+        # 管理者モード時は自動チェック（運用上の問題を早期発見）
+        st.session_state.check_schema_drift = True
+    elif st.button("🔍 スキーマ整合性をチェック", key="btn_check_schema_drift"):
+        # 連打ガード: 2秒以内の連打は無視（rerun連打で同じDB呼び出しが走るのを防ぐ）
+        last_check_time = st.session_state.get("last_schema_check_time", 0)
+        current_time = time.time()
+        if current_time - last_check_time >= 2.0:
+            st.session_state.last_schema_check_time = current_time
+            st.session_state.check_schema_drift = True
+    
+    if st.session_state.check_schema_drift:
+        try:
+            from database import get_schema_drift_status
+            from utils.settings import get_database_url
+            # TTL=60秒のキャッシュを使用（database.pyで定義済み）
+            schema_status = get_schema_drift_status(get_database_url())
+            
+            # スキーマチェックが成功した場合のみ、スキーマ不整合の警告を表示
+            if schema_status.get("ok", False):
+                # スキーマ不整合がある場合は警告を表示
+                images_ok = schema_status.get("images_ok", False)
+                # 後方互換: images_kind_exists も確認
+                if not images_ok and not schema_status.get("images_kind_exists", False):
+                    missing_columns = schema_status.get("images_missing_columns", [])
+                    if missing_columns:
+                        missing_cols_str = ", ".join(missing_columns)
+                        st.warning(f"""
+                        ⚠️ **DB Schema Mismatch Detected**
+                        
+                        The `images` table is missing required columns: **{missing_cols_str}**
+                        
+                        This may cause errors when loading materials.
+                        
+                        **To fix:**
+                        1. Set `MIGRATE_ON_START=1` in Streamlit Secrets
+                        2. Reboot the application
+                        3. The migration will run automatically and add the missing columns
+                        
+                        **Current status:** Running in safe mode (images are not loaded to prevent crashes)
+                        """)
+                    else:
+                        st.warning("""
+                        ⚠️ **DB Schema Mismatch Detected**
+                        
+                        The `images` table is missing required columns. This may cause errors when loading materials.
+                        
+                        **To fix:**
+                        1. Set `MIGRATE_ON_START=1` in Streamlit Secrets
+                        2. Reboot the application
+                        3. The migration will run automatically and add the missing columns
+                        
+                        **Current status:** Running in safe mode (images are not loaded to prevent crashes)
+                        """)
                     
-                    The `images` table is missing required columns: **{missing_cols_str}**
-                    
-                    This may cause errors when loading materials.
-                    
-                    **To fix:**
-                    1. Set `MIGRATE_ON_START=1` in Streamlit Secrets
-                    2. Reboot the application
-                    3. The migration will run automatically and add the missing columns
-                    
-                    **Current status:** Running in safe mode (images are not loaded to prevent crashes)
-                    """)
-                else:
-                    st.warning("""
-                    ⚠️ **DB Schema Mismatch Detected**
-                    
-                    The `images` table is missing required columns. This may cause errors when loading materials.
-                    
-                    **To fix:**
-                    1. Set `MIGRATE_ON_START=1` in Streamlit Secrets
-                    2. Reboot the application
-                    3. The migration will run automatically and add the missing columns
-                    
-                    **Current status:** Running in safe mode (images are not loaded to prevent crashes)
-                    """)
+                    # 管理者向けに詳細情報を表示
+                    from utils.settings import is_admin_mode
+                    if is_admin_mode():
+                        with st.expander("🔍 Schema Status Details", expanded=False):
+                            st.json(schema_status)
+                
+                # エラーがある場合は表示（ok==True の場合でも）
+                if schema_status.get("errors"):
+                    for error in schema_status["errors"]:
+                        st.warning(f"Schema check warning: {error}")
+            else:
+                # スキーマチェックが失敗した場合（ok==False）
+                st.warning("""
+                ⚠️ **DB Schema Check Failed**
+                
+                Unable to verify database schema. Running in safe mode to prevent crashes.
+                
+                **Details:**
+                """)
+                if schema_status.get("errors"):
+                    for error in schema_status["errors"]:
+                        st.error(f"Schema check error: {error}")
                 
                 # 管理者向けに詳細情報を表示
                 from utils.settings import is_admin_mode
                 if is_admin_mode():
                     with st.expander("🔍 Schema Status Details", expanded=False):
                         st.json(schema_status)
-            
-            # エラーがある場合は表示（ok==True の場合でも）
-            if schema_status.get("errors"):
-                for error in schema_status["errors"]:
-                    st.warning(f"Schema check warning: {error}")
-        else:
-            # スキーマチェックが失敗した場合（ok==False）
-            st.warning("""
-            ⚠️ **DB Schema Check Failed**
-            
-            Unable to verify database schema. Running in safe mode to prevent crashes.
-            
-            **Details:**
-            """)
-            if schema_status.get("errors"):
-                for error in schema_status["errors"]:
-                    st.error(f"Schema check error: {error}")
-            
-            # 管理者向けに詳細情報を表示
-            from utils.settings import is_admin_mode
-            if is_admin_mode():
-                with st.expander("🔍 Schema Status Details", expanded=False):
-                    st.json(schema_status)
-    except Exception as e:
-        # スキーマチェック失敗時は警告を表示して続行（PANICしない）
-        st.warning(f"⚠️ DB Schema check failed: {e}. Running in safe mode.")
-        if os.getenv("DEBUG", "0") == "1":
-            print(f"[SCHEMA] schema check exception: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception as e:
+            # スキーマチェック失敗時は警告を表示して続行（PANICしない）
+            st.warning(f"⚠️ DB Schema check failed: {e}. Running in safe mode.")
+            if os.getenv("DEBUG", "0") == "1":
+                print(f"[SCHEMA] schema check exception: {e}")
+                import traceback
+                traceback.print_exc()
     
     # 4. その後に通常処理（Debugは既にrender_debug_sidebar_early()で表示済み）
     
@@ -2045,16 +2295,30 @@ def main():
     # 本文UIの開始（Debug sidebarはrun_app_entrypointで先に描画済み）
     # タイトルは各ページでロゴとして表示（show_home()など）
     
-    # 素材件数の表示（エラーハンドリング付き、高速化のためget_material_count_cachedを使用）
-    try:
-        from utils.settings import get_database_url
-        db_url = get_database_url()
-        material_count = get_material_count_cached(db_url, include_unpublished=False, include_deleted=False)
-        st.write(f"素材件数: {material_count} 件")
-    except Exception as e:
-        st.error("❌ main() 内でエラーが発生しました")
-        import traceback
-        st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
+    # 素材件数の表示（Neon節約のため、ボタンクリック時のみDBアクセス）
+    # 初期表示ではDBを叩かない（毎rerunでのDBアクセスを削減）
+    if "show_material_count" not in st.session_state:
+        st.session_state.show_material_count = False
+    
+    if st.button("📊 素材件数を表示", key="btn_show_material_count"):
+        # 連打ガード: 2秒以内の連打は無視（rerun連打で同じDB呼び出しが走るのを防ぐ）
+        last_count_time = st.session_state.get("last_material_count_time", 0)
+        current_time = time.time()
+        if current_time - last_count_time >= 2.0:
+            st.session_state.last_material_count_time = current_time
+            st.session_state.show_material_count = True
+    
+    if st.session_state.show_material_count:
+        try:
+            from utils.settings import get_database_url
+            db_url = get_database_url()
+            # TTL=300秒（5分）のキャッシュを使用（Neon節約のため）
+            material_count = get_material_count_cached(db_url, include_unpublished=False, include_deleted=False)
+            st.write(f"素材件数: {material_count} 件")
+        except Exception as e:
+            st.error("❌ 素材件数の取得に失敗しました")
+            import traceback
+            st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)), language="python")
     
     # ページ状態の初期化
     if 'page' not in st.session_state:
@@ -2201,6 +2465,9 @@ def main():
                 try:
                     ping_db()
                     st.success("✅ DB接続成功")
+                    # DB起床直後は重い処理を自動実行しない（直近3秒はガード）
+                    st.session_state.db_warmed_recently = True
+                    st.session_state.db_warmed_at = time.time()
                 except DBUnavailableError:
                     handle_db_unavailable("DB起床", retry_fn=ping_db, operation="DB起床")
         else:
@@ -2246,27 +2513,38 @@ def main():
                     total_properties = 0
                     avg_properties = 0.0
                 else:
-                    try:
-                        bump_db_call_counter("statistics")
-                        stats = db_retry(
-                            lambda: get_statistics(
-                                include_unpublished=include_unpublished,
-                                include_deleted=include_deleted
-                            ),
-                            operation_name="統計情報取得"
-                        )
-                        material_count = stats["material_count"]
-                        categories = stats["categories"]
-                        total_properties = stats["total_properties"]
-                        avg_properties = stats["avg_properties"]
-                    except DBUnavailableError:
-                        handle_db_unavailable(
-                            "統計情報取得",
-                            retry_fn=lambda: get_statistics(
-                                include_unpublished=include_unpublished,
-                                include_deleted=include_deleted
+                    # DB起床直後の自動実行ガード（直近3秒は重い処理を自動実行しない）
+                    db_warmed_recently = st.session_state.get("db_warmed_recently", False)
+                    db_warmed_at = st.session_state.get("db_warmed_at", 0)
+                    if db_warmed_recently and (time.time() - db_warmed_at) < 3.0:
+                        # 起床直後は自動実行をスキップ（ボタン押下の明示操作は許可）
+                        # None にして表示ブロックをスキップ（0をセットすると「材料ゼロ」に見えるリスクを避ける）
+                        material_count = None
+                        categories = None
+                        total_properties = None
+                        avg_properties = None
+                    else:
+                        try:
+                            bump_db_call_counter("statistics")
+                            stats = db_retry(
+                                lambda: get_statistics(
+                                    include_unpublished=include_unpublished,
+                                    include_deleted=include_deleted
+                                ),
+                                operation_name="統計情報取得"
                             )
-                        )
+                            material_count = stats["material_count"]
+                            categories = stats["categories"]
+                            total_properties = stats["total_properties"]
+                            avg_properties = stats["avg_properties"]
+                        except DBUnavailableError:
+                            handle_db_unavailable(
+                                "統計情報取得",
+                                retry_fn=lambda: get_statistics(
+                                    include_unpublished=include_unpublished,
+                                    include_deleted=include_deleted
+                                )
+                            )
             except Exception as e:
                 # 統計情報取得失敗時はデフォルト値のまま進む（PANICさせない）
                 material_count = 0
@@ -2274,17 +2552,19 @@ def main():
                     st.caption(f"統計情報取得エラー（表示は続行）: {e}")
         
         # 材料数はmaterial_countを使用（materialsが空でも表示できる）
-        material_display_count = material_count if material_count > 0 else (len(materials) if materials else 0)
-        
-        # 左下に小さく配置（統計情報が取得済みの場合のみ表示）
-        if st.session_state[stats_key]:
-            st.markdown("""
-            <div class="stats-fixed">
-                <div>材料数: <strong>{}</strong></div>
-                <div>カテゴリ: <strong>{}</strong></div>
-                <div>物性データ: <strong>{}</strong></div>
-            </div>
-            """.format(material_display_count, categories, total_properties), unsafe_allow_html=True)
+        # DB起床直後ガード中（material_count=None）の場合は表示をスキップ
+        if material_count is not None:
+            material_display_count = material_count if material_count > 0 else (len(materials) if materials else 0)
+            
+            # 左下に小さく配置（統計情報が取得済みの場合のみ表示）
+            if st.session_state[stats_key]:
+                st.markdown("""
+                <div class="stats-fixed">
+                    <div>材料数: <strong>{}</strong></div>
+                    <div>カテゴリ: <strong>{}</strong></div>
+                    <div>物性データ: <strong>{}</strong></div>
+                </div>
+                """.format(material_display_count, categories, total_properties), unsafe_allow_html=True)
         
         st.markdown("""
         <div style="text-align: center; padding: 20px 0; color: #666;">
@@ -2302,14 +2582,17 @@ def main():
     if debug_images and debug_enabled:
         from utils.image_diagnostics import show_image_diagnostics
         from utils.db import DBUnavailableError
+        from utils.settings import get_database_url
         try:
-            materials = get_all_materials()
+            db_url = get_database_url()
+            materials = get_all_materials(db_url)
             show_image_diagnostics(materials, Path.cwd())
             return  # 診断モード時は他のページを表示しない
         except DBUnavailableError:
+            db_url = get_database_url()
             handle_db_unavailable(
                 "画像診断",
-                retry_fn=lambda: get_all_materials()
+                retry_fn=lambda: get_all_materials(db_url)
             )
     
     # 管理者表示フラグを取得
@@ -2844,7 +3127,7 @@ def show_home():
                     # 画像表示トグルがOFFの場合は画像URL取得をスキップ（Network transfer削減）
                     image_url = None
                     if st.session_state.get("show_images_in_list", False):
-                        image_url = get_material_image_url(material)
+                        image_url = resolve_material_image_url(material, db_url)
                     
                     # サムネサイズで表示（プレースホルダー付き）
                     if image_url and image_url.strip() and image_url.startswith(('http://', 'https://')):
@@ -3247,13 +3530,25 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
         limit = 50
         offset = page_num * limit
         
-        materials_dicts = fetch_materials_page_cached(
-            db_url=db_url,
-            include_unpublished=include_unpublished,
-            include_deleted=include_deleted,
-            limit=limit,
-            offset=offset
-        )
+        # DB起床直後の自動実行ガード（直近3秒は重い処理を自動実行しない）
+        db_warmed_recently = st.session_state.get("db_warmed_recently", False)
+        db_warmed_at = st.session_state.get("db_warmed_at", 0)
+        if db_warmed_recently and (time.time() - db_warmed_at) < 3.0:
+            # 起床直後は自動実行をスキップ（ボタン押下の明示操作は許可）
+            # None にして表示ブロックをスキップ（[]をセットすると「材料ゼロ」に見えるリスクを避ける）
+            materials_dicts = None
+        else:
+            materials_dicts = fetch_materials_page_cached(
+                db_url=db_url,
+                include_unpublished=include_unpublished,
+                include_deleted=include_deleted,
+                limit=limit,
+                offset=offset
+            )
+        
+        # DB起床直後ガード中（materials_dicts=None）の場合は表示をスキップ
+        if materials_dicts is None:
+            return
         
         if not materials_dicts:
             if page_num == 0:
@@ -3343,7 +3638,7 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                         # 画像表示トグルがOFFの場合は画像URL取得をスキップ（Network transfer削減）
                         image_url = None
                         if st.session_state.get("show_images_in_list", False):
-                            image_url = get_material_image_url(material)
+                            image_url = resolve_material_image_url(material, db_url)
                         
                         # 画像HTML（public_urlがある場合は直接使用、なければプレースホルダー）
                         if image_url and image_url.strip() and image_url.startswith(('http://', 'https://')):
@@ -3599,11 +3894,13 @@ def show_dashboard():
     try:
         # ダッシュボードは全件取得が必要（統計・グラフ表示のため）
         # MAX_LIST_LIMIT=200がサービス層で適用される
-        materials = get_all_materials(include_unpublished=include_unpublished)
+        from utils.settings import get_database_url
+        db_url = get_database_url()
+        materials = get_all_materials(db_url, include_unpublished=include_unpublished)
     except DBUnavailableError:
         handle_db_unavailable(
             "ダッシュボード（管理者）",
-            retry_fn=lambda: get_all_materials(include_unpublished=include_unpublished),
+            retry_fn=lambda: get_all_materials(db_url, include_unpublished=include_unpublished),
             operation="ダッシュボード全件取得"
         )
     

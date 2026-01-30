@@ -4,6 +4,7 @@ DBアクセスを集約し、UI層からDB層を分離
 """
 import os
 import logging
+import inspect
 from typing import List, Dict, Any, Optional
 from utils.db import get_session, DBUnavailableError
 from database import Material, Property, Image
@@ -14,6 +15,33 @@ logger = logging.getLogger(__name__)
 
 # DEBUG_ENV=1 の時のみDBアクセスログを出力
 DEBUG_ENV = os.getenv("DEBUG_ENV", "0") == "1"
+
+# GUARD_DB_CALLS=1 の時のみ呼び出し元情報をログに出力（初期表示DB禁止のガード）
+GUARD_DB_CALLS = os.getenv("GUARD_DB_CALLS", "0") == "1"
+
+
+def _log_caller_info(function_name: str):
+    """
+    呼び出し元情報をログに出力（GUARD_DB_CALLS=1時のみ）
+    
+    Args:
+        function_name: 呼び出された関数名
+    """
+    if GUARD_DB_CALLS:
+        try:
+            # inspect.stack() は重いので、GUARD_DB_CALLS=1 のときのみ実行
+            stack = inspect.stack()
+            # 呼び出し元は stack[2]（stack[0]はこの関数、stack[1]は呼び出し元の関数）
+            if len(stack) >= 3:
+                caller_frame = stack[2]
+                caller_file = caller_frame.filename
+                caller_function = caller_frame.function
+                # ファイル名を短縮（パス全体ではなくファイル名のみ）
+                caller_file_short = os.path.basename(caller_file)
+                logger.warning(f"[GUARD_DB_CALL] {function_name} called from {caller_file_short}:{caller_function}")
+        except Exception:
+            # inspect が失敗しても処理は続行（ログのみ）
+            pass
 
 # 重いクエリガード: 一覧取得の上限（Neon節約のため）
 MAX_LIST_LIMIT = 200
@@ -50,6 +78,7 @@ def get_material_count(
     Raises:
         DBUnavailableError: DB接続エラー時
     """
+    _log_caller_info("get_material_count")
     _log_db_call("count", include_unpublished=include_unpublished, include_deleted=include_deleted)
     
     try:
@@ -96,6 +125,7 @@ def get_materials_page(
     Raises:
         DBUnavailableError: DB接続エラー時
     """
+    _log_caller_info("get_materials_page")
     # 重いクエリガード: limitを上限でclamp
     limit = min(limit, MAX_LIST_LIMIT)
     
@@ -229,6 +259,7 @@ def get_all_materials(
     Note:
         - 重いクエリガード: 内部的にMAX_LIST_LIMIT=200を適用（無制限禁止）
     """
+    _log_caller_info("get_all_materials")
     _log_db_call("list", include_unpublished=include_unpublished, include_deleted=include_deleted)
     
     try:
@@ -283,6 +314,7 @@ def get_material_by_id(material_id: int) -> Optional[Material]:
     Raises:
         DBUnavailableError: DB接続エラー時
     """
+    _log_caller_info("get_material_by_id")
     _log_db_call("detail", material_id=material_id)
     
     try:
@@ -327,6 +359,7 @@ def get_statistics(
     Raises:
         DBUnavailableError: DB接続エラー時
     """
+    _log_caller_info("get_statistics")
     _log_db_call("statistics", include_unpublished=include_unpublished, include_deleted=include_deleted)
     
     try:
