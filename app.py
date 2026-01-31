@@ -2339,6 +2339,12 @@ def main():
     if 'selected_material_id' not in st.session_state:
         st.session_state.selected_material_id = None
     
+    # クエリパラメータからページ遷移を処理（カードクリック対応）
+    allowed_pages = {"ホーム", "材料登録", "材料一覧", "素材カード"}
+    page_param = st.query_params.get("page")
+    if page_param and page_param in allowed_pages:
+        st.session_state.page = page_param
+    
     # 詳細ページへの遷移がリクエストされた場合
     if st.session_state.selected_material_id and st.session_state.page != "detail":
         # 詳細ページに遷移する場合は、ページを"材料一覧"に設定（詳細表示モード）
@@ -2348,55 +2354,56 @@ def main():
     from utils.settings import is_admin_mode
     is_admin = is_admin_mode()
     
-    # サイドバー - 編集権限者のみ表示
-    if is_admin:
-        with st.sidebar:
-            # ページ選択（詳細ページ表示中は選択を変更しない）
-            if st.session_state.selected_material_id:
-                # 詳細ページ表示中は、ページ選択を一時的に無効化
-                st.session_state.page = "材料一覧"
-                page = "材料一覧"
-            else:
-                # 基本メニュー項目
-                menu_items = ["ホーム", "材料一覧", "材料登録", "ダッシュボード", "検索", "素材カード", "元素周期表"]
-                menu_icons = ["house", "grid", "pencil", "bar-chart", "search", "file-earmark", "table"]
-                
-                # 管理者の場合は「承認待ち一覧」を追加
-                if is_admin:
-                    menu_items.append("承認待ち一覧")
-                    menu_icons.append("clipboard-check")
-                    menu_items.append("一括登録")
-                    menu_icons.append("upload")
-                
-                # 現在のページのインデックスを取得
-                current_index = 0
-                if st.session_state.page in menu_items:
-                    current_index = menu_items.index(st.session_state.page)
-                
-                # option_menuでメニューを表示
-                page = option_menu(
-                    None,
-                    menu_items,
-                    icons=menu_icons,
-                    default_index=current_index,
-                    styles={
-                        "container": {"padding": "0.25rem", "background-color": "transparent"},
-                        "nav-link": {
-                            "font-size": "14px",
-                            "padding": "8px 10px",
-                            "border-radius": "10px",
-                            "margin-bottom": "4px",
-                        },
-                        "nav-link-selected": {
-                            "background-color": "#111",
-                            "color": "white",
-                        },
-                    }
-                )
-                st.session_state.page = page
+    # サイドバー - PCでは表示、スマホではCSSで非表示
+    with st.sidebar:
+        # ページ選択（詳細ページ表示中は選択を変更しない）
+        if st.session_state.selected_material_id:
+            # 詳細ページ表示中は、ページ選択を一時的に無効化
+            st.session_state.page = "材料一覧"
+            page = "材料一覧"
+        else:
+            # 基本メニュー項目（通常ユーザー向け）
+            menu_items = ["ホーム", "材料一覧", "材料登録", "素材カード"]
+            menu_icons = ["house", "grid", "pencil", "file-earmark"]
             
-            # hover効果のCSSを追加 + チェックボックス/ラジオボタンを非表示
-            st.markdown("""
+            # 管理者の場合は追加項目を表示
+            if is_admin:
+                menu_items.extend(["ダッシュボード", "検索", "元素周期表"])
+                menu_icons.extend(["bar-chart", "search", "table"])
+                menu_items.append("承認待ち一覧")
+                menu_icons.append("clipboard-check")
+                menu_items.append("一括登録")
+                menu_icons.append("upload")
+            
+            # 現在のページのインデックスを取得
+            current_index = 0
+            if st.session_state.page in menu_items:
+                current_index = menu_items.index(st.session_state.page)
+            
+            # option_menuでメニューを表示
+            page = option_menu(
+                None,
+                menu_items,
+                icons=menu_icons,
+                default_index=current_index,
+                styles={
+                    "container": {"padding": "0.25rem", "background-color": "transparent"},
+                    "nav-link": {
+                        "font-size": "14px",
+                        "padding": "8px 10px",
+                        "border-radius": "10px",
+                        "margin-bottom": "4px",
+                    },
+                    "nav-link-selected": {
+                        "background-color": "#111",
+                        "color": "white",
+                    },
+                }
+            )
+            st.session_state.page = page
+        
+        # hover効果のCSSを追加 + チェックボックス/ラジオボタンを非表示 + スマホでサイドバー非表示
+        st.markdown("""
             <style>
             /* streamlit-option-menuのhover効果 */
             div[data-testid="stOptionMenu"] .nav-link:hover {
@@ -2427,169 +2434,174 @@ def main():
             .stSidebar [data-testid="stCheckbox"] label {
                 display: none !important;
             }
+            /* スマホでサイドバーを非表示（画面幅768px以下） */
+            @media (max-width: 768px) {
+                section[data-testid="stSidebar"] {
+                    display: none !important;
+                }
+            }
             </style>
             """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # 管理者認証（ADMIN_PASSWORD）
+        admin_password = os.getenv("ADMIN_PASSWORD", "")
+        if admin_password:
+            # セッション状態で認証状態を管理
+            if "admin_authenticated" not in st.session_state:
+                st.session_state["admin_authenticated"] = False
             
-            st.markdown("---")
-            
-            # 管理者認証（ADMIN_PASSWORD）
-            admin_password = os.getenv("ADMIN_PASSWORD", "")
-            if admin_password:
-                # セッション状態で認証状態を管理
-                if "admin_authenticated" not in st.session_state:
-                    st.session_state["admin_authenticated"] = False
-                
-                if not st.session_state["admin_authenticated"]:
-                    st.markdown("---")
-                    st.markdown("### 🔐 管理者認証")
-                    password_input = st.text_input(
-                        "管理者パスワード",
-                        type="password",
-                        key="admin_password_input"
-                    )
-                    if st.button("認証", key="admin_auth_button"):
-                        if password_input == admin_password:
-                            st.session_state["admin_authenticated"] = True
-                            st.success("✅ 認証成功")
-                            st.rerun()
-                        else:
-                            st.error("❌ パスワードが正しくありません")
-                    # 認証されていない場合は管理者機能を無効化
-                    is_admin = False
-                else:
-                    if st.button("🔓 ログアウト", key="admin_logout"):
-                        st.session_state["admin_authenticated"] = False
-                        st.rerun()
-            
-            # 管理者表示チェック（既に上で定義済み）
-            if is_admin:
-                include_unpublished = st.checkbox(
-                    "管理者表示（非公開も表示）",
-                    value=st.session_state.get("include_unpublished", False),
-                    key="admin_include_unpublished"
-                )
-                st.session_state["include_unpublished"] = include_unpublished
-                
-                # DB起床ボタン（管理者のみ）
+            if not st.session_state["admin_authenticated"]:
                 st.markdown("---")
-                st.markdown("### 🔌 DB管理")
-                if st.button("🔌 DBを起こす", key="wake_db_btn"):
-                    from services.db_health import ping_db
-                    from utils.db import DBUnavailableError
-                    try:
-                        ping_db()
-                        st.success("✅ DB接続成功")
-                        # DB起床直後は重い処理を自動実行しない（直近3秒はガード）
-                        st.session_state.db_warmed_recently = True
-                        st.session_state.db_warmed_at = time.time()
-                    except DBUnavailableError:
-                        handle_db_unavailable("DB起床", retry_fn=ping_db, operation="DB起床")
-            else:
-                include_unpublished = False
-            
-            # 統計情報（画面左下に小さく表示）- 遅延取得（ボタン押下時のみ）
-            # 初期表示ではDBアクセスしない（起床頻度を下げる）
-            stats_key = "show_statistics"
-            if stats_key not in st.session_state:
-                st.session_state[stats_key] = False
-            
-            # 変数を初期化（エラー回避）
-            materials = []
-            categories = 0
-            total_properties = 0
-            avg_properties = 0.0
-            material_count = 0
-            
-            include_deleted = st.session_state.get("include_deleted", False) if is_admin else False
-            
-            # 統計情報表示ボタン（サイドバーに配置）
-            if not st.session_state[stats_key]:
-                if st.sidebar.button("📊 統計情報を表示", key="show_stats_btn"):
-                    st.session_state[stats_key] = True
-                    st.rerun()
-            else:
-                # 統計情報を取得（try/exceptで囲み、失敗時はデフォルト値のまま進む）
-                try:
-                    from utils.settings import get_database_url
-                    from services.materials_service import get_statistics
-                    from services.db_retry import db_retry
-                    from utils.db import DBUnavailableError
-                    
-                    db_url = get_database_url()
-                    
-                    # 軽量リトライ付きで統計情報を取得（管理者限定）
-                    from utils.settings import is_admin_mode
-                    is_admin = is_admin_mode()
-                    if not is_admin:
-                        # 一般ユーザーには統計を表示しない（DB呼び出しも発生しない）
-                        material_count = 0
-                        categories = 0
-                        total_properties = 0
-                        avg_properties = 0.0
+                st.markdown("### 🔐 管理者認証")
+                password_input = st.text_input(
+                    "管理者パスワード",
+                    type="password",
+                    key="admin_password_input"
+                )
+                if st.button("認証", key="admin_auth_button"):
+                    if password_input == admin_password:
+                        st.session_state["admin_authenticated"] = True
+                        st.success("✅ 認証成功")
+                        st.rerun()
                     else:
-                        # DB起床直後の自動実行ガード（直近3秒は重い処理を自動実行しない）
-                        db_warmed_recently = st.session_state.get("db_warmed_recently", False)
-                        db_warmed_at = st.session_state.get("db_warmed_at", 0)
-                        if db_warmed_recently and (time.time() - db_warmed_at) < 3.0:
-                            # 起床直後は自動実行をスキップ（ボタン押下の明示操作は許可）
-                            # None にして表示ブロックをスキップ（0をセットすると「材料ゼロ」に見えるリスクを避ける）
-                            material_count = None
-                            categories = None
-                            total_properties = None
-                            avg_properties = None
-                        else:
-                            try:
-                                bump_db_call_counter("statistics")
-                                stats = db_retry(
-                                    lambda: get_statistics(
-                                        include_unpublished=include_unpublished,
-                                        include_deleted=include_deleted
-                                    ),
-                                    operation_name="統計情報取得"
-                                )
-                                material_count = stats["material_count"]
-                                categories = stats["categories"]
-                                total_properties = stats["total_properties"]
-                                avg_properties = stats["avg_properties"]
-                            except DBUnavailableError:
-                                handle_db_unavailable(
-                                    "統計情報取得",
-                                    retry_fn=lambda: get_statistics(
-                                        include_unpublished=include_unpublished,
-                                        include_deleted=include_deleted
-                                    )
-                                )
-                except Exception as e:
-                    # 統計情報取得失敗時はデフォルト値のまま進む（PANICさせない）
-                    material_count = 0
-                    if is_debug_flag():
-                        st.caption(f"統計情報取得エラー（表示は続行）: {e}")
+                        st.error("❌ パスワードが正しくありません")
+                # 認証されていない場合は管理者機能を無効化
+                is_admin = False
+            else:
+                if st.button("🔓 ログアウト", key="admin_logout"):
+                    st.session_state["admin_authenticated"] = False
+                    st.rerun()
+        
+        # 管理者表示チェック（管理者のみ）
+        if is_admin:
+            include_unpublished = st.checkbox(
+                "管理者表示（非公開も表示）",
+                value=st.session_state.get("include_unpublished", False),
+                key="admin_include_unpublished"
+            )
+            st.session_state["include_unpublished"] = include_unpublished
             
-            # 材料数はmaterial_countを使用（materialsが空でも表示できる）
-            # DB起床直後ガード中（material_count=None）の場合は表示をスキップ
-            if material_count is not None:
-                material_display_count = material_count if material_count > 0 else (len(materials) if materials else 0)
+            # DB起床ボタン（管理者のみ）
+            st.markdown("---")
+            st.markdown("### 🔌 DB管理")
+            if st.button("🔌 DBを起こす", key="wake_db_btn"):
+                from services.db_health import ping_db
+                from utils.db import DBUnavailableError
+                try:
+                    ping_db()
+                    st.success("✅ DB接続成功")
+                    # DB起床直後は重い処理を自動実行しない（直近3秒はガード）
+                    st.session_state.db_warmed_recently = True
+                    st.session_state.db_warmed_at = time.time()
+                except DBUnavailableError:
+                    handle_db_unavailable("DB起床", retry_fn=ping_db, operation="DB起床")
+        else:
+            include_unpublished = False
+        
+        # 統計情報（画面左下に小さく表示）- 遅延取得（ボタン押下時のみ）
+        # 初期表示ではDBアクセスしない（起床頻度を下げる）
+        stats_key = "show_statistics"
+        if stats_key not in st.session_state:
+            st.session_state[stats_key] = False
+        
+        # 変数を初期化（エラー回避）
+        materials = []
+        categories = 0
+        total_properties = 0
+        avg_properties = 0.0
+        material_count = 0
+        
+        include_deleted = st.session_state.get("include_deleted", False) if is_admin else False
+        
+        # 統計情報表示ボタン（サイドバーに配置）
+        if not st.session_state[stats_key]:
+            if st.sidebar.button("📊 統計情報を表示", key="show_stats_btn"):
+                st.session_state[stats_key] = True
+                st.rerun()
+        else:
+            # 統計情報を取得（try/exceptで囲み、失敗時はデフォルト値のまま進む）
+            try:
+                from utils.settings import get_database_url
+                from services.materials_service import get_statistics
+                from services.db_retry import db_retry
+                from utils.db import DBUnavailableError
                 
-                # 左下に小さく配置（統計情報が取得済みの場合のみ表示）
-                if st.session_state[stats_key]:
-                    st.markdown("""
-                    <div class="stats-fixed">
-                        <div>材料数: <strong>{}</strong></div>
-                        <div>カテゴリ: <strong>{}</strong></div>
-                        <div>物性データ: <strong>{}</strong></div>
-                    </div>
-                    """.format(material_display_count, categories, total_properties), unsafe_allow_html=True)
+                db_url = get_database_url()
+                
+                # 軽量リトライ付きで統計情報を取得（管理者限定）
+                from utils.settings import is_admin_mode
+                is_admin = is_admin_mode()
+                if not is_admin:
+                    # 一般ユーザーには統計を表示しない（DB呼び出しも発生しない）
+                    material_count = 0
+                    categories = 0
+                    total_properties = 0
+                    avg_properties = 0.0
+                else:
+                    # DB起床直後の自動実行ガード（直近3秒は重い処理を自動実行しない）
+                    db_warmed_recently = st.session_state.get("db_warmed_recently", False)
+                    db_warmed_at = st.session_state.get("db_warmed_at", 0)
+                    if db_warmed_recently and (time.time() - db_warmed_at) < 3.0:
+                        # 起床直後は自動実行をスキップ（ボタン押下の明示操作は許可）
+                        # None にして表示ブロックをスキップ（0をセットすると「材料ゼロ」に見えるリスクを避ける）
+                        material_count = None
+                        categories = None
+                        total_properties = None
+                        avg_properties = None
+                    else:
+                        try:
+                            bump_db_call_counter("statistics")
+                            stats = db_retry(
+                                lambda: get_statistics(
+                                    include_unpublished=include_unpublished,
+                                    include_deleted=include_deleted
+                                ),
+                                operation_name="統計情報取得"
+                            )
+                            material_count = stats["material_count"]
+                            categories = stats["categories"]
+                            total_properties = stats["total_properties"]
+                            avg_properties = stats["avg_properties"]
+                        except DBUnavailableError:
+                            handle_db_unavailable(
+                                "統計情報取得",
+                                retry_fn=lambda: get_statistics(
+                                    include_unpublished=include_unpublished,
+                                    include_deleted=include_deleted
+                                )
+                            )
+            except Exception as e:
+                # 統計情報取得失敗時はデフォルト値のまま進む（PANICさせない）
+                material_count = 0
+                if is_debug_flag():
+                    st.caption(f"統計情報取得エラー（表示は続行）: {e}")
+        
+        # 材料数はmaterial_countを使用（materialsが空でも表示できる）
+        # DB起床直後ガード中（material_count=None）の場合は表示をスキップ
+        if material_count is not None:
+            material_display_count = material_count if material_count > 0 else (len(materials) if materials else 0)
             
-            st.markdown("""
-            <div style="text-align: center; padding: 20px 0; color: #666;">
-                <small>Material Map v1.0</small>
-            </div>
-            """, unsafe_allow_html=True)
-    else:
-        # 非編集権限者の場合、page変数を設定（サイドバーが表示されないため）
+            # 左下に小さく配置（統計情報が取得済みの場合のみ表示）
+            if st.session_state[stats_key]:
+                st.markdown("""
+                <div class="stats-fixed">
+                    <div>材料数: <strong>{}</strong></div>
+                    <div>カテゴリ: <strong>{}</strong></div>
+                    <div>物性データ: <strong>{}</strong></div>
+                </div>
+                """.format(material_display_count, categories, total_properties), unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div style="text-align: center; padding: 20px 0; color: #666;">
+            <small>Material Map v1.0</small>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # page変数を設定（サイドバーで設定されていない場合のフォールバック）
+    if 'page' not in locals():
         page = st.session_state.page
-        include_unpublished = False
-        include_deleted = False
     
     # Asset診断モード（デバッグ時のみ表示）
     if debug_assets:
@@ -2614,10 +2626,15 @@ def main():
                 retry_fn=lambda: get_all_materials(db_url)
             )
     
-    # 管理者表示フラグを取得（非編集権限者の場合は既に設定済み）
-    if is_admin:
-        include_unpublished = st.session_state.get("include_unpublished", False)
-        include_deleted = st.session_state.get("include_deleted", False)
+    # 管理者表示フラグを取得（サイドバーで設定されていない場合のフォールバック）
+    if 'include_unpublished' not in locals():
+        include_unpublished = st.session_state.get("include_unpublished", False) if is_admin else False
+    if 'include_deleted' not in locals():
+        include_deleted = st.session_state.get("include_deleted", False) if is_admin else False
+    
+    # page変数を設定（サイドバーで設定されていない場合のフォールバック）
+    if 'page' not in locals():
+        page = st.session_state.page
     
     # ページルーティング
     # まず、routesから取得を試みる（pages配下のページ）
@@ -2642,12 +2659,6 @@ def main():
         # routes取得失敗時は従来のルーティングにフォールバック
         if is_debug_flag():
             st.warning(f"get_routes() failed, using fallback routing: {e}")
-    
-    # 非編集権限者の場合、page変数を設定（サイドバーが表示されないため）
-    if not is_admin:
-        page = st.session_state.page
-        include_unpublished = False
-        include_deleted = False
     
     # 従来のルーティング（後方互換性のため残す）
     if page == "ホーム":
@@ -3061,8 +3072,26 @@ def show_home():
     </div>
     """, unsafe_allow_html=True)
     
-    # 機能紹介カード（iconmonstr風のアイコンを使用）
+    # 機能紹介カード（クリック可能なリンクカード）
     st.markdown('<h3 class="section-title">主な機能</h3>', unsafe_allow_html=True)
+    # カードクリック用のCSSを追加
+    st.markdown("""
+    <style>
+    .nav-card {
+        display: block;
+        text-decoration: none;
+        color: inherit;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .nav-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important;
+    }
+    .nav-card .stat-card {
+        cursor: pointer;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     col1, col2, col3 = st.columns(3)
     
     icon1 = get_icon_svg_inline("icon-register", 40, "#999999")
@@ -3071,53 +3100,42 @@ def show_home():
     
     with col1:
         st.markdown(f"""
-        <div class="stat-card">
-            <div style="margin-bottom: 15px; text-align: center;">
-                <img src="data:image/svg+xml;base64,{icon1}" style="width: 40px; height: 40px; opacity: 0.6;" />
+        <a href="?page=材料登録" class="nav-card">
+            <div class="stat-card">
+                <div style="margin-bottom: 15px; text-align: center;">
+                    <img src="data:image/svg+xml;base64,{icon1}" style="width: 40px; height: 40px; opacity: 0.6;" />
+                </div>
+                <h3 style="color: #1a1a1a; margin: 15px 0; font-weight: 600; font-size: 1.1rem;">材料登録</h3>
+                <p style="color: #666; margin: 0; font-size: 14px;">簡単に材料情報を登録・管理</p>
             </div>
-            <h3 style="color: #1a1a1a; margin: 15px 0; font-weight: 600; font-size: 1.1rem;">材料登録</h3>
-            <p style="color: #666; margin: 0; font-size: 14px;">簡単に材料情報を登録・管理</p>
-        </div>
+        </a>
         """, unsafe_allow_html=True)
     
     with col2:
         st.markdown(f"""
-        <div class="stat-card">
-            <div style="margin-bottom: 15px; text-align: center;">
-                <img src="data:image/svg+xml;base64,{icon2}" style="width: 40px; height: 40px; opacity: 0.6;" />
+        <a href="?page=材料一覧" class="nav-card">
+            <div class="stat-card">
+                <div style="margin-bottom: 15px; text-align: center;">
+                    <img src="data:image/svg+xml;base64,{icon2}" style="width: 40px; height: 40px; opacity: 0.6;" />
+                </div>
+                <h3 style="color: #1a1a1a; margin: 15px 0; font-weight: 600; font-size: 1.1rem;">材料一覧</h3>
+                <p style="color: #666; margin: 0; font-size: 14px;">登録された材料を一覧表示</p>
             </div>
-            <h3 style="color: #1a1a1a; margin: 15px 0; font-weight: 600; font-size: 1.1rem;">材料一覧</h3>
-            <p style="color: #666; margin: 0; font-size: 14px;">登録された材料を一覧表示</p>
-        </div>
+        </a>
         """, unsafe_allow_html=True)
     
     with col3:
         st.markdown(f"""
-        <div class="stat-card">
-            <div style="margin-bottom: 15px; text-align: center;">
-                <img src="data:image/svg+xml;base64,{icon3}" style="width: 40px; height: 40px; opacity: 0.6;" />
+        <a href="?page=素材カード" class="nav-card">
+            <div class="stat-card">
+                <div style="margin-bottom: 15px; text-align: center;">
+                    <img src="data:image/svg+xml;base64,{icon3}" style="width: 40px; height: 40px; opacity: 0.6;" />
+                </div>
+                <h3 style="color: #1a1a1a; margin: 15px 0; font-weight: 600; font-size: 1.1rem;">素材カード</h3>
+                <p style="color: #666; margin: 0; font-size: 14px;">素材カードを自動生成</p>
             </div>
-            <h3 style="color: #1a1a1a; margin: 15px 0; font-weight: 600; font-size: 1.1rem;">素材カード</h3>
-            <p style="color: #666; margin: 0; font-size: 14px;">素材カードを自動生成</p>
-        </div>
+        </a>
         """, unsafe_allow_html=True)
-    
-    # ナビゲーションボタン（スマホ対応）
-    st.markdown("---")
-    st.markdown('<h3 class="section-title">機能へ移動</h3>', unsafe_allow_html=True)
-    nav_col1, nav_col2, nav_col3 = st.columns(3)
-    with nav_col1:
-        if st.button("📝 材料登録", type="primary", use_container_width=True, key="home_nav_register"):
-            st.session_state.page = "材料登録"
-            st.rerun()
-    with nav_col2:
-        if st.button("📋 材料一覧", type="primary", use_container_width=True, key="home_nav_list"):
-            st.session_state.page = "材料一覧"
-            st.rerun()
-    with nav_col3:
-        if st.button("🃏 素材カード", type="primary", use_container_width=True, key="home_nav_card"):
-            st.session_state.page = "素材カード"
-            st.rerun()
     
     # 強制画像テスト（診断用：DEBUG=1時のみ、かつチェックボックスONのときだけ表示）
     if os.getenv("DEBUG", "0") == "1" and materials:
