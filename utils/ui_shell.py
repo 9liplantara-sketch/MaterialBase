@@ -21,6 +21,6 @@ def setup_page_config():
         page_title="Material Map",
         page_icon=None,
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
         menu_items=None
     )
