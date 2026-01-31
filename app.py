@@ -2340,7 +2340,7 @@ def main():
         st.session_state.selected_material_id = None
     
     # クエリパラメータからページ遷移を処理（カードクリック対応）
-    allowed_pages = {"ホーム", "材料登録", "材料一覧", "素材カード"}
+    allowed_pages = {"ホーム", "材料登録", "材料一覧", "検索", "素材カード"}
     page_param = st.query_params.get("page")
     if page_param and page_param in allowed_pages:
         st.session_state.page = page_param
@@ -2363,13 +2363,13 @@ def main():
             page = "材料一覧"
         else:
             # 基本メニュー項目（通常ユーザー向け）
-            menu_items = ["ホーム", "材料一覧", "材料登録", "素材カード"]
-            menu_icons = ["house", "grid", "pencil", "file-earmark"]
+            menu_items = ["ホーム", "材料一覧", "材料登録", "検索", "素材カード"]
+            menu_icons = ["house", "grid", "pencil", "search", "file-earmark"]
             
             # 管理者の場合は追加項目を表示
             if is_admin:
-                menu_items.extend(["ダッシュボード", "検索", "元素周期表"])
-                menu_icons.extend(["bar-chart", "search", "table"])
+                menu_items.extend(["ダッシュボード", "元素周期表"])
+                menu_icons.extend(["bar-chart", "table"])
                 menu_items.append("承認待ち一覧")
                 menu_icons.append("clipboard-check")
                 menu_items.append("一括登録")
@@ -3092,11 +3092,12 @@ def show_home():
     }
     </style>
     """, unsafe_allow_html=True)
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     icon1 = get_icon_svg_inline("icon-register", 40, "#999999")
     icon2 = get_icon_svg_inline("icon-chart", 40, "#999999")
-    icon3 = get_icon_svg_inline("icon-card", 40, "#999999")
+    icon3 = get_icon_svg_inline("icon-search", 40, "#999999")
+    icon4 = get_icon_svg_inline("icon-card", 40, "#999999")
     
     with col1:
         st.markdown(f"""
@@ -3126,10 +3127,23 @@ def show_home():
     
     with col3:
         st.markdown(f"""
-        <a href="?page=素材カード" class="nav-card">
+        <a href="?page=検索" class="nav-card">
             <div class="stat-card">
                 <div style="margin-bottom: 15px; text-align: center;">
                     <img src="data:image/svg+xml;base64,{icon3}" style="width: 40px; height: 40px; opacity: 0.6;" />
+                </div>
+                <h3 style="color: #1a1a1a; margin: 15px 0; font-weight: 600; font-size: 1.1rem;">検索（自然言語検索）</h3>
+                <p style="color: #666; margin: 0; font-size: 14px;">「高強度で軽量な材料」など、自然な言葉で検索</p>
+            </div>
+        </a>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(f"""
+        <a href="?page=素材カード" class="nav-card">
+            <div class="stat-card">
+                <div style="margin-bottom: 15px; text-align: center;">
+                    <img src="data:image/svg+xml;base64,{icon4}" style="width: 40px; height: 40px; opacity: 0.6;" />
                 </div>
                 <h3 style="color: #1a1a1a; margin: 15px 0; font-weight: 600; font-size: 1.1rem;">素材カード</h3>
                 <p style="color: #666; margin: 0; font-size: 14px;">素材カードを自動生成</p>
@@ -3268,13 +3282,12 @@ def show_home():
     st.markdown('<h3 class="section-title">将来の機能（LLM統合予定）</h3>', unsafe_allow_html=True)
     
     future_features = [
-        ("icon-search", "自然言語検索", "「高強度で軽量な材料」など、自然な言葉で検索"),
         ("icon-recommend", "材料推奨", "要件に基づいて最適な材料を自動推奨"),
         ("icon-predict", "物性予測", "AIによる物性データの予測"),
         ("icon-similarity", "類似度分析", "材料間の類似性を分析")
     ]
     
-    cols = st.columns(4)
+    cols = st.columns(3)
     for idx, (icon_name, title, desc) in enumerate(future_features):
         icon = get_icon_svg_inline(icon_name, 48, "#999999")
         with cols[idx]:
