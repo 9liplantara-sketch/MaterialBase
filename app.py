@@ -479,15 +479,28 @@ def get_material_image_url(material_id: int, updated_at_str: str | None = None, 
 def resolve_material_image_url(material, db_url: str) -> Optional[str]:
     # primary_image_url があれば即return（DBアクセスなし）
     # updated_at が無くても DB取得は試みる（updated_at_str=None OK）
-    primary_image_url = getattr(material, "primary_image_url", None)
-    if primary_image_url and primary_image_url.strip() and primary_image_url.startswith(("http://", "https://")):
-        return primary_image_url
+    # dict / object 両対応（材料一覧で dict が渡される場合があるため）
+    if isinstance(material, dict):
+        primary_image_url = (
+            material.get("primary_image_url")
+            or material.get("image_url")
+            or material.get("primary_image")
+            or material.get("primary_image_src")
+            or material.get("image_primary_url")
+        )
+        material_id = material.get("id")
+        updated_at = material.get("updated_at")
+    else:
+        primary_image_url = getattr(material, "primary_image_url", None)
+        material_id = getattr(material, "id", None)
+        updated_at = getattr(material, "updated_at", None)
 
-    material_id = getattr(material, "id", None)
+    if primary_image_url and str(primary_image_url).strip() and str(primary_image_url).startswith(("http://", "https://")):
+        return str(primary_image_url)
+
     if not material_id:
         return None
 
-    updated_at = getattr(material, "updated_at", None)
     updated_at_str = None
     if updated_at:
         if hasattr(updated_at, "isoformat"):
@@ -495,7 +508,7 @@ def resolve_material_image_url(material, db_url: str) -> Optional[str]:
         else:
             updated_at_str = str(updated_at)
 
-    return get_material_image_url(material_id, updated_at_str, db_url=db_url)
+    return get_material_image_url(int(material_id), updated_at_str, db_url=db_url)
 
 
 def get_image_path(filename):
