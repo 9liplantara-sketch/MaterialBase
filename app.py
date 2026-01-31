@@ -2356,6 +2356,25 @@ def main():
     
     # サイドバー - PCでは表示、スマホではCSSで非表示
     with st.sidebar:
+        # ロゴをサイドバー最上部に表示（全ページ共通）
+        from utils.logo import render_logo_mark, render_site_header
+        import os
+        is_debug = os.getenv("DEBUG", "0") == "1"
+        
+        # ロゴマークとタイプロゴを表示
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            render_logo_mark(height_px=48, debug=is_debug, use_component=True)
+        with col2:
+            render_site_header(subtitle="素材の可能性を探索するデータベース", debug=is_debug, use_component=True)
+        
+        # ロゴクリックでホームへ戻るボタン
+        if st.button("🏠 ホームへ", key="sidebar_home_btn", use_container_width=True):
+            st.session_state.page = "ホーム"
+            st.rerun()
+        
+        st.markdown("---")
+        
         # ページ選択（詳細ページ表示中は選択を変更しない）
         if st.session_state.selected_material_id:
             # 詳細ページ表示中は、ページ選択を一時的に無効化
@@ -2502,6 +2521,7 @@ def main():
         
         # 統計情報（画面左下に小さく表示）- 遅延取得（ボタン押下時のみ）
         # 初期表示ではDBアクセスしない（起床頻度を下げる）
+        # 編集権限者（ADMIN_MODE）のみに表示
         stats_key = "show_statistics"
         if stats_key not in st.session_state:
             st.session_state[stats_key] = False
@@ -2515,31 +2535,22 @@ def main():
         
         include_deleted = st.session_state.get("include_deleted", False) if is_admin else False
         
-        # 統計情報表示ボタン（サイドバーに配置）
-        if not st.session_state[stats_key]:
-            if st.sidebar.button("📊 統計情報を表示", key="show_stats_btn"):
-                st.session_state[stats_key] = True
-                st.rerun()
-        else:
-            # 統計情報を取得（try/exceptで囲み、失敗時はデフォルト値のまま進む）
-            try:
-                from utils.settings import get_database_url
-                from services.materials_service import get_statistics
-                from services.db_retry import db_retry
-                from utils.db import DBUnavailableError
-                
-                db_url = get_database_url()
-                
-                # 軽量リトライ付きで統計情報を取得（管理者限定）
-                from utils.settings import is_admin_mode
-                is_admin = is_admin_mode()
-                if not is_admin:
-                    # 一般ユーザーには統計を表示しない（DB呼び出しも発生しない）
-                    material_count = 0
-                    categories = 0
-                    total_properties = 0
-                    avg_properties = 0.0
-                else:
+        # 統計情報表示ボタン（サイドバーに配置、管理者のみ）
+        if is_admin:
+            if not st.session_state[stats_key]:
+                if st.sidebar.button("📊 統計情報を表示", key="show_stats_btn"):
+                    st.session_state[stats_key] = True
+                    st.rerun()
+            else:
+                # 統計情報を取得（try/exceptで囲み、失敗時はデフォルト値のまま進む）
+                try:
+                    from utils.settings import get_database_url
+                    from services.materials_service import get_statistics
+                    from services.db_retry import db_retry
+                    from utils.db import DBUnavailableError
+                    
+                    db_url = get_database_url()
+                    
                     # DB起床直後の自動実行ガード（直近3秒は重い処理を自動実行しない）
                     db_warmed_recently = st.session_state.get("db_warmed_recently", False)
                     db_warmed_at = st.session_state.get("db_warmed_at", 0)
@@ -2572,26 +2583,26 @@ def main():
                                     include_deleted=include_deleted
                                 )
                             )
-            except Exception as e:
-                # 統計情報取得失敗時はデフォルト値のまま進む（PANICさせない）
-                material_count = 0
-                if is_debug_flag():
-                    st.caption(f"統計情報取得エラー（表示は続行）: {e}")
-        
-        # 材料数はmaterial_countを使用（materialsが空でも表示できる）
-        # DB起床直後ガード中（material_count=None）の場合は表示をスキップ
-        if material_count is not None:
-            material_display_count = material_count if material_count > 0 else (len(materials) if materials else 0)
-            
-            # 左下に小さく配置（統計情報が取得済みの場合のみ表示）
-            if st.session_state[stats_key]:
-                st.markdown("""
-                <div class="stats-fixed">
-                    <div>材料数: <strong>{}</strong></div>
-                    <div>カテゴリ: <strong>{}</strong></div>
-                    <div>物性データ: <strong>{}</strong></div>
-                </div>
-                """.format(material_display_count, categories, total_properties), unsafe_allow_html=True)
+                except Exception as e:
+                    # 統計情報取得失敗時はデフォルト値のまま進む（PANICさせない）
+                    material_count = 0
+                    if is_debug_flag():
+                        st.caption(f"統計情報取得エラー（表示は続行）: {e}")
+                
+                # 材料数はmaterial_countを使用（materialsが空でも表示できる）
+                # DB起床直後ガード中（material_count=None）の場合は表示をスキップ
+                if material_count is not None:
+                    material_display_count = material_count if material_count > 0 else (len(materials) if materials else 0)
+                    
+                    # 左下に小さく配置（統計情報が取得済みの場合のみ表示）
+                    if st.session_state[stats_key]:
+                        st.markdown("""
+                        <div class="stats-fixed">
+                            <div>材料数: <strong>{}</strong></div>
+                            <div>カテゴリ: <strong>{}</strong></div>
+                            <div>物性データ: <strong>{}</strong></div>
+                        </div>
+                        """.format(material_display_count, categories, total_properties), unsafe_allow_html=True)
         
         st.markdown("""
         <div style="text-align: center; padding: 20px 0; color: #666;">
@@ -2897,17 +2908,7 @@ def show_home():
     # is_debug は debug_enabled のエイリアスとして定義（後方互換）
     is_debug = debug_enabled
     
-    # 修正1: DEBUGモードでもロゴ/画像描画は必ず実行（CSS無効化は<style>注入だけ）
-    # ロゴマークとタイプロゴを表示（ホームでは常に表示）
-    # st.components.v1.htmlを使用して確実に表示
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        # ロゴマークを確実に描画（st.components.v1.htmlで直接描画）
-        render_logo_mark(height_px=72, debug=is_debug, use_component=True)
-    
-    with col2:
-        # タイプロゴとサブタイトルを描画（st.components.v1.htmlで直接描画）
-        render_site_header(subtitle="素材の可能性を探索するデータベース", debug=is_debug, use_component=True)
+    # ロゴはサイドバー最上部に移動したため、ホーム画面からは削除
     
     # 修正2: components描画スモークテスト（DEBUG=1時のみ）
     if is_debug:
