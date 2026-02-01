@@ -2137,17 +2137,13 @@ def main():
         st.session_state.check_schema_drift = False
     
     # 管理者モード時は自動チェック、それ以外はボタンでチェック
+    # スキーマ整合性チェック（管理者のみ表示）
     from utils.settings import is_admin_mode
-    if is_admin_mode():
+    is_admin_for_schema = is_admin_mode()
+    if is_admin_for_schema:
         # 管理者モード時は自動チェック（運用上の問題を早期発見）
         st.session_state.check_schema_drift = True
-    elif st.button("🔍 スキーマ整合性をチェック", key="btn_check_schema_drift"):
-        # 連打ガード: 2秒以内の連打は無視（rerun連打で同じDB呼び出しが走るのを防ぐ）
-        last_check_time = st.session_state.get("last_schema_check_time", 0)
-        current_time = time.time()
-        if current_time - last_check_time >= 2.0:
-            st.session_state.last_schema_check_time = current_time
-            st.session_state.check_schema_drift = True
+    # 非管理者にはボタンを表示しない（重要でなければ隠す）
     
     if st.session_state.check_schema_drift:
         try:
@@ -2308,18 +2304,10 @@ def main():
     # 本文UIの開始（Debug sidebarはrun_app_entrypointで先に描画済み）
     # タイトルは各ページでロゴとして表示（show_home()など）
     
-    # 素材件数の表示（Neon節約のため、ボタンクリック時のみDBアクセス）
+    # 素材件数の表示（デフォルトON、Neon節約のためTTLキャッシュを使用）
     # 初期表示ではDBを叩かない（毎rerunでのDBアクセスを削減）
     if "show_material_count" not in st.session_state:
-        st.session_state.show_material_count = False
-    
-    if st.button("📊 素材件数を表示", key="btn_show_material_count"):
-        # 連打ガード: 2秒以内の連打は無視（rerun連打で同じDB呼び出しが走るのを防ぐ）
-        last_count_time = st.session_state.get("last_material_count_time", 0)
-        current_time = time.time()
-        if current_time - last_count_time >= 2.0:
-            st.session_state.last_material_count_time = current_time
-            st.session_state.show_material_count = True
+        st.session_state.show_material_count = True  # デフォルトON
     
     if st.session_state.show_material_count:
         try:
@@ -3700,6 +3688,28 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
         st.session_state.show_images_in_list = show_images
         
         # 材料カード表示（グリッドレイアウト）
+        # カードとボタンを密着させるためのCSSを追加
+        st.markdown("""
+        <style>
+            /* 材料カードのボタンを下端に密着させる */
+            .material-card-container {
+                padding-bottom: 0 !important;
+                margin-bottom: 0 !important;
+            }
+            /* カード直後のボタンコンテナの余白を削除 */
+            .material-card-container ~ div[data-testid="stButton"],
+            .material-card-container + div[data-testid="stButton"] {
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+            }
+            /* 詳細ボタンのスタイル（カード下端に密着、角丸は下部のみ） */
+            button[data-testid*="detail_"] {
+                border-radius: 0 0 12px 12px !important;
+                margin-top: 0 !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+        
         cols = st.columns(3)
         for idx, material in enumerate(filtered_materials):
             with cols[idx % 3]:
@@ -3757,7 +3767,8 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                             category_title = ""
                         
                         # HTMLカードを生成（行頭スペースを強制除去してMarkdownのコードブロック扱いを防ぐ）
-                        card_html_raw = f"""<div class="material-card-container material-texture">
+                        # ボタンをカード下端に密着させるため、padding-bottomを0に設定
+                        card_html_raw = f"""<div class="material-card-container material-texture" id="mat-card-{material.id}" style="padding-bottom: 0;">
 {img_html}
 <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; margin-top: 16px;">
 <h3 style="color: #1a1a1a; margin: 0; font-size: 1.4rem; font-weight: 700; flex: 1;">{material_name}</h3>
@@ -3775,6 +3786,7 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
 <small style="color: #999;">ID: {material.id}</small>
 {f'<small style="color: #999;">{"✅ 公開" if getattr(material, "is_published", 1) == 1 else "🔒 非公開"}</small>' if include_unpublished else ''}
 </div>
+<div class="material-card-actions-wrapper" style="margin-top: 0;"></div>
 </div>"""
                         # 行頭スペースを強制除去（Markdownのコードブロック扱いを防ぐ）
                         card_html = "\n".join(line.lstrip() for line in card_html_raw.splitlines()).strip()
@@ -3922,28 +3934,39 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                                 st.session_state.restore_material_id = material.id
                                 st.rerun()
                         
-                        # ボタンのスタイルを明示的に設定（白文字を確実に表示、上に15px移動）
+                        # ボタンのスタイルを明示的に設定（カード下端に密着）
                         button_key = f"detail_{material.id}"
                         st.markdown(f"""
-                        <div class="material-card-actions" style="margin-top: -15px;">
-                            <style>
-                                .material-card-actions button[key="{button_key}"],
-                                .material-card-actions button[data-testid*="{button_key}"] {{
-                                    background-color: #1a1a1a !important;
-                                    color: #ffffff !important;
-                                    border: 1px solid #1a1a1a !important;
-                                }}
-                                .material-card-actions button[key="{button_key}"]:hover,
-                                .material-card-actions button[data-testid*="{button_key}"]:hover {{
-                                    background-color: #333333 !important;
-                                    color: #ffffff !important;
-                                }}
-                                .material-card-actions button[key="{button_key}"] *,
-                                .material-card-actions button[data-testid*="{button_key}"] * {{
-                                    color: #ffffff !important;
-                                }}
-                            </style>
-                        </div>
+                        <style>
+                            /* カードごとのボタンスタイル（カード下端に密着） */
+                            button[key="{button_key}"],
+                            button[data-testid*="{button_key}"] {{
+                                background-color: #1a1a1a !important;
+                                color: #ffffff !important;
+                                border: 1px solid #1a1a1a !important;
+                                margin-top: 0 !important;
+                                border-radius: 0 0 12px 12px !important;
+                            }}
+                            button[key="{button_key}"]:hover,
+                            button[data-testid*="{button_key}"]:hover {{
+                                background-color: #333333 !important;
+                                color: #ffffff !important;
+                            }}
+                            button[key="{button_key}"] *,
+                            button[data-testid*="{button_key}"] * {{
+                                color: #ffffff !important;
+                            }}
+                            /* カードコンテナ直後のボタンコンテナの余白を削除 */
+                            div[data-testid="stButton"]:has(button[key="{button_key}"]) {{
+                                margin-top: 0 !important;
+                                padding-top: 0 !important;
+                            }}
+                            /* カードコンテナのpadding-bottomを0にしてボタンと一体化 */
+                            #mat-card-{material.id} {{
+                                padding-bottom: 0 !important;
+                                margin-bottom: 0 !important;
+                            }}
+                        </style>
                         """, unsafe_allow_html=True)
                         
                         if st.button(f"詳細を見る", key=button_key, use_container_width=True):
