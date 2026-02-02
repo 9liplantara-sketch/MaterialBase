@@ -2346,7 +2346,6 @@ def main():
     with st.sidebar:
         # ロゴをサイドバー最上部に表示（全ページ共通）
         from utils.logo import render_logo_mark, render_site_header
-        import os
         is_debug = os.getenv("DEBUG", "0") == "1"
         
         # ロゴマークとタイプロゴを表示
