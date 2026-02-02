@@ -2344,21 +2344,12 @@ def main():
     
     # サイドバー - PCでは表示、スマホではCSSで非表示
     with st.sidebar:
-        # ロゴをサイドバー最上部に表示（全ページ共通）
-        from utils.logo import render_logo_mark, render_site_header
+        # ロゴマークをサイドバー最上部に表示（全ページ共通）
+        from utils.logo import render_logo_mark
         is_debug = os.getenv("DEBUG", "0") == "1"
         
-        # ロゴマークとタイプロゴを表示
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            render_logo_mark(height_px=48, debug=is_debug, use_component=True)
-        with col2:
-            render_site_header(subtitle="素材の可能性を探索するデータベース", debug=is_debug, use_component=True)
-        
-        # ロゴクリックでホームへ戻るボタン
-        if st.button("🏠 ホームへ", key="sidebar_home_btn", use_container_width=True):
-            st.session_state.page = "ホーム"
-            st.rerun()
+        # ロゴマークのみを表示（タイプロゴはホーム画面に表示）
+        render_logo_mark(height_px=40, debug=is_debug, use_component=True)
         
         st.markdown("---")
         
@@ -2658,6 +2649,15 @@ def main():
         if is_debug_flag():
             st.warning(f"get_routes() failed, using fallback routing: {e}")
     
+    # ホーム以外のページには「🏠 ホームへ」ボタンを表示
+    if page != "ホーム":
+        col1, col2 = st.columns([1, 10])
+        with col1:
+            if st.button("🏠 ホームへ", key="top_home_btn"):
+                st.session_state.page = "ホーム"
+                st.rerun()
+        st.markdown("---")
+    
     # 従来のルーティング（後方互換性のため残す）
     if page == "ホーム":
         show_home()
@@ -2895,7 +2895,10 @@ def show_home():
     # is_debug は debug_enabled のエイリアスとして定義（後方互換）
     is_debug = debug_enabled
     
-    # ロゴはサイドバー最上部に移動したため、ホーム画面からは削除
+    # タイプロゴをホーム画面の上部に表示
+    from utils.logo import render_site_header
+    render_site_header(subtitle="素材の可能性を探索するデータベース", debug=is_debug, use_component=True)
+    st.markdown("---")
     
     # 修正2: components描画スモークテスト（DEBUG=1時のみ）
     if is_debug:
