@@ -2326,12 +2326,33 @@ def main():
         st.session_state.page = "ホーム"
     if 'selected_material_id' not in st.session_state:
         st.session_state.selected_material_id = None
+    if 'last_material_id_param' not in st.session_state:
+        st.session_state.last_material_id_param = None
     
     # クエリパラメータからページ遷移を処理（カードクリック対応）
     allowed_pages = {"ホーム", "材料登録", "材料一覧", "検索", "素材カード"}
     page_param = st.query_params.get("page")
     if page_param and page_param in allowed_pages:
         st.session_state.page = page_param
+    
+    # 材料IDのクエリパラメータを処理（カード全体クリック対応）
+    # 一回だけ処理するガード（query param routing 安定化のため）
+    material_id_param = st.query_params.get("material_id")
+    if not material_id_param:
+        # クエリパラメータに material_id がない場合は last_material_id_param をリセット
+        st.session_state.last_material_id_param = None
+    if material_id_param:
+        # 既に処理済みの場合はスキップ（無限ループ防止）
+        last_processed = st.session_state.get("last_material_id_param")
+        if last_processed != material_id_param:
+            try:
+                material_id = int(material_id_param)
+                st.session_state.selected_material_id = material_id
+                st.session_state.page = "材料一覧"  # 一覧ページの詳細表示モード
+                st.session_state.last_material_id_param = material_id_param
+            except (ValueError, TypeError):
+                # 数値でない場合は無視（例外で落とさない）
+                pass
     
     # 詳細ページへの遷移がリクエストされた場合
     if st.session_state.selected_material_id and st.session_state.page != "detail":
@@ -2348,8 +2369,21 @@ def main():
         from utils.logo import render_logo_mark
         is_debug = os.getenv("DEBUG", "0") == "1"
         
-        # ロゴマークのみを表示（タイプロゴはホーム画面に表示）
-        render_logo_mark(height_px=40, debug=is_debug, use_component=True)
+        # ロゴマークを中央寄せで大きく表示
+        st.markdown("""
+        <style>
+            /* サイドバーのロゴマークを中央寄せ */
+            .sidebar-logo {
+                display: flex !important;
+                justify-content: center !important;
+                align-items: center !important;
+                margin: 8px 0 12px !important;
+            }
+        </style>
+        <div class="sidebar-logo">
+        """, unsafe_allow_html=True)
+        render_logo_mark(height_px=60, debug=is_debug, use_component=True)
+        st.markdown("</div>", unsafe_allow_html=True)
         
         st.markdown("---")
         
@@ -2398,6 +2432,10 @@ def main():
                 }
             )
             st.session_state.page = page
+            # ホーム遷移時は selected_material_id と last_material_id_param をリセット
+            if page == "ホーム":
+                st.session_state.selected_material_id = None
+                st.session_state.last_material_id_param = None
         
         # hover効果のCSSを追加 + チェックボックス/ラジオボタンを非表示 + スマホでサイドバー非表示
         st.markdown("""
@@ -2649,13 +2687,31 @@ def main():
         if is_debug_flag():
             st.warning(f"get_routes() failed, using fallback routing: {e}")
     
-    # ホーム以外のページには「🏠 ホームへ」ボタンを表示
+    # ホーム以外のページには「← ホーム」リンク風ボタンを表示
     if page != "ホーム":
-        col1, col2 = st.columns([1, 10])
-        with col1:
-            if st.button("🏠 ホームへ", key="top_home_btn"):
-                st.session_state.page = "ホーム"
-                st.rerun()
+        st.markdown("""
+        <style>
+            /* 「← ホーム」ボタンをリンク風にする */
+            div[data-testid="stButton"]:has(button[key="go_home"]) button {
+                background-color: transparent !important;
+                border: none !important;
+                color: #666 !important;
+                font-size: 13px !important;
+                padding: 4px 8px !important;
+                text-align: left !important;
+                box-shadow: none !important;
+            }
+            div[data-testid="stButton"]:has(button[key="go_home"]) button:hover {
+                color: #1a1a1a !important;
+                text-decoration: underline !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+        if st.button("← ホーム", key="go_home", use_container_width=False):
+            st.session_state.page = "ホーム"
+            st.session_state.selected_material_id = None
+            st.session_state.last_material_id_param = None
+            st.rerun()
         st.markdown("---")
     
     # 従来のルーティング（後方互換性のため残す）
@@ -3690,24 +3746,22 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
         st.session_state.show_images_in_list = show_images
         
         # 材料カード表示（グリッドレイアウト）
-        # カードとボタンを密着させるためのCSSを追加
+        # カード全体クリック用のCSS（グローバル）
         st.markdown("""
         <style>
-            /* 材料カードのボタンを下端に密着させる */
-            .material-card-container {
-                padding-bottom: 0 !important;
-                margin-bottom: 0 !important;
+            /* カード全体クリック可能にするためのスタイル */
+            .material-card-link {
+                text-decoration: none !important;
+                color: inherit !important;
+                display: block !important;
             }
-            /* カード直後のボタンコンテナの余白を削除 */
-            .material-card-container ~ div[data-testid="stButton"],
-            .material-card-container + div[data-testid="stButton"] {
-                margin-top: 0 !important;
-                padding-top: 0 !important;
+            .material-card-link .material-card-container {
+                cursor: pointer !important;
+                transition: transform 0.2s, box-shadow 0.2s !important;
             }
-            /* 詳細ボタンのスタイル（カード下端に密着、角丸は下部のみ） */
-            button[data-testid*="detail_"] {
-                border-radius: 0 0 12px 12px !important;
-                margin-top: 0 !important;
+            .material-card-link:hover .material-card-container {
+                transform: translateY(-2px) !important;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important;
             }
         </style>
         """, unsafe_allow_html=True)
@@ -3769,8 +3823,9 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                             category_title = ""
                         
                         # HTMLカードを生成（行頭スペースを強制除去してMarkdownのコードブロック扱いを防ぐ）
-                        # ボタンをカード下端に密着させるため、padding-bottomを0に設定
-                        card_html_raw = f"""<div class="material-card-container material-texture" id="mat-card-{material.id}" style="padding-bottom: 0;">
+                        # カード全体をクリック可能にするため、<a>タグで囲む
+                        card_html_raw = f"""<a href="?page=材料一覧&material_id={material.id}" class="material-card-link">
+<div class="material-card-container material-texture" id="mat-card-{material.id}">
 {img_html}
 <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; margin-top: 16px;">
 <h3 style="color: #1a1a1a; margin: 0; font-size: 1.4rem; font-weight: 700; flex: 1;">{material_name}</h3>
@@ -3788,8 +3843,8 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
 <small style="color: #999;">ID: {material.id}</small>
 {f'<small style="color: #999;">{"✅ 公開" if getattr(material, "is_published", 1) == 1 else "🔒 非公開"}</small>' if include_unpublished else ''}
 </div>
-<div class="material-card-actions-wrapper" style="margin-top: 0;"></div>
-</div>"""
+</div>
+</a>"""
                         # 行頭スペースを強制除去（Markdownのコードブロック扱いを防ぐ）
                         card_html = "\n".join(line.lstrip() for line in card_html_raw.splitlines()).strip()
                         # st.markdown でHTMLをレンダリング（unsafe_allow_html=True を必ず指定、st.writeは禁止）
@@ -3799,7 +3854,7 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                         if include_unpublished:
                             col1, col2 = st.columns([3, 1])
                             with col1:
-                                pass  # 詳細ボタンのスペース
+                                pass  # スペーサー
                             with col2:
                                 current_status = getattr(material, "is_published", 1)
                                 new_status = st.toggle(
@@ -3935,46 +3990,6 @@ def show_materials_list(include_unpublished: bool = False, include_deleted: bool
                             if st.button("🔄 復活", key=f"restore_list_{material.id}"):
                                 st.session_state.restore_material_id = material.id
                                 st.rerun()
-                        
-                        # ボタンのスタイルを明示的に設定（カード下端に密着）
-                        button_key = f"detail_{material.id}"
-                        st.markdown(f"""
-                        <style>
-                            /* カードごとのボタンスタイル（カード下端に密着） */
-                            button[key="{button_key}"],
-                            button[data-testid*="{button_key}"] {{
-                                background-color: #1a1a1a !important;
-                                color: #ffffff !important;
-                                border: 1px solid #1a1a1a !important;
-                                margin-top: 0 !important;
-                                border-radius: 0 0 12px 12px !important;
-                            }}
-                            button[key="{button_key}"]:hover,
-                            button[data-testid*="{button_key}"]:hover {{
-                                background-color: #333333 !important;
-                                color: #ffffff !important;
-                            }}
-                            button[key="{button_key}"] *,
-                            button[data-testid*="{button_key}"] * {{
-                                color: #ffffff !important;
-                            }}
-                            /* カードコンテナ直後のボタンコンテナの余白を削除 */
-                            div[data-testid="stButton"]:has(button[key="{button_key}"]) {{
-                                margin-top: 0 !important;
-                                padding-top: 0 !important;
-                            }}
-                            /* カードコンテナのpadding-bottomを0にしてボタンと一体化 */
-                            #mat-card-{material.id} {{
-                                padding-bottom: 0 !important;
-                                margin-bottom: 0 !important;
-                            }}
-                        </style>
-                        """, unsafe_allow_html=True)
-                        
-                        if st.button(f"詳細を見る", key=button_key, use_container_width=True):
-                            st.session_state.selected_material_id = material.id
-                            st.session_state.page = "材料一覧"  # 一覧ページの詳細表示モード
-                            st.rerun()
                 except Exception as e:
                     logger.exception(f"[LIST] card render failed: id={getattr(material,'id',None)} err={e}")
                     st.warning("⚠️ このカードは表示できませんでした（スキップ）")
